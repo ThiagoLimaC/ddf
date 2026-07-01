@@ -3,40 +3,136 @@
 Este documento define padrões e boas práticas de engenharia para quem contribuir
 com código neste projeto.
 
+> **Antes de iniciar qualquer issue:** leia os documentos de referência do
+> projeto na ordem abaixo. Cada decisão de implementação já foi tomada e
+> documentada — reimplementar sem consultar os docs gera retrabalho.
+>
+> 1. [`plan/global.md`](../plan/global.md) — ordem das fases e dependências
+> 2. [`docs/system_design_doc.md`](system_design_doc.md) — arquitetura, fluxo
+>    de dados e decisões de design
+> 3. [`docs/low_level_design.md`](low_level_design.md) — assinaturas, tipos e
+>    comportamento esperado de cada componente
+> 4. [`plan/tasks.md`](../plan/tasks.md) — checklist da issue específica
 
-## Extensão via `Protocol`, nunca via classe orquestradora com `if`s
+---
+
+## Arquitetura: DDD com Bounded Contexts + Hexagonal escopado
+
+O `ddf` usa DDD aplicado por **Bounded Contexts** e Hexagonal aplicado
+**apenas onde existe variação real de implementação**. Esses dois princípios
+moldam todas as decisões de código.
+
+### Os três Bounded Contexts e suas fronteiras
+
+| Context | Módulo | Representação de coluna |
+|---|---|---|
+| Extraction | `domain/model/extraction.py` | `ColunaExtraida` |
+| Curation | `domain/model/curation.py` | `ColunaCurada` |
+| Analysis | `domain/model/analysis.py` | `ColunaAnalisada` |
+
+**Regra:** código do Extraction Context nunca importa tipos do Analysis Context,
+e vice-versa. As Anti-Corruption Layers (`SobrescritaDeTabela` e os
+Analisadores) são os únicos pontos de tradução entre contextos.
+
+### Métricas como Value Objects — a regra mais importante
+
+`MetricaDeColuna` e `MetricaDeTabela` são Value Objects: imutáveis, sem
+identidade própria, definidos pelos seus valores.
+
+**Adicionar uma nova métrica = criar um novo tipo que herda de `MetricaDeColuna`
+ou `MetricaDeTabela`.** Nenhum modelo existente muda.
+
+```python
+# correto — arquivo novo, zero mudanças em código existente
+class MetricasDeDistribuicao(MetricaDeColuna):
+    origem: str = "AnalisadorDeDistribuicao"
+    assimetria: float
+    curtose: float
+    histograma: list[tuple[float, float]]
+```
+
+**Proibido:** adicionar campos de métrica diretamente em `ColunaAnalisada` ou
+`TabelaAnalisada`. Isso viola o Open/Closed e força mudanças em todos os
+Geradores existentes.
+
+### Override: responsabilidade única, duas fases internas
+
+A `SobrescritaDeTabela` tem **uma responsabilidade**: produzir `TabelaCurada`
+a partir de `TabelaExtraida`. Para cumpri-la, usa duas fases com razões de
+mudança distintas:
+
+- `_traduzir` — mapeamento estrutural `ColunaExtraida` → `ColunaCurada`; muda
+  quando a estrutura da fonte muda.
+- `_aplicar_overrides` — aplica curadoria do YAML; muda quando regras de
+  curadoria mudam.
+
+**Regra:** manter essas fases como métodos privados separados dentro do mesmo
+componente. **Não criar um componente `TradutorExtractionParaCuration` separado**
+— o resultado intermediário não tem significado fora desse fluxo e não justifica
+um tipo ou componente próprio.
+
+### Extensão via `Protocol`, nunca via classe orquestradora com `if`s
 
 - Toda nova fonte de dados, heurística de análise ou formato de saída entra
-  implementando o `Protocol` correspondente em `dominio/portas/`
-  (`Extractor`, `Analyzer`, `Generator`) e se conectando ao pipeline como mais
-  um item na lista passada para `compose(...)`.
-- **Proibido reintroduzir uma classe `UseCase`** que encapsule múltiplos `Stage`s
-  com `if`s internos decidindo o que rodar — é exatamente o padrão que esta
-  arquitetura existe para evitar.
-- "Pular uma etapa" (ex.: já ter o `DatabaseAnalisado` pronto de uma execução
-  anterior) nunca é um parâmetro opcional dentro de uma classe que serve os dois
-  casos — é simplesmente não incluir aquele estágio na composição daquela
-  chamada.
-- Um `Stage` que não implementa o `Protocol` correspondente não compila contra
-  `compose(...)` — a conformidade com o contrato é verificada por `mypy
-  --strict`, não por convenção documentada.
+  implementando o `Protocol` correspondente em `domain/ports/` e se conectando
+  ao pipeline como mais um item na composição.
+- **Proibido reintroduzir uma classe `UseCase`** com `if`s decidindo o que
+  rodar.
+- Um `Estagio` que não implementa o `Protocol` correspondente não compila
+  contra `compor()` — verificado por `mypy --strict`.
+
+### Analisadores e Geradores declaram dependências explicitamente
+
+Todo Analisador e Gerador declara `produz` e/ou `requer`:
+
+```python
+class MeuAnalisador:
+    produz: list[type] = [MinhaMetrica]
+    requer: list[type] = [MetricasBase]  # depende de AnalisadorDeMetricasDeColuna
+```
+
+A CLI valida essas dependências antes de qualquer execução. **Nunca descobrir
+dependência em runtime** — o usuário recebe um erro claro antes de qualquer
+processamento começar.
+
+### Polars como detalhe de implementação
+
+`pl.DataFrame` existe **apenas** dentro dos modelos `TabelaExtraida`,
+`TabelaCurada`, `BancoCurado` e `ContextoDeAnalise`. Nunca atravessa a
+fronteira do Analysis Context para os Geradores.
+
+**Regra:** nenhum Gerador importa `polars`. Nenhum modelo além dos listados
+acima usa `arbitrary_types_allowed=True`.
+
+---
 
 ## Tipagem como garantia, não como documentação
 
-- `DatabaseExtraido`, `DatabaseCurado` e `DatabaseAnalisado` são tipos Pydantic
-  diferentes — `mypy --strict` rejeita, em tempo de verificação, qualquer
-  composição que tente pular uma etapa do pipeline.
-- Rode `mypy --strict` localmente antes de cada commit — não confie só no CI
-  para pegar um erro de tipo; o ciclo de feedback é mais rápido rodando antes de
-  empurrar a mudança.
+- Os quatro tipos de pipeline (`TabelaExtraida`, `TabelaCurada`,
+  `BancoCurado`, `BancoAnalisado`) são estruturalmente distintos —
+  `mypy --strict` rejeita qualquer composição que tente pular uma etapa.
+- `MetricaDeColuna` como base dos Value Objects garante que Geradores que
+  filtram com `isinstance` recebem o tipo correto em tempo de verificação.
+- Rode `mypy --strict` localmente antes de cada commit.
 
-## Nomenclatura: idioma como contrato, não como preferência
+---
 
-- **Identificadores internos** (funções privadas, variáveis locais, parâmetros,
-  módulos internos, nomes de teste) — **português**.
-- **Contratos externos** — classes de domínio, campos Pydantic, `Protocol`s, e
-  qualquer chave que vaze para um arquivo de saída (JSON de contexto de IA, YAML
-  de overrides, `schema.yml` do dbt) — **inglês**.
+## Nomenclatura: idioma como contrato
+
+- **Convenções de arquitetura** — estrutura de pastas (`domain/model`,
+  `domain/shared`, `domain/ports`, `infrastructure/adapters/...`), nomes de
+  módulo e os rótulos dos Bounded Contexts (Extraction, Curation, Analysis) —
+  **inglês**, porque são vocabulário do padrão arquitetural, não do domínio de
+  negócio.
+- **Tudo o que é código** — classes (incluindo classes de domínio e as que
+  implementam `Protocol`s), variáveis, parâmetros, funções, campos Pydantic e
+  tipagem em geral — **português**, dentro e fora dos limites do pacote.
+- **Única exceção:** os artefatos escritos em disco pelo `GeradorDbt`
+  (`schema.yml`, `sources.yml`, SQL gerado) usam identificadores em inglês,
+  porque esse é o contrato real consumido pelo dbt e pelo warehouse — não uma
+  escolha de estilo do código Python. Nenhum outro Gerador tem essa exceção.
+
+---
 
 ## Docstrings: resumo de uma linha, Google style
 
@@ -45,7 +141,7 @@ def is_failure(self) -> bool:
     """Verifica se a operação falhou."""
 ```
 
-Descrição objetiva do método e parâmetros.
+---
 
 ## Guard-rails de lint e CI
 
@@ -57,9 +153,8 @@ select = ["E", "F", "W", "I", "N", "D"]
 convention = "google"
 ```
 
-CI roda lint + `mypy --strict` + `pytest` a cada push, desde o primeiro PR
-mergeado — nunca como uma issue de limpeza posterior. Nenhum PR é mergeado com o
-pipeline vermelho.
+CI roda `ruff` + `mypy --strict` + `pytest` a cada push, desde o primeiro PR
+mergeado. Nenhum PR é mergeado com o pipeline vermelho.
 
 ---
 
@@ -67,83 +162,73 @@ pipeline vermelho.
 
 ## Cobertura mínima obrigatória, por categoria deliberada
 
-Todo `Stage` (Extractor, Analyzer, Overrides, Generator, ou função de
-composição) e todo `Adapter` novo precisa de, no mínimo, estas três categorias:
+Todo `Estagio` (Extrator, Analisador, Sobrescrita, Gerador, OrquestradorParalelo,
+`compor()`) e todo Adaptador novo precisa de, no mínimo, estas três categorias:
 
-1. **Caminho feliz** — comportamento esperado com entrada válida e
-   representativa.
-2. **Erro esperado** — uma falha de domínio real (conexão recusada, schema
-   ausente, arquivo malformado) retornando `Result.failure`, nunca uma exceção
-   solta.
-3. **Borda** — um caso limite real do domínio que o `Stage` precisa tratar
-   (tabela vazia, coluna sem dados na amostra, valor com caractere especial, FK
-   que referencia algo fora da extração atual).
+1. **Caminho feliz** — comportamento esperado com entrada válida e representativa.
+2. **Erro esperado** — falha de domínio real retornando `Falha`, nunca exceção solta.
+3. **Borda** — caso limite real do domínio (tabela vazia, coluna sem dados na
+   amostra, valor com caractere especial, FK fora da extração atual, amostra
+   menor que `tamanho_amostra` configurado).
 
-**O que NÃO conta como teste de borda:** um caso que só existe por acidente de
-tipagem do Python e que `mypy --strict` já rejeita em tempo de verificação.
-
-O número de cenários por categoria não é fixo — pode (e deve) ser mais de um
-"caso de borda" por `Stage`, se o domínio tiver mais de um caso limite real. O
-que importa não é bater a lista de 3 itens, é a lista de testes ser
-**deliberada**.
+**O que NÃO conta como borda:** caso que `mypy --strict` já rejeita em tempo
+de verificação.
 
 ## A pergunta que decide se um teste entra na suíte
 
-Antes de escrever um teste, pergunte: **"que bug real ou regra de negócio este
-teste pegaria, que não seria pego de outra forma (tipo, lint, teste já
-existente)?"** Se a resposta for "nenhum", o teste não vai para a suíte.
+**"Que bug real ou regra de negócio este teste pegaria, que não seria pego de
+outra forma (tipo, lint, teste já existente)?"** Se "nenhum", o teste não entra.
 
-Essa pergunta separa dois tipos de teste:
+## Testabilidade por isolamento
 
-- **Teste-armadilha real** (o que queremos): nasce de um bug concreto já
-  encontrado ou de uma regra de negócio que, se quebrada, o teste pega.
-  Docstring honesto sobre a causa
-  (`"""Bug: coluna timestamp com top_values não deve gerar accepted_values
-  absurdo."""`), e a assertion realmente verifica o comportamento que o
-  docstring promete.
-- **Teste decorativo** (o que queremos evitar): passa por acidente de
-  comportamento do Python/framework, não por uma validação intencional do
-  código — ou o docstring promete mais do que a assertion verifica (ex.:
-  "interrompe a execução" sem nunca checar que a etapa seguinte de fato não
-  rodou).
-
-## Testabilidade por isolamento — sem montar o pipeline inteiro
-
-Como cada `Stage` é uma função/classe testável isoladamente (recebe um tipo de
-entrada conhecido, devolve um `Result` de um tipo de saída conhecido), o teste de
-um Analyzer novo não exige montar o pipeline inteiro nem mockar os estágios
-vizinhos — só chamar o `Stage` direto com a entrada que seu tipo declara.
+Como cada `Estagio` recebe um tipo conhecido e devolve `Resultado` de um tipo
+conhecido, o teste de um Analisador novo não exige montar o pipeline inteiro —
+só chamar o `Estagio` com a entrada que seu tipo declara.
 
 ```
 tests/
 ├── unit/
-│   ├── pipeline/                  # compose() e a semântica de parar no 1º erro
-│   ├── dominio/modelo/            # validação dos modelos Pydantic
-│   └── infraestrutura/adaptadores/
-│       ├── extratores/             # conftest.py desde o primeiro teste
-│       ├── analisadores/
-│       └── geradores/
+│   ├── pipeline/                        # compor() e semântica de parar no 1º erro
+│   ├── domain/
+│   │   ├── model/                       # validação dos modelos Pydantic por Context
+│   │   └── shared/                      # Resultado[T], Aviso
+│   └── infrastructure/adapters/
+│       ├── extractors/                  # conftest.py desde o 1º teste
+│       ├── analyzers/                   # conftest.py desde o 1º teste
+│       ├── generators/                  # conftest.py desde o 1º teste
+│       ├── overrides/
+│       └── orchestrator/
 └── integration/
-    ├── extratores/                 # bancos/arquivos/API reais (ou containers)
-    └── api/                         # endpoints da camada de serving (futuro)
+    ├── extractors/                      # Postgres real ou containerizado
+    └── cli/                             # wizard end-to-end com Extrator fake
 ```
 
 ## `conftest.py` desde o primeiro teste de cada camada
 
-Ao escrever o primeiro teste de uma camada (`extratores`, `analisadores`,
-`geradores`), já criar o `conftest.py` correspondente com os mocks/builders
-óbvios.
+Ao escrever o primeiro teste de uma camada, já criar o `conftest.py`
+correspondente com os builders óbvios (ex.: `TabelaExtraida` de fixture,
+`ContextoDeAnalise` vazio, `BancoCurado` de fixture).
 
 ## Testes de CLI mockam o `Protocol`, nunca o driver de baixo nível
 
-A camada de CLI sempre recebe/constrói um Extractor (ou Analyzer/Generator)
-através de uma forma testável (registro de fontes, injeção explícita) — testes
-de CLI mockam o `Protocol` correspondente (ou diretamente o `Stage`), nunca o
-driver de baixo nível de uma implementação concreta (ex.: `psycopg2.connect`).
+Testes de CLI injetam `Extrator` fake via `FONTES_REGISTRADAS` — nunca mockam
+`psycopg2.connect` diretamente.
 
 ## Validação de Open/Closed como teste, não só como princípio citado
 
-Sempre que uma `Port` (Extractor, Analyzer, Generator) ganha uma nova
-implementação real, existe pelo menos um teste que prova que adicioná-la não
-exigiu editar nenhuma implementação já existente.
+Sempre que uma `Porta` ganha uma nova implementação real, existe pelo menos um
+teste que prova que adicioná-la não exigiu editar nenhuma implementação já
+existente. Isso inclui Analisadores: um teste que instancia um Analisador
+novo, adiciona ao `compor()`, e verifica que os Analisadores já existentes
+produzem exatamente o mesmo resultado que produziam antes.
 
+## Teste de validação de dependências
+
+A função `validar_dependencias(analisadores, geradores)` tem testes para:
+
+- Combinação válida: `AnalisadorDeMetricasDeColuna` + `GeradorDbt` — passa.
+- Dependência ausente: `AnalisadorDeMetricasDeTabela` sem
+  `AnalisadorDeMetricasDeColuna` — `Falha` com mensagem mencionando
+  `MetricasBase`.
+- Gerador sem Analisador correspondente: `GeradorMarkdown` sem
+  `AnalisadorDeMetricasDeTabela` — `Falha` mencionando `MetricasDeTabela`.

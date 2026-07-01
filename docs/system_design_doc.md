@@ -2,73 +2,99 @@
 
 Este documento descreve a arquitetura de alto nível do `ddf`.
 
-## Estilo arquitetural: hexagonal escopado, não hexagonal completo
+## Estilo arquitetural: hexagonal escopado com DDD por Bounded Contexts
 
-O `ddf` adota **Ports & Adapters (hexagonal) de forma escopada** — aplicado só
-onde existe variação real de implementação, não como arquitetura de domínio
-completa.
+O `ddf` adota **Ports & Adapters (hexagonal) com DDD aplicado por Bounded
+Contexts** — não DDD completo com agregados, eventos e repositórios, mas o
+subconjunto preciso que resolve o problema real do projeto: **métricas mudam
+constantemente, e o modelo de domínio não deve mudar junto com elas**.
 
-**Onde o hexagonal é aplicado (as três bordas de variação real):**
+### Os três Bounded Contexts
 
-- **Extractor** é uma `Port` (`Protocol`) porque existe mais de uma fonte de
-  dados real prevista todas
-  precisam produzir o mesmo `DatabaseExtraido` neutro, sem o restante do sistema
-  saber qual `Adapter` concreto está rodando por trás.
-- **Analyzer** é uma `Port` pelo mesmo motivo, no meio do pipeline: existe mais
-  de uma heurística de análise real (`TableMetricsAnalyzer`,
-  `ColumnMetricsAnalyzer`, e qualquer heurística nova que um usuário queira
-  plugar — ex.: inferência de FK por convenção de nome). Um Analyzer novo
-  consome `DatabaseCurado` e produz `DatabaseAnalisado` sem exigir mudança em
-  nenhum Analyzer já existente, exatamente a mesma garantia que Extractor e
-  Generator já têm.
-- **Generator** é uma `Port` pelo mesmo motivo, espelhado na saída: existe mais
-  de um formato de artefato real (Markdown, dbt, contexto de IA), todos
-  recebendo o mesmo `DatabaseAnalisado`.
+| Context | Representação de coluna | Responsabilidade |
+|---|---|---|
+| **Extraction** | `ColunaExtraida` | Estrutura pura da fonte |
+| **Curation** | `ColunaCurada` | Estrutura + curadoria humana |
+| **Analysis** | `ColunaAnalisada` | Estrutura + curadoria + métricas (Value Objects) |
 
-**Onde o hexagonal é deliberadamente *não* aplicado:**
+Cada contexto tem sua própria representação de coluna e tabela. Mudanças em
+métricas ficam confinadas ao Analysis Context — sem tocar em Extraction nem
+em Curation. As Anti-Corruption Layers entre contextos são:
 
-- **Overrides (curadoria)** não é uma `Port` — existe uma única implementação
-  (YAML), então criar uma interface ali seria abstração sem variação real para
-  justificá-la.
-- **Não há camadas de domínio ricas estilo DDD** (sem `domain/event/`, sem
-  subdivisão por agregados) — a complexidade deste projeto está nos dados e nas
-  transformações, não em invariantes de negócio que justifiquem esse vocabulário.
+- **Sobrescrita** — ACL entre Extraction e Curation: traduz `TabelaExtraida` →
+  `TabelaCurada`, aplicando curadoria humana.
+- **Analisador** — ACL entre Curation e Analysis: traduz `BancoCurado` →
+  `BancoAnalisado`, calculando métricas como Value Objects.
 
-## Visão geral
+### Onde o hexagonal é aplicado (as quatro Ports)
 
-O `ddf` é uma ferramenta de linha de comando que executa **sob demanda** (não um
-serviço de longa duração) um pipeline de quatro estágios sobre uma fonte de
-dados:
+- **Extrator** — `Porta` porque existe mais de uma fonte de dados real
+  (Postgres, MariaDB, arquivo, API) — todas produzindo o mesmo `TabelaExtraida`
+  neutro.
+- **Analisador** — `Porta` porque existe mais de uma heurística de análise
+  real, e qualquer usuário pode plugar uma nova sem alterar nenhuma existente.
+- **Gerador** — `Porta` porque existe mais de um formato de artefato
+  (Markdown, dbt, contexto de IA), todos consumindo o mesmo `BancoAnalisado`.
+- **OrquestradorDeTabelas** — `Porta` porque existe mais de uma estratégia de
+  execução (`OrquestradorParalelo`, futuramente `OrquestradorDistribuido`).
+
+### Onde DDD/hexagonal é deliberadamente *não* aplicado
+
+- **Sobrescritas** não é uma `Porta` — existe uma única implementação (YAML).
+- **Sem agregados, eventos de domínio ou repositórios** — a complexidade do
+  projeto está nas transformações de dados, não em invariantes de negócio que
+  justifiquem esse vocabulário.
+
+## Visão geral do pipeline
 
 ```
-Extrair → Aplicar overrides → Analisar → Gerar
+Extrair → Aplicar sobrescritas → Analisar → Gerar
 ```
 
-Cada execução parte de uma fonte de dados, produz um modelo de domínio em memória, 
-e termina escrevendo em disco um ou mais artefatos versionáveis (documentação Markdown, 
-projeto dbt, contexto de IA). Não há estado persistente entre execuções além do que o 
-próprio usuário versiona em Git (overrides em YAML, artefatos gerados).
+O processamento é **por tabela em paralelo** desde a v1 — o
+`OrquestradorParalelo` extrai e aplica sobrescritas em múltiplas tabelas
+simultaneamente via `ThreadPoolExecutor`, agrega as `TabelaCurada` resultantes
+em `BancoCurado`, e entrega para o Analisador processar com Polars
+(paralelismo interno via Rayon).
 
 ```mermaid
 flowchart TD
     start((Início))
-    extract["Extractor"]
-    extracted{{"DatabaseExtraido"}}
-    overrides["Overrides"]
-    curated{{"DatabaseCurado"}}
-    analyze["Analyzer"]
-    analyzed{{"DatabaseAnalisado"}}
+    config["ConfiguracaoDeExtracao\n(tamanho_amostra, estrategia)"]
+    orch["OrquestradorParalelo\n(ThreadPoolExecutor)"]
+
+    subgraph extraction["Extraction Context"]
+        extract["Extrator (por tabela)"]
+        tabela_extraida{{"TabelaExtraida\n(ColunaExtraida + pl.DataFrame\n+ MetadadosDeAmostra)"}}
+    end
+
+    subgraph curation["Curation Context"]
+        overrides["Sobrescrita ACL\n(por tabela — thread-safe)"]
+        tabela_curada{{"TabelaCurada\n(ColunaCurada + pl.DataFrame\n+ curadoria)"}}
+        aggregate["Agrega list[TabelaCurada]\n→ BancoCurado"]
+        curated{{"BancoCurado\n(todas as TabelaCurada)"}}
+    end
+    
+    subgraph analysis["Analysis Context"]
+        ctx_init["BancoAnalisado.vazio()"]
+        contexto{{"ContextoDeAnalise\n(BancoCurado + BancoAnalisado)"}}
+        analyze["Analisadores em compor()\n(Polars/Rayon interno)"]
+        analyzed{{"BancoAnalisado\n(ColunaAnalisada + MetricaDeColuna[]\nPydantic puro)"}}
+    end
+
     fork((" "))
-    genMd["MarkdownGenerator"]
-    genDbt["DbtGenerator"]
-    genAi["AiContextGenerator"]
+    genMd["GeradorMarkdown"]
+    genDbt["GeradorDbt"]
+    genAi["GeradorContextoDeIA"]
     artMd[("docs/*.md")]
     artDbt[("dbt_project/*")]
     artAi[("ai_context.json")]
     join((" "))
     stop((Fim))
 
-    start --> extract --> extracted --> overrides --> curated --> analyze --> analyzed --> fork
+    start --> config --> orch
+    orch --> extract --> tabela_extraida --> overrides --> tabela_curada --> aggregate
+    aggregate --> curated --> ctx_init --> contexto --> analyze --> analyzed --> fork
     fork --> genMd --> artMd --> join
     fork --> genDbt --> artDbt --> join
     fork --> genAi --> artAi --> join
@@ -77,145 +103,166 @@ flowchart TD
 
 ## Componentes
 
-### 1. Extractor
+### 1. Extrator (Extraction Context)
 
-Responsável por conectar a uma fonte de dados e produzir um `DatabaseExtraido` —
-o modelo estrutural cru (tabelas, colunas, tipos com precisão, chaves
-primárias/estrangeiras), sem métricas calculadas e sem curadoria humana ainda
-aplicada.
+Produz uma `TabelaExtraida` por tabela — `ColunaExtraida`s (estrutura pura),
+amostra como `pl.DataFrame` e `MetadadosDeAmostra`.
 
-- Implementação: `PostgresExtractor`, lendo `information_schema`.
-- Variação esperada: um `Extractor` por fonte
-  (MariaDB, arquivo, API) — todos produzindo o mesmo `DatabaseExtraido` neutro,
-  para que nenhum componente downstream precise saber de qual fonte os dados
-  vieram.
+- **Único componente com acesso ao banco** — nenhum outro estágio abre conexão.
+- Usa `psycopg2.pool.ThreadedConnectionPool` para suporte ao paralelo.
+- `EstrategiaDeAmostragem` plugável via `ConfiguracaoDeExtracao` — nenhuma
+  camada sabe que `tamanho_amostra` existe além do Extrator.
 
-### 2. Overrides (curadoria)
+### 2. EstrategiaDeAmostragem
 
-Aplica, sobre o `DatabaseExtraido`, campos de curadoria humana (papel de negócio
-da tabela/coluna, regras) lidos de YAML versionado pelo usuário
-(`overrides/<schema>/<tabela>.yaml`).
+Controla a query de amostragem por tabela. Plugável via
+`ConfiguracaoDeExtracao`.
 
-Garante idempotência: compara a estrutura atual da fonte com a última conhecida
-(via hash de campos estruturais — nome, tipo, PK/FK) e só adiciona/remove campos
-de curadoria quando a estrutura de fato mudou, nunca apaga curadoria já feita por
-um humano sem necessidade.
+- `LimiteAleatorio` — `SELECT * FROM tabela LIMIT N` (padrão v1)
+- Extensão futura: `TableSample`, `FullScan`, estratégia por tabela.
 
-Produz um `DatabaseCurado` — tipo próprio, distinto de `DatabaseExtraido` — a
-partir do `DatabaseExtraido` recebido. Roda **antes** da análise de métricas — a
-curadoria de negócio não depende de nenhuma métrica calculada, e expor esses
-campos cedo simplifica o restante do pipeline.
+### 3. MetadadosDeAmostra
 
-### 3. Analyzer
+Value Object que viaja com `TabelaExtraida` e `TabelaCurada`:
 
-Calcula métricas sobre o `DatabaseCurado` (nulos, cardinalidade, valores mais
-frequentes, formato detectado por regex — email/cpf/cnpj/telefone/cep) e produz o
-`DatabaseAnalisado`, preservando os campos de curadoria já aplicados pelo estágio
-anterior.
+```python
+class MetadadosDeAmostra(BaseModel):
+    estrategia: str      # "random_limit", "tablesample", "full_scan"
+    tamanho_amostra: int # linhas efetivamente amostradas
+    total_linhas: int    # total real da tabela
+```
 
-`DatabaseExtraido`, `DatabaseCurado` e `DatabaseAnalisado` são três modelos
-distintos — não a mesma estrutura reaproveitada em estados implícitos. Isso
-existe para que seja estruturalmente impossível um Generator receber dados sem
-métricas calculadas, e igualmente impossível um Analyzer (ou Generator) receber
-dados que nunca passaram pela etapa de curadoria — cada etapa só aceita o tipo
-que a etapa anterior se compromete a produzir.
+Usado pelo Analisador para normalizar métricas e pelos Geradores para
+declarar nos artefatos que as métricas são estimativas sobre amostra.
 
-Implementações: `TableMetricsAnalyzer` e `ColumnMetricsAnalyzer`. Analyzer
-é uma `Port`, assim como Extractor e Generator — qualquer pessoa pode plugar um
-Analyzer novo (uma heurística de qualidade, uma inferência de relacionamento)
-contribuindo um `Adapter` que implemente o `Protocol`, sem editar nenhum Analyzer
-já existente. Analyzers não sabem de qual fonte os dados vieram — operam só
-sobre o tipo neutro (`DatabaseCurado`). Um Analyzer novo não exige mudança em
-nenhum Extractor, e vice-versa.
+### 4. OrquestradorDeTabelas
 
-### 4. Generator
+`Porta` que coordena o processamento paralelo das tabelas em duas fases
+distintas — separadas para que a CLI possa pausar entre elas para curadoria
+humana dos skeletons de sobrescrita:
 
-Recebe o `DatabaseAnalisado` completo (estrutura + métricas + curadoria) e
-escreve um artefato em disco. Três implementações:
+- **`extrair(schemas, extrator)`** — extração paralela, retorna
+  `list[TabelaExtraida]`.
+- **`aplicar_sobrescritas(tabelas, sobrescrita)`** — sobrescrita paralela,
+  retorna `BancoCurado`.
 
-- **MarkdownGenerator** — documentação navegável.
-- **DbtGenerator** — projeto dbt rodável
-  (`dbt_project.yml`, `sources.yml`, modelos de staging, `schema.yml` com testes
-  de qualidade sugeridos deterministicamente a partir das métricas).
-- **AiContextGenerator** — contexto denso em JSON para consumo por agentes de IA.
+`OrquestradorParalelo` (v1) implementa as duas fases com `ThreadPoolExecutor`.
+Extensão futura: `OrquestradorDistribuido` com Ray ou Celery — honrando o
+mesmo contrato de duas fases. O Analisador roda **fora do pool** — Polars/Rayon
+já paralelize internamente.
 
-Cada Generator é independente dos demais — adicionar um Generator novo, ou rodar
-um subconjunto deles numa execução, não exige alterar os já existentes.
+### 5. Sobrescrita (Anti-Corruption Layer: Extraction → Curation)
 
-### 5. CLI (wizard)
+`Estagio[TabelaExtraida, TabelaCurada]` — traduz entre os dois primeiros
+Bounded Contexts. Puro e thread-safe por design: não agrega, não acumula
+estado.
 
-Única interface de entrada do produto. Conduz o usuário por: escolher fonte →
-conectar → extrair → pausa para curadoria → aplicar overrides → analisar →
-escolher quais artefatos gerar → confirmar → executar. 
+Aplica `papel_de_negocio`/`regras_de_negocio` de
+`overrides/<schema>/<tabela>.yaml`. Garante idempotência via hash de campos
+estruturais. Na primeira execução, gera skeleton YAML e a CLI pausa aguardando
+confirmação do usuário.
+
+### 6. Analisador (Anti-Corruption Layer: Curation → Analysis)
+
+Recebe um `ContextoDeAnalise` — que carrega `BancoCurado` (amostras
+`pl.DataFrame`) e `BancoAnalisado` (acúmulo parcial de métricas) — e produz
+um `ContextoDeAnalise` enriquecido com as métricas que calculou.
+
+**Métricas são Value Objects (`MetricaDeColuna`, `MetricaDeTabela`)**, não
+campos fixos do modelo. Cada Analisador declara o que produz (`produz`) e o
+que requer de Analisadores anteriores (`requer`). A CLI valida essas
+dependências antes de rodar qualquer Analisador.
+
+- **Polars é detalhe de implementação** — nenhum outro componente vê `pl.DataFrame`.
+- `BancoCurado` é o único modelo com `arbitrary_types_allowed=True`.
+- Os DataFrames são descartados após cada tabela ser processada.
+- `BancoAnalisado` é Pydantic puro, sem DataFrames.
+
+### 7. Gerador (Saída do Analysis Context)
+
+Recebe `BancoAnalisado` (estrutura + curadoria + métricas como Value Objects)
+e escreve artefatos em disco. Declara `requer` — os tipos de métricas que
+precisa para funcionar. A CLI valida antes de rodar.
+
+- **GeradorMarkdown** — documentação navegável.
+- **GeradorDbt** — projeto dbt rodável com testes sugeridos. Única saída cujo
+  conteúdo (nomes de coluna/tabela em `schema.yml`, `sources.yml`, SQL) segue
+  o contrato do dbt e permanece em inglês.
+- **GeradorContextoDeIA** — contexto JSON para agentes de IA.
+
+### 8. CLI (wizard)
+
+Conduz: escolher fonte → conectar → extrair (paralelo) → gerar skeletons →
+**pausa para curadoria** → aplicar sobrescritas → validar
+Analisadores+Geradores → analisar → escolher artefatos → confirmar → executar.
+
+Exibe `Aviso`s em streaming por etapa concluída.
 
 ## Fluxo de dados — contratos entre estágios
 
 | Estágio | Entrada | Saída |
 |---|---|---|
-| Extractor | credenciais/connection string | `DatabaseExtraido` |
-| Overrides | `DatabaseExtraido` + YAML existente | `DatabaseCurado` |
-| Analyzer | `DatabaseCurado` | `DatabaseAnalisado` |
-| Generator | `DatabaseAnalisado` | artefato em disco |
+| Extrator (por tabela) | credenciais + `ConfiguracaoDeExtracao` | `TabelaExtraida` |
+| OrquestradorParalelo.extrair | schemas + Extrator | `list[TabelaExtraida]` |
+| [pausa para curadoria humana] | — | — |
+| Sobrescrita (por tabela) | `TabelaExtraida` | `TabelaCurada` |
+| OrquestradorParalelo.aplicar_sobrescritas | `list[TabelaExtraida]` | `BancoCurado` |
+| Analisador (cada um) | `ContextoDeAnalise` | `ContextoDeAnalise` |
+| Pipeline extrai | `ContextoDeAnalise` | `BancoAnalisado` |
+| Gerador | `BancoAnalisado` | artefato em disco |
 
-O tipo de cada coluna (`DataType`) carrega categoria (`VARCHAR`, `NUMERIC`,
-`TIMESTAMP` etc.) mais atributos de precisão opcionais (`precision`, `scale`,
-`max_length`), populados pelo Extractor a partir da fonte. Todo componente
-downstream consome esse tipo neutro — nunca uma string crua específica de uma
-fonte.
+## Memória e tempo esperados (50 tabelas × 10.000 linhas × 20 colunas)
 
-## Composição e extensibilidade
-
-O pipeline inteiro é montado como uma **composição de estágios**, não uma
-sequência de chamadas fixas dentro de uma classe orquestradora. Isso é o que
-garante, na prática:
-
-- **Adicionar um Generator, Analyzer ou Extractor novo** = incluir mais um item na lista
-  de estágios correspondente da composição — nenhum componente existente muda.
-- **Pular a extração** (quando o `DatabaseAnalisado` já existe de uma execução
-  anterior) = simplesmente não incluir o estágio de extração naquela composição —
-  não é um parâmetro opcional carregado por toda execução.
-- **Um estágio falha** = a composição para imediatamente nesse ponto, devolvendo
-  o erro de forma explícita; nenhum estágio seguinte roda, e o resultado (e
-  avisos) de estágios anteriores bem-sucedidos não é descartado.
-- **Tratamento de erro uniforme** — toda etapa devolve sucesso ou falha de forma
-  explícita; uma falha esperada (conexão recusada, schema ausente, arquivo
-  malformado) nunca aparece para o usuário como um erro técnico não tratado — a
-  CLI sempre imprime uma mensagem clara e termina com código de saída diferente
-  de zero.
+| Estágio | Memória (pico) | Tempo estimado |
+|---|---|---|
+| Extrator paralelo (8 workers) | ~6 MB por thread em voo | ~15-20s |
+| Sobrescrita paralela | idem — sem acumulação | incluso acima |
+| Agregação → BancoCurado | ~290 MB (50 DataFrames Polars) | ~400ms |
+| Analisadores em compor() | decrescente conforme descarta DataFrames | ~5-10s |
+| Geradores | ~5-15 MB | ~1-3s |
+| **Total** | **pico ~290 MB** | **~20-35s** |
 
 ## Persistência e estado
 
-- **Sem banco de dados próprio.** O único estado persistido pelo `ddf` entre
-  execuções é o que o usuário versiona em Git: os arquivos YAML de overrides e os
-  artefatos gerados (Markdown, projeto dbt, JSON de contexto).
-- **Sem processo de longa duração.** Cada execução é uma chamada de CLI que
-  termina; não há serviço escutando porta, não há monitoramento contínuo da
-  fonte.
-- **Idempotência por hash de estrutura**, não por timestamp — rodar a mesma
-  extração duas vezes sobre uma fonte inalterada produz o mesmo resultado e não
-  toca em curadoria já existente.
+- **Sem banco de dados próprio** — estado persistido = YAML de sobrescritas +
+  artefatos gerados, ambos versionados em Git pelo usuário.
+- **Sem processo de longa duração** — cada execução é uma chamada de CLI.
+- **Idempotência por hash de estrutura** — reexecução sobre fonte inalterada
+  não toca em curadoria existente.
 
-## Limites do sistema (system boundary)
+## Decisões de arquitetura
 
-O `ddf` só fala com a fonte de dados durante a etapa de extração de uma execução
-ativa — nunca mantém conexão aberta entre execuções, nunca expõe um endpoint
-consultável. Tudo que sai do sistema é arquivo em disco, revisável como qualquer
-outra mudança de código.
-
-## Decisões de arquitetura que moldam este design
-
-1. **Tipo de coluna neutro e rico desde o início** — evita que trocar de fonte
-   de dados quebre os Generators, e preserva precisão necessária para artefatos
-   tecnicamente corretos.
-2. **Pipeline como estágios compostos, não classe orquestradora com `if`s** —
-   evita duplicação de orquestração e bugs de resultado mascarado entre etapas.
-3. **Três tipos distintos — `DatabaseExtraido`, `DatabaseCurado`,
-   `DatabaseAnalisado`** — torna estruturalmente impossível pular a etapa de
-   overrides ou a etapa de análise antes de gerar um artefato; cada estágio só
-   compila contra o tipo que a etapa anterior se compromete a produzir.
-4. **Overrides aplicados antes da análise**, não depois — curadoria de negócio
-   não depende de métrica calculada.
-5. **Generators e Analyzers desacoplados entre si e da fonte de origem** —
-   nenhum Generator ou Analyzer sabe se os dados vieram de Postgres, arquivo ou
-   API; Extractor, Analyzer e Generator são as três `Port`s do sistema, cada uma
-   plugável de forma independente.
+1. **DDD com Bounded Contexts** — métricas mudam constantemente; confiná-las
+   ao Analysis Context como Value Objects garante que nenhuma mudança de métrica
+   toque no Extraction ou Curation Context.
+2. **`MetricaDeColuna` e `MetricaDeTabela` como Value Objects** — Analisador
+   novo = novo tipo de Value Object + arquivo novo; zero mudanças no modelo
+   existente.
+3. **`produz`/`requer` em Analisadores e Geradores** — dependências entre
+   Analisadores e entre Analisadores/Geradores são explícitas e validadas pela
+   CLI antes de qualquer execução, nunca descobertas em runtime.
+4. **`ContextoDeAnalise` como entrada/saída dos Analisadores** — carrega
+   `BancoCurado` (amostras) e `BancoAnalisado` (métricas acumuladas); cada
+   Analisador lê o que precisa e acrescenta suas métricas sem sobrescrever as
+   de outros.
+5. **Extrator é o único ponto de acesso ao banco** — Analisador opera sobre
+   amostras já carregadas, sem reabrir conexão.
+6. **`arbitrary_types_allowed=True` apenas em `BancoCurado`** — o único ponto
+   onde `pl.DataFrame` existe no modelo; `BancoAnalisado` é Pydantic puro.
+7. **Sobrescrita e Analisador como ACLs explícitas** — a fronteira entre
+   contextos é um componente real no código, não uma convenção documentada.
+   A Sobrescrita tem **responsabilidade única** (produzir `TabelaCurada` a partir
+   de `TabelaExtraida`), cumprida em duas fases internas distintas: `_traduzir`
+   (mapeamento estrutural `ColunaExtraida` → `ColunaCurada`) e `_aplicar_overrides`
+   (aplicar curadoria do YAML). As fases têm razões de mudança diferentes — uma
+   muda quando a estrutura da fonte muda; a outra quando as regras de curadoria
+   mudam — por isso ficam separadas internamente, mas não justificam dois
+   componentes distintos.
+8. **`OrquestradorDeTabelas` como `Porta` desde a v1** — trocar
+   `ThreadPoolExecutor` por Ray/Celery não altera nenhum Estagio.
+9. **`EstrategiaDeAmostragem` plugável via `ConfiguracaoDeExtracao`** — mudar
+   estratégia de amostragem = trocar objeto injetado; nenhuma outra camada
+   muda.
+10. **Pipeline como estágios compostos** — adicionar Analisador ou Gerador
+    novo = incluir mais um item na composição; nenhum componente existente
+    muda.

@@ -1,42 +1,50 @@
-## Tópicos a serem implementados
+# Tópicos a serem implementados
 
-- Setup do ambiente de desenvolvimento
-    - uv, pyproject.toml, estrutura de pastas
-    - CI (GitHub Actions) rodando lint + mypy + pytest a cada push
+- **Setup do ambiente de desenvolvimento**
+  - `uv`, `pyproject.toml`, estrutura de pastas
+  - Dependências base: pydantic, psycopg2-binary, polars, jinja2, pyyaml,
+    click, questionary
+  - CI (GitHub Actions) rodando `ruff` + `mypy --strict` + `pytest` a cada push
 
-- Modelo de domínio utilizando Pydantic
-    - Column, Table, Database
-    - Datype
-    - Campos de curadoria (business_role, business_rule) em Table/Column
-    - Result[T] como sum type: Sucesso[T] / Falha
-    - Aviso (mensagem + origem)
-    - Stage[Entrada, Saida] e compose(*stages)
+- **Modelo de domínio**
+  - Shared: `Aviso`, `Resultado[T]` (Sucesso | Falha)
+  - Common: `TipoDeDado`, `MetadadosDeAmostra`, `ConfiguracaoDeExtracao`
+  - Extraction Context: `ColunaExtraida`, `TabelaExtraida`
+  - Curation Context: `ColunaCurada`, `TabelaCurada`, `BancoCurado`
+  - Analysis Context (Value Objects): `MetricaDeColuna`, `MetricasBase`,
+    `MetricaDeTabela`, `ColunaAnalisada`, `TabelaAnalisada`,
+    `BancoAnalisado`, `ContextoDeAnalise`, `iniciar_contexto()`
+  - Pipeline: `Estagio[Entrada, Saida]`, `compor(*estagios)`
+  - Ports: `Extrator`, `Analisador` (com `produz`/`requer`),
+    `Gerador` (com `requer`), `OrquestradorDeTabelas`, `EstrategiaDeAmostragem`
 
-- Adapter de extractor concreto
-    - PostgresExtractor
-    - confest.py
+- **Adaptador de Extrator concreto**
+  - `LimiteAleatorio` (EstrategiaDeAmostragem padrão)
+  - `ExtratorPostgres` — `information_schema`, `ThreadedConnectionPool`,
+    mapeamento de tipos, amostragem via `EstrategiaDeAmostragem`
+  - `conftest.py` de `tests/unit/infrastructure/adapters/extractors/`
 
-- Mecanismo de overrides com leitura, merge e idempotência
-    - Leitura/escrita de YAML em `overrides/<schema>/<table>.yaml
-    - Hash de estrutura
+- **Sobrescrita (ACL Extraction → Curation) e OrquestradorParalelo**
+  - `SobrescritaDeTabela` — hash estrutural, skeleton YAML, idempotência,
+    `Estagio[TabelaExtraida, TabelaCurada]` puro e thread-safe
+  - `OrquestradorParalelo` — `ThreadPoolExecutor`, acumulação de erros,
+    agregação `list[TabelaCurada]` → `BancoCurado`
 
-- Analyzer que calcula métricas do database extraído já curado
-    - ColumnMetricsAnalyzer/TableMetricsAnalyzer/DatabaseMetricsAnalyzer
+- **Analisadores**
+  - `AnalisadorDeMetricasDeColuna` — métricas por coluna via Polars,
+    `produz=[MetricasBase]`
+  - `AnalisadorDeMetricasDeTabela` — `completude`, `produz=[MetricasDeTabela]`,
+    `requer=[MetricasBase]`
 
-- Adapter de generator concreto
-    - Adapter MarkdownGenerator
-    - Adapter DbtGenerator
-    - Adapter AiContextGenerator
+- **Geradores concretos**
+  - `GeradorMarkdown` — `requer=[MetricasBase, MetricasDeTabela]`
+  - `GeradorDbt` — `requer=[MetricasBase]`, testes determinísticos, cast SQL,
+    única saída em inglês (contrato do dbt)
+  - `GeradorContextoDeIA` — `requer=[MetricasBase]`, JSON compacto
 
-- CLI real wizard
-    - Executa as funções exibindo resultados
-        - Escolher fonte
-        - conectar
-        - extrair 
-        - aplicar overrides
-        - analisar
-        - escolher generators
-        - confirmar
-        - executar
-        - Warnings exibidos em streaming, por etapa concluída
-
+- **CLI real wizard**
+  - `FONTES_REGISTRADAS` + `registrar_fonte()`
+  - `validar_dependencias(analisadores, geradores)` — valida `produz`/`requer`
+  - Fluxo completo com pausa para curadoria
+  - `Aviso`s em streaming por etapa concluída
+  - Código de saída `0`/`1`
