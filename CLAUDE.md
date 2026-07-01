@@ -12,6 +12,7 @@ ter consultado os arquivos relevantes para a issue em questão.
 | [`docs/low_level_design.md`](docs/low_level_design.md) | Assinaturas, tipos e comportamento esperado de cada componente |
 | [`plan/tasks.md`](plan/tasks.md) | Checklist detalhado da task em execução |
 | [`docs/engineer_guidelines.md`](docs/engineer_guidelines.md) | Convenções de código, testes e regras de arquitetura |
+| [`docs/gitflow.md`](docs/gitflow.md) | Branches, commits, padrão de PR e critérios de merge |
 
 ---
 
