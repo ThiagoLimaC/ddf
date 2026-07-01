@@ -1,97 +1,91 @@
 # PRD — ddf (novo)
 
-## Problem Statement
+## Visão do produto
 
 Bancos relacionais acumulam estrutura — tabelas, colunas, relacionamentos — sem
 documentação atualizada. Entender essa estrutura do zero (pra integrar com ela ou
-auditá-la) é trabalho manual, repetitivo, e que envelhece rápido.
-
-## Visão / Solução
-
-A partir de uma única extração de uma fonte de dados, gerar múltiplos artefatos
-versionáveis e curados por humanos:
-
-1. **Projeto dbt standalone e rodável** (o pitch) — `dbt_project.yml` +
-   `sources.yml` + modelos de staging + `schema.yml` já populado com testes de
-   qualidade sugeridos deterministicamente a partir das métricas extraídas.
-2. **Documentação Markdown** — legível por humano, navegável, versionável.
-3. **Contexto denso em JSON** — pensado para um agente de IA consumir o schema
-   sem precisar de acesso ao banco.
-4. **Curadoria humana via overrides** — papel de negócio e regras de
-   tabelas/colunas, editáveis em YAML, preservados entre reexecuções.
-
-Não é uma ferramenta de conexão ao vivo (não é um MCP server) — é uma ferramenta
-de análise batch que produz artefatos revisáveis em PR.
-
-## Para quem é
-
-Projeto de interseção entre backend e dados, que demonstra competência em boas
-práticas de engenharia de software aplicadas a um produto voltado para dados —
-desde a extração até a geração de artefatos versionáveis.
-
-## Regras de negócio
-
-- Toda extração produz artefatos versionáveis e revisáveis em PR; nada é
-  aplicado automaticamente fora do controle de versão.
-- Curadoria humana (overrides) nunca é sobrescrita sem necessidade — idempotência
-  decidida por hash de estrutura da fonte, não por timestamp ou execução.
-- Sugestão de teste de qualidade é puramente determinística (mapeamento
-  métrica → teste); nunca estatística ou baseada em modelo opaco — o "porquê" de
-  cada teste sugerido precisa ser rastreável.
-- Aprovação do que foi gerado é a própria revisão do PR; não existe etapa ou
-  arquivo de aprovação separado.
-- Erro esperado (conexão recusada, schema ausente, arquivo malformado) nunca
-  propaga como exceção solta entre camadas — sempre reportado de forma explícita,
-  com mensagem clara.
-- Trocar a fonte de dados (Extractor) ou adicionar um novo artefato (Generator)
-  nunca exige modificar um componente já existente — só compor uma lista
-  diferente.
+auditá-la) é trabalho manual, repetitivo, e que envelhece rápido. 
+A partir de uma única extração de uma fonte de dados, a solução gera múltiplos artefatos
+versionáveis e curados por humanos: um **projeto dbt standalone e rodável** (o
+pitch) — `dbt_project.yml` + `sources.yml` + modelos de staging + `schema.yml`
+já populado com testes de qualidade sugeridos deterministicamente a partir das
+métricas extraídas; **documentação Markdown** legível por humano, navegável e
+versionável; **contexto denso em JSON** pensado para um agente de IA consumir o
+schema sem precisar de acesso ao banco; e **curadoria humana via overrides**, com
+papel de negócio e regras de tabelas/colunas editáveis em YAML e preservados
+entre reexecuções.
 
 ## Requisitos funcionais
 
-1. Como usuário, quero conectar a uma fonte de dados via connection string e
-   extrair schema + métricas reais de uma vez, para documentar a fonte sem
-   inspeção manual.
-2. Quero receber um projeto dbt standalone e rodável, com testes de qualidade já
-   sugeridos a partir das métricas reais, para não escrever sources/staging/
-   testes manualmente a cada fonte nova.
-3. Quero documentação Markdown legível e navegável gerada da mesma extração, sem
-   custo adicional de trabalho manual.
-4. Quero um contexto denso em JSON, pensado para um agente de IA consumir o
-   schema sem acessar o banco diretamente.
-5. Quero curar manualmente o papel de negócio e as regras de tabelas/colunas via
-   arquivo editável, e que essa curadoria sobreviva a reextrações da mesma fonte.
-6. Quero escolher, a cada execução, qual fonte extrair e quais artefatos gerar,
-   sem que essa escolha exija mudança em código já existente.
-7. Quero que falhas esperadas sejam reportadas com mensagem clara e código de
-   saída diferente de zero, nunca como stack trace de exceção solta.
+1. Como usuário, quero conectar a uma fonte de dados informando suas
+   credenciais de acesso e extrair a estrutura completa (schema) e métricas
+   reais de uma vez, para documentar a fonte sem inspeção manual.
+2. Quero receber um projeto dbt pronto para rodar, com testes de qualidade já
+   sugeridos a partir dos dados reais, para não precisar escrever
+   sources/modelos/testes manualmente a cada fonte nova.
+3. Quero documentação em Markdown legível e navegável gerada da mesma
+   extração, sem custo adicional de trabalho manual.
+4. Quero um contexto denso e estruturado, pensado para um agente de IA
+   entender o schema sem precisar acessar o banco diretamente.
+5. Quero curar manualmente o significado de negócio e as regras de tabelas e
+   colunas, e que essa curadoria não se perca quando eu reextrair a mesma
+   fonte depois.
+6. Quero escolher, a cada execução, qual fonte extrair e quais artefatos
+   gerar, sem depender de uma versão nova da ferramenta para isso.
+7. Quero que, quando algo der errado (fonte indisponível, schema não
+   encontrado, arquivo inválido), eu receba uma mensagem de erro clara
+   explicando o que aconteceu, nunca um erro técnico incompreensível.
+8. Quero que o tipo de cada coluna extraída preserve a precisão real da fonte
+   (escala numérica, tamanho máximo de texto), para que os artefatos gerados
+   (como os casts SQL no scaffold dbt) sejam tecnicamente corretos, não
+   genéricos.
 
-## Fora de escopo
+## Requisitos não funcionais
 
-- Fontes de dados além de Postgres (MariaDB, API, arquivo) — pós-fundação, sem
-  ordem de prioridade definida ainda.
-- Heurísticas de análise novas (inferência de FK por convenção de nome,
-  glossário de domínio automático) — candidatas a um projeto-estudo separado.
-- Sugestão de teste de qualidade estatística/por anomalia, além do mapeamento
-  determinístico.
-- Camada de serving HTTP (API) — porta mencionada na arquitetura, sem roadmap
-  definido.
-- Testes de integração contra banco real, além de um smoke test pontual do
-  Extractor.
+1. **Confiabilidade:** nenhum artefato é aplicado automaticamente "por trás"
+   do usuário — tudo que é gerado fica disponível para revisão antes de
+   qualquer uso, e a aprovação do que foi gerado acontece pela revisão normal
+   de código do usuário (não existe uma etapa de aprovação separada dentro da
+   ferramenta).
+2. **Idempotência:** rodar a ferramenta de novo sobre a mesma fonte, sem
+   mudanças estruturais nela, nunca apaga ou sobrescreve curadoria humana já
+   feita anteriormente.
+3. **Confiabilidade dos testes sugeridos:** toda sugestão de teste de
+   qualidade tem uma razão identificável e consistente — a mesma métrica
+   sempre gera a mesma sugestão, nunca uma sugestão estatística ou
+   imprevisível.
+4. **Clareza em falhas:** falhas esperadas (fonte fora do ar, schema ausente,
+   arquivo malformado) são sempre comunicadas ao usuário de forma explícita e
+   compreensível, nunca como uma falha técnica não tratada.
+5. **Extensibilidade:** oferecer suporte a uma nova fonte de dados ou a um
+   novo tipo de artefato gerado não deve exigir uma reescrita da ferramenta —
+   apenas uma extensão sobre o que já existe.
+6. **Qualidade do software entregue:** o produto é mantido com verificação
+   automática contínua (testes automatizados) a cada mudança, para reduzir o
+   risco de regressão entre versões.
+7. **Usabilidade:** o fluxo de uso (da conexão com a fonte até os artefatos
+   prontos) é simples o suficiente para ser operado por um usuário técnico sem
+   necessidade de ler documentação extensa.
+8. **Usabilidade**: A CLI deve ter a capacidade de operar com warnings a cada etapa
+   e aguardar resposta do usuário para determinadas ações (confirmar escrita de overrides,
+   e teste de string de conexão)
 
-## Critério de sucesso
+## Restrições do produto
 
-1. **Funcional:** conecta a um Postgres real, extrai um banco de exemplo, e o
-   `dbt run`/`dbt test` do projeto gerado executa de fato sobre esse banco, com
-   testes sugeridos que fazem sentido numa revisão manual do diff. Documentação
-   Markdown e contexto de IA saem de brinde da mesma extração.
-2. **Arquitetural:** trocar o Extractor ou adicionar um Generator não exige
-   tocar em nenhum componente já existente — só montar uma composição diferente.
-3. CI verde (lint + type-check estrito + testes) desde o primeiro PR mergeado.
-a
-## Further notes
-
-- Nome de marketing/exibição do projeto continua em aberto — decisão separada
-  deste PRD.
-- Este documento cobre a visão de produto; a sequência e o detalhe de
-  implementação vivem em `plano_global.md` e `plano_desenvolvimento.md`.
+1. **Fonte de dados suportada na v1: apenas bancos Postgres.** Suporte a
+   MariaDB, APIs ou arquivos fica para versões futuras, sem ordem de
+   prioridade definida ainda.
+2. **Não é uma ferramenta de conexão ao vivo/contínua** — não monitora a fonte
+   nem expõe um serviço consultável em tempo real (não é um MCP server); é
+   uma ferramenta de análise sob demanda que produz artefatos versionáveis.
+3. **Sugestão de teste de qualidade limitada a regras determinísticas** —
+   não inclui detecção estatística de anomalias nem inferência baseada em
+   modelo nesta versão.
+4. **Sem camada de consulta via API/web nesta fase** — o produto é consumido
+   via linha de comando; uma interface de serviço fica fora de escopo até
+   decisão futura.
+5. **Sem heurísticas de análise automática avançadas nesta versão** (como
+   inferir relacionamentos por convenção de nome ou gerar glossário de
+   domínio automaticamente) — fica para avaliação futura.
+6. **Sem testes de integração extensivos contra banco real** nesta fase, além
+   de uma verificação pontual de que a conexão com a fonte funciona.

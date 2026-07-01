@@ -39,14 +39,18 @@
       (`null_percent`, `unique_percent`, `top_values`, `min`, `max`,
       `detected_format`, `is_primary_key`, `is_foreign_key`,
       `referenced_table`, `referenced_column`), e `business_role`/
-      `business_rules` (presentes desde aqui — ver item abaixo)
+      `business_rules` 
 - [ ] `Table` (Pydantic) — nome, schema, colunas, `row_count`, `completeness`,
       `business_role`/`business_rules`
 - [ ] **`business_role`/`business_rules` em `Table`/`Column` desde o início** —
       porque o mecanismo de overrides (tópico 4) aplica sobre o
-      `DatabaseExtraido`, antes do `DatabaseAnalisado` existir
-- [ ] `DatabaseExtraido` e `DatabaseAnalisado` como tipos Pydantic **distintos**
-      — não a mesma classe reaproveitada em dois estados
+      `DatabaseExtraido`, antes do `DatabaseCurado`/`DatabaseAnalisado` existirem
+- [ ] `DatabaseExtraido`, `DatabaseCurado` e `DatabaseAnalisado` como tipos
+      Pydantic **distintos** (três, não dois) — não a mesma classe reaproveitada
+      em estados implícitos; `DatabaseCurado` é a saída do estágio de overrides
+      e a entrada do Analyzer, tornando estruturalmente impossível pular a
+      curadoria, do mesmo jeito que a separação `DatabaseCurado`/
+      `DatabaseAnalisado` torna impossível pular a análise
 - [ ] `Stage[Entrada, Saida]` (`Protocol` genérico) em `pipeline/estagio.py`:
       ```python
       class Stage(Protocol[Entrada, Saida]):
@@ -69,76 +73,50 @@
               return Result.success(valor, warnings=avisos)
           return pipeline
       ```
-- [ ] `Extractor` e `Generator` (`Protocol`s vazios) em `domain/ports/`
+- [ ] `Extractor`, `Analyzer` e `Generator` (`Protocol`s vazios) em
+      `domain/ports/` — as três `Port`s do sistema, cada uma plugável de forma
+      independente 
 - [ ] **Verificação:** teste de validação Pydantic (campo obrigatório, range
-      0-100 de `null_percent`/`unique_percent`); teste de `compose()` cobrindo
-      2+ estágios fake com sucesso, parada no 1º `Result.failure`, acúmulo de
-      warnings de 2+ estágios bem-sucedidos, e garantia de tipo (`mypy --strict`
-      rejeita um `Stage[DatabaseAnalisado, ...]` recebendo `DatabaseExtraido`)
-- [ ] **Decisão a confirmar antes de implementar:** onde vivem as funções
-      adaptadoras (`extrair_de`, `analisar_com`, `gerar_com`,
-      `aplicar_overrides_de`) que embrulham um Extractor/Analyzer/Generator
-      concreto na forma de `Stage` — ainda não fechado neste plano
+      0-100 de `null_percent`/`unique_percent`);
 
 ## 3. Adapter de extractor concreto
 
 - [ ] `PostgresExtractor`: parsing de connection string, conexão via driver,
-      leitura de `information_schema` (tabelas, colunas — incluindo
-      `numeric_precision`/`numeric_scale`/`character_maximum_length` —, PK, FK)
-- [ ] Popular o `DataType` rico a partir do `information_schema`, não só o
-      nome do tipo
-- [ ] Amostragem representativa (`ORDER BY random()` ou `TABLESAMPLE`)
+      leitura de `information_schema` 
+- [ ] Popular o `DataType` rico a partir do `information_schema`
+- [ ] Amostragem representativa 
 - [ ] `conftest.py` de `tests/unit/infrastructure/adapters/extratores/`
-      nasce com o primeiro teste desta camada
 - [ ] Script de desenvolvimento descartável ou teste de integração em
       `tests/integration/extratores/` contra um Postgres real/containerizado
-- [ ] **Verificação:** caminho feliz (tabela com FK, tipo numérico com
-      precisão/escala), erro esperado (connection string malformada, conexão
-      recusada), borda real (tabela vazia, tabela sem colunas)
 
 ## 4. Mecanismo de overrides com leitura, merge e idempotência
 
 - [ ] Leitura de YAML em `overrides/<schema>/<tabela>.yaml`
 - [ ] Hash de estrutura a partir de campos estruturais do `DatabaseExtraido`
       (nome, tipo, PK/FK) — nunca de métrica calculada
+- [ ] Gerar skeleton YAML para usuário preencher o `business_rule` e o `business_rules`
+      de cada table e column
+- [ ] O arquivo deve de ser lido na mesma execução, e a ida à próxima etapa se dá
+      pela confirmação do usuário que esses campos foram preenchidos
 - [ ] Escrita/atualização de skeleton sem sobrescrever curadoria já existente
-- [ ] `aplicar_overrides_de(overrides_dict)` como
-      `Stage[DatabaseExtraido, DatabaseExtraido]`
-- [ ] **Verificação:** idempotência (reexecutar sobre a mesma estrutura não
-      altera curadoria já editada); coluna nova recebe campo vazio sem tocar
-      nos existentes; coluna removida gera warning sem apagar o override órfão
 
-## 5. Analyzer que calcula métricas do database extraído já curado
+## 5. Analyzer que calcula métricas do `DatabaseCurado`
 
+- [ ] O Analyzer recebe um result ontendo um objeto do tipo `DatabaseExtraido` 
+      do Extractor
 - [ ] `ColumnMetricsAnalyzer`: `null_percent`, `unique_percent`, `min`/`max`,
       `top_values`, detecção de formato (email/cpf/cnpj/phone/cep)
 - [ ] `TableMetricsAnalyzer`: `completeness` agregada a partir das colunas
 - [ ] **Preservar** `business_role`/`business_rules` já aplicados pelo
-      mecanismo de overrides (tópico 4) — não recalcular do zero e descartar
-- [ ] `conftest.py` de `tests/unit/infrastructure/adapters/analisadores/`
-      nasce com o primeiro teste desta camada
-- [ ] **Verificação:** tipo numérico com precisão, tabela com FK, tabela
-      vazia, coluna com formato detectável; teste de Open/Closed (Analyzer novo
-      plugado na composição sem editar os já existentes); teste com um
-      Extractor **fake** de segunda fonte (comprova a decisão fechada: não
-      existe Analyzer por Extractor)
+      mecanismo de overrides
 
 ## 6. Adapter de generator concreto
 
-- [ ] **Antes de qualquer generator real:** decidir a forma do `Generator`
-      Stage (`Stage[DatabaseAnalisado, DatabaseAnalisado]`) e a camada de
-      seleção da CLI, usando `Stage`s fake — incluindo o teste de regressão
-      "múltiplos generators + um produz warning, sem mascarar o resultado dos
-      anteriores"
 - [ ] `MarkdownGenerator` — documentação humana
 - [ ] `DbtGenerator` — `dbt_project.yml` + `sources.yml` + `stg_*.sql` (cast
       usando o `DataType` rico) + `schema.yml` com testes sugeridos
-      deterministicamente (unique, not_null, relationships, accepted_values
-      com verificação de cobertura de domínio, formato por regex)
+      deterministicamente (unique, not_null, relationships, accepted_values)
 - [ ] `AiContextGenerator` — thin, só reformata o que o Analyzer já calculou
-- [ ] **Verificação:** critério de saída de cada generator (ver
-      `plano_desenvolvimento.md`); `dbt run`/`dbt test` do projeto gerado
-      executa de fato contra um banco de teste ou container
 
 ## 7. CLI real wizard
 
@@ -147,8 +125,3 @@
       overrides → analisar → escolher generators → confirmar → executar
 - [ ] Testes de CLI injetam um `Extractor` fake pela costura de injeção do
       registro de fontes — nunca mockam o driver de baixo nível direto
-- [ ] **Decisão já tomada:** não existe modo `--manual`/scriptável paralelo ao
-      wizard
-- [ ] **Verificação:** fluxo completo ponta a ponta com generators
-      selecionados, falha de conexão com retry, nenhum generator selecionado
-      retorna erro claro
