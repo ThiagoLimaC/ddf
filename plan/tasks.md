@@ -1,0 +1,181 @@
+# Tarefas
+
+
+## 1. Setup do ambiente de desenvolvimento
+
+- [ ] `uv init`, `pyproject.toml` com Python 3.12+ e as dependências base
+      (pydantic, psycopg2-binary, polars, jinja2, pyyaml, click, questionary)
+- [ ] Estrutura de pastas:
+        `src/ddf/domain/{model,ports,shared}`,
+        `src/ddf/pipeline/`,
+        `src/ddf/infrastructure/adapters/{extractors,analyzers,generators,orchestrator,overrides,cli}`,
+        `tests/unit/...`,
+        `tests/integration/...`
+- [ ] `ruff` com `select = ["E","F","W","I","N","D"]` e
+      `pydocstyle convention = "google"`
+- [ ] `mypy --strict`
+- [ ] Workflow de CI (GitHub Actions) rodando `ruff` + `mypy` + `pytest` a cada
+      push
+
+## 2. Modelo de domínio
+
+### Shared (`domain/shared/`)
+
+- [ ] `Aviso` (dataclass frozen) — `mensagem: str`, `origem: str`
+- [ ] `Resultado[T]` como sum type — `Sucesso[T](valor, avisos: list[Aviso])` |
+      `Falha(erro: str)`
+
+### Modelos compartilhados (`domain/model/common`)
+
+- [ ] `TipoDeDado` — `CategoriaDeDado` (Enum) +
+      `precisao`/`escala`/`tamanho_maximo` opcionais
+- [ ] `MetadadosDeAmostra` — `estrategia: str`, `tamanho_amostra: int`,
+      `total_linhas: int`
+- [ ] `ConfiguracaoDeExtracao` — `tamanho_amostra`,
+      `estrategia: EstrategiaDeAmostragem`, `max_trabalhadores`,
+      `max_conexoes`; valida `max_conexoes >= max_trabalhadores`
+
+### Extraction Context (`domain/model/extraction.py`)
+
+- [ ] `ColunaExtraida` — `nome`, `tipo_dado`, `chave_primaria`,
+      `chave_estrangeira`, `tabela_referenciada`, `coluna_referenciada`
+- [ ] `TabelaExtraida` — `nome_tabela`, `nome_schema`,
+      `colunas: list[ColunaExtraida]`, `total_linhas`,
+      `amostra: pl.DataFrame | None`, `metadados_amostra`;
+      `arbitrary_types_allowed=True`
+
+### Curation Context (`domain/model/curation.py`)
+
+- [ ] `ColunaCurada` — `ColunaExtraida` + `papel_de_negocio`,
+      `regras_de_negocio`
+- [ ] `TabelaCurada` — mesma estrutura de `TabelaExtraida` com `ColunaCurada` +
+      `papel_de_negocio`, `regras_de_negocio`; `arbitrary_types_allowed=True`
+- [ ] `BancoCurado` — `tabelas: list[TabelaCurada]`;
+      `arbitrary_types_allowed=True`
+
+### Analysis Context (`domain/model/analysis.py`)
+
+- [ ] `MetricaDeColuna` (BaseModel frozen) — `origem: str` — Value Object base
+- [ ] `MetricasBase(MetricaDeColuna)` — `percentual_nulo`, `percentual_unico`,
+      `valores_frequentes`, `minimo`, `maximo`, `formato_detectado`;
+      `origem = "AnalisadorDeMetricasDeColuna"`
+- [ ] `MetricaDeTabela` (BaseModel frozen) — `origem: str` — Value Object base
+- [ ] `MetricasDeTabela(MetricaDeTabela)` — `completude: float`;
+      `origem = "AnalisadorDeMetricasDeTabela"`
+- [ ] `ColunaAnalisada` — campos de `ColunaCurada` +
+      `metricas: list[MetricaDeColuna]`
+- [ ] `TabelaAnalisada` — campos de `TabelaCurada` (sem amostra) +
+      `metricas: list[MetricaDeTabela]` + `metadados_amostra`
+- [ ] `BancoAnalisado` — `tabelas: list[TabelaAnalisada]`; Pydantic puro
+- [ ] `ContextoDeAnalise` — `curado: BancoCurado`, `analisado: BancoAnalisado`;
+      `arbitrary_types_allowed=True`
+- [ ] `iniciar_contexto(curado: BancoCurado) -> ContextoDeAnalise` —
+      constrói `BancoAnalisado` vazio a partir de `BancoCurado`
+
+### Pipeline (`pipeline/`)
+
+- [ ] `Estagio[Entrada, Saida]` (Protocol genérico) em `pipeline/estagio.py`
+- [ ] `compor(*estagios)` em `pipeline/compor.py` — acumula avisos, para no
+      primeiro `Falha`
+
+### Ports (`domain/ports/`)
+
+- [ ] `Extrator` (Protocol) — `listar_tabelas(schema) -> Resultado[list[tuple]]`,
+      `extrair_tabela(schema, tabela) -> Resultado[TabelaExtraida]`
+- [ ] `Analisador` (Protocol) — `produz`, `requer`,
+      `__call__(ContextoDeAnalise) -> Resultado[ContextoDeAnalise]`
+- [ ] `Gerador` (Protocol) — `requer`,
+      `__call__(BancoAnalisado, destino) -> Resultado[None]`
+- [ ] `OrquestradorDeTabelas` (Protocol) — `extrair(schemas, extrator) ->
+      Resultado[list[TabelaExtraida]]` + `aplicar_sobrescritas(tabelas, sobrescrita)
+      -> Resultado[BancoCurado]`
+- [ ] `EstrategiaDeAmostragem` (Protocol) — `nome: str`, `consulta(schema, tabela) -> str`
+
+### Contrato da CLI (`infrastructure/adapters/cli/`)
+
+- [ ] `FONTES_REGISTRADAS` + `registrar_fonte()` em `cli/fontes.py` — registro
+      de Extratores disponíveis; define o contrato de extensão desde o início
+- [ ] `wizard.py` — esqueleto do fluxo completo com chamadas aos Ports já
+      assinadas e comentários `# TODO: implementar na Task 7`; permite detectar
+      cedo se o fluxo exige mudanças no modelo
+- [ ] `validar_dependencias(analisadores, geradores) -> Resultado[None]` em
+      `cli/validacao.py` — lógica pura, testável sem adapters concretos
+
+- [ ] **Verificação:** testes de validação Pydantic (`percentual_nulo`/
+      `percentual_unico` entre 0–100 em `MetricasBase`; `max_conexoes >=
+      max_trabalhadores` em `ConfiguracaoDeExtracao`)
+
+## 3. Adaptador de Extrator concreto
+
+- [ ] `LimiteAleatorio(EstrategiaDeAmostragem)` — `SELECT * FROM {schema}.{tabela} LIMIT N`
+- [ ] `ExtratorPostgres(Extrator)`:
+  - Construção com `ThreadedConnectionPool`
+  - `listar_tabelas` via `information_schema.tables`
+  - `extrair_tabela` — lê estrutura + amostragem via `EstrategiaDeAmostragem` +
+    carrega `pl.DataFrame` + constrói `TabelaExtraida`
+  - Mapeamento completo tipos Postgres → `TipoDeDado`
+- [ ] `conftest.py` de `tests/unit/infrastructure/adapters/extractors/`
+- [ ] Teste de integração em `tests/integration/extractors/` contra Postgres
+      real ou containerizado
+
+## 4. Sobrescrita (ACL Extraction → Curation) e OrquestradorParalelo
+
+- [ ] `SobrescritaDeTabela(Estagio[TabelaExtraida, TabelaCurada])`:
+  - Hash SHA-256 de campos estruturais
+  - Leitura de `overrides/<schema>/<tabela>.yaml`
+  - Geração de skeleton na primeira execução
+  - Atualização idempotente (preserva curadoria, emite `Aviso` por mudança)
+  - YAML malformado → `Falha` com mensagem clara
+- [ ] `OrquestradorParalelo(OrquestradorDeTabelas)`:
+  - `extrair`: `ThreadPoolExecutor` para extração paralela; retorna
+    `list[TabelaExtraida]`
+  - `aplicar_sobrescritas`: `ThreadPoolExecutor` para sobrescrita paralela;
+    agrega `list[TabelaCurada]` → `BancoCurado`
+  - Acumulação de erros individuais sem interromper demais workers em ambas
+    as fases
+
+## 5. Analisadores
+
+- [ ] `AnalisadorDeMetricasDeColuna(Analisador)`:
+  - `produz = [MetricasBase]`, `requer = []`
+  - Calcula métricas via Polars: `percentual_nulo`, `percentual_unico`,
+    `minimo`, `maximo`, `valores_frequentes`, `formato_detectado` (regex:
+    email/cpf/cnpj/phone/cep, threshold 80%)
+  - Normaliza com `MetadadosDeAmostra.tamanho_amostra`
+  - Seta `tabela.amostra = None` após processar cada tabela (libera memória)
+  - `Aviso` se `tamanho_amostra < 100`
+- [ ] `AnalisadorDeMetricasDeTabela(Analisador)`:
+  - `produz = [MetricasDeTabela]`, `requer = [MetricasBase]`
+  - Calcula `completude` a partir de `MetricasBase` já presentes no
+    `ContextoDeAnalise.analisado`
+  - `Falha` defensiva se `MetricasBase` ausente em qualquer coluna
+
+## 6. Geradores concretos
+
+- [ ] `GeradorMarkdown(Gerador)`:
+  - `requer = [MetricasBase, MetricasDeTabela]`
+  - Um `.md` por tabela + `index.md`
+  - Nota de rodapé com `MetadadosDeAmostra` (estratégia, N amostrado, M total)
+- [ ] `GeradorDbt(Gerador)`:
+  - `requer = [MetricasBase]`
+  - `dbt_project.yml` + `sources.yml` + `stg_*.sql` (cast com `TipoDeDado` rico)
+    + `schema.yml` com testes sugeridos deterministicamente
+  - Única saída cujos identificadores no artefato ficam em inglês (contrato do dbt)
+- [ ] `GeradorContextoDeIA(Gerador)`:
+  - `requer = [MetricasBase]`
+  - `ai_context.json` com serialização compacta do `BancoAnalisado`
+
+## 7. CLI real wizard
+
+- [ ] `FONTES_REGISTRADAS` + `registrar_fonte()` em `cli/fontes.py`
+- [ ] `validar_dependencias(analisadores, geradores) -> Resultado[None]` em
+      `cli/validacao.py` — verifica `produz`/`requer` antes de qualquer execução
+- [ ] Fluxo completo do wizard:
+      escolher fonte → conectar (retry 3x) → escolher schemas →
+      extrair (paralelo) → gerar skeletons → **pausa para curadoria** →
+      aplicar sobrescritas → validar dependências → analisar → escolher
+      geradores → escolher destino → confirmar → executar
+- [ ] `Aviso`s exibidos em streaming por etapa concluída
+- [ ] Código de saída `0`/`1` para uso em scripts e CI
+- [ ] Testes de CLI injetam `Extrator` fake via `FONTES_REGISTRADAS` — nunca
+      mockam o driver de baixo nível direto
