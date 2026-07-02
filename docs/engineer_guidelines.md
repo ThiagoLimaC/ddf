@@ -16,6 +16,23 @@ com código neste projeto.
 
 ---
 
+## Registro de execução por issue (`plan/registry-plan/`)
+
+Toda issue em desenvolvimento tem um arquivo próprio em
+`plan/registry-plan/issue-<n>-<slug>.md`, com um checklist simples dos passos
+planejados para aquela issue.
+
+- Marcar cada item com `[x]` **imediatamente após concluí-lo** — nunca em
+  lote no final. O arquivo reflete o progresso real a cada momento, pois é
+  revisado pelo usuário a cada PR ou mudança relevante.
+- Se um passo envolver uma decisão técnica não óbvia (ex.: escolha de
+  ferramenta, workaround, ajuste de escopo), registrar uma sub-linha logo
+  abaixo do item correspondente, não em seção separada.
+- O arquivo é enxuto: só os passos definidos e, quando houver, a decisão
+  técnica associada — sem narrativa adicional.
+
+---
+
 ## Arquitetura: DDD com Bounded Contexts + Hexagonal escopado
 
 O `ddf` usa DDD aplicado por **Bounded Contexts** e Hexagonal aplicado
