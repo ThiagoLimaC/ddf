@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Instalar dependências
+        run: uv sync --all-extras --dev
+
+      - name: ruff
+        run: uv run ruff check .
+
+      - name: mypy --strict
+        run: uv run mypy --strict src
+
+      - name: pytest
+        # Task 1 ainda não tem testes; pytest retorna exit code 5 ("no tests
+        # collected") nesse caso, o que é aceito até a Task 2 adicionar
+        # testes reais.
+        run: uv run pytest || [ "$?" -eq 5 ]
