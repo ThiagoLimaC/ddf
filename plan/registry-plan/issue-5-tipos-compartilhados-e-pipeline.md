@@ -61,6 +61,14 @@
     comportamento genérico do Python/Pydantic já garantido por tipo
   - Testes usam fábricas de `Estagio[int, int]` fake em `tests/unit/pipeline/conftest.py`
     (sem depender de nenhum Analisador/Sobrescrita concreto, que ainda não existem)
+  - Corrigido `test_compor.py`: importava os aliases de tipo
+    (`EstagioInt`/`FabricaEstagioSucesso`/`FabricaEstagioFalha`) direto de
+    `tests.unit.pipeline.conftest`, o que quebra com `ModuleNotFoundError: No
+    module named 'tests'` fora do ambiente específico onde foi escrito
+    (`tests/` não é pacote Python, sem `__init__.py`). Aliases duplicados
+    localmente em `test_compor.py` — fixtures continuam vindo do `conftest.py`
+    normalmente (via injeção do pytest), só os aliases de tipo não são mais
+    importados como módulo
 - [x] `mypy --strict` + `ruff` limpos
   - `Saida` em `Estagio[Entrada, Saida]` precisou ser invariante (não
     covariante como no snippet original) porque transita por `Sucesso.valor`,

@@ -1,14 +1,14 @@
 """Testes de compor()."""
 
-from tests.unit.pipeline.conftest import (
-    EstagioInt,
-    FabricaEstagioFalha,
-    FabricaEstagioSucesso,
-)
+from collections.abc import Callable
 
 from ddf.domain.shared.aviso import Aviso
-from ddf.domain.shared.resultado import Falha, Sucesso
+from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.pipeline.compor import compor
+
+EstagioInt = Callable[[int], Resultado[int]]
+FabricaEstagioSucesso = Callable[[int, "list[Aviso] | None"], EstagioInt]
+FabricaEstagioFalha = Callable[[str, "list[Aviso] | None"], EstagioInt]
 
 
 def test_compor_executa_estagios_em_sequencia_acumulando_avisos(
