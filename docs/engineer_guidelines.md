@@ -33,6 +33,31 @@ planejados para aquela issue.
 
 ---
 
+## Explicação por etapa, antes de seguir
+
+Ao concluir uma etapa do plano de execução de uma issue — tipicamente a
+entrega de um arquivo, classe ou método dentro do escopo da task — quem está
+implementando (humano ou assistente) **para** e apresenta uma explicação
+antes de avançar para a próxima etapa. Isso vale mesmo em modos de execução
+automática/contínua — a pausa é deliberada, não um efeito colateral de erro.
+
+A explicação cobre, para o elemento entregue:
+
+- **Posição na arquitetura** — a qual Bounded Context/camada pertence, e como
+  se relaciona com a estrutura de Ports & Adapters.
+- **Implementações futuras** — se for um `Protocol`/Port, quais classes
+  concretas vão implementá-lo e em qual issue.
+- **Pontos de referência** — quais outros componentes vão chamar ou depender
+  dele daqui para frente.
+
+Isso vale independentemente de a informação já estar documentada em
+`low_level_design.md` ou `system_design_doc.md` — a explicação é para
+entendimento no momento da implementação, não só consulta posterior à
+documentação. Só se avança para a próxima etapa mediante confirmação de quem
+acompanha a issue.
+
+---
+
 ## Arquitetura: DDD com Bounded Contexts + Hexagonal escopado
 
 O `ddf` usa DDD aplicado por **Bounded Contexts** e Hexagonal aplicado

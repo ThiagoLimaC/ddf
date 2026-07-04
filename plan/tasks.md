@@ -31,9 +31,10 @@
       `precisao`/`escala`/`tamanho_maximo` opcionais
 - [ ] `MetadadosDeAmostra` — `estrategia: str`, `tamanho_amostra: int`,
       `total_linhas: int`
-- [ ] `ConfiguracaoDeExtracao` — `tamanho_amostra`,
-      `estrategia: EstrategiaDeAmostragem`, `max_trabalhadores`,
-      `max_conexoes`; valida `max_conexoes >= max_trabalhadores`
+- [ ] `ConfiguracaoDeExtracao` — `estrategia: EstrategiaDeAmostragem`,
+      `max_trabalhadores`, `max_conexoes`; valida `max_conexoes >=
+      max_trabalhadores` (sem `tamanho_amostra` — dimensionamento é
+      responsabilidade de cada `EstrategiaDeAmostragem` concreta)
 
 ### Extraction Context (`domain/model/extraction.py`)
 
