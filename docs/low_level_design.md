@@ -28,6 +28,7 @@ class Sucesso(Generic[T]):
 @dataclass(frozen=True)
 class Falha:
     erro: str  # mensagem legível por humano — nunca traceback crua
+    avisos: list[Aviso] = field(default_factory=list)
 
 Resultado = Sucesso[T] | Falha
 ```
@@ -35,6 +36,10 @@ Resultado = Sucesso[T] | Falha
 **Comportamento:** todo Estagio que captura uma exceção esperada (conexão
 recusada, arquivo ausente, YAML malformado) a converte em `Falha` com mensagem
 clara antes de retornar. Nunca propaga exceção crua para fora de um Estagio.
+`Falha.avisos` existe para que avisos emitidos antes do erro (por este Estagio
+ou por Estagios anteriores em `compor()`) não sejam descartados silenciosamente
+— a CLI exibe avisos em streaming, inclusive quando a execução termina em
+`Falha`.
 
 ---
 
@@ -83,8 +88,7 @@ estimativas.
 
 ```python
 class ConfiguracaoDeExtracao(BaseModel):
-    tamanho_amostra: int = 10_000
-    estrategia: EstrategiaDeAmostragem = Field(default_factory=LimiteAleatorio)
+    estrategia: EstrategiaDeAmostragem
     max_trabalhadores: int = 8
     max_conexoes: int = 10
 ```
@@ -92,6 +96,15 @@ class ConfiguracaoDeExtracao(BaseModel):
 **Comportamento:** lida de `ddf.toml` ou flags CLI (`--sample-size`,
 `--max-workers`). Valida `max_conexoes >=
 max_trabalhadores` — `ValueError` com mensagem clara se violado.
+
+**Sem campo de tamanho de amostra:** dimensionar a amostra é responsabilidade
+de cada `EstrategiaDeAmostragem` concreta (ex.: `LimiteAleatorio.tamanho`), não
+de `ConfiguracaoDeExtracao` — o conceito de "tamanho" não generaliza para
+estratégias futuras não baseadas em contagem de linhas (`TableSample` é
+percentual, `FullScan` não tem tamanho). `ConfiguracaoDeExtracao` orquestra
+concorrência; a estratégia decide como amostrar. `MetadadosDeAmostra.tamanho_amostra`
+permanece como resultado observado pelo `Extrator` após a amostragem, não como
+parâmetro de configuração.
 
 ---
 
@@ -350,7 +363,9 @@ def compor(*estagios: Estagio) -> Estagio:
 **Comportamento:**
 1. Executa cada Estagio em ordem, passando `.valor` do resultado anterior.
 2. Acumula `avisos` de todos os Estagios bem-sucedidos.
-3. Para no primeiro `Falha`, retornando-o com os avisos acumulados até ali.
+3. Para no primeiro `Falha`, retornando-o com `Falha.avisos` preenchido pelos
+   avisos acumulados até ali (incluindo os que o próprio Estagio que falhou
+   possa ter emitido) — nenhum aviso é descartado silenciosamente.
 4. Retorna `Sucesso(valor=resultado_final, avisos=todos_os_avisos)` se todos
    concluírem com sucesso.
 
