@@ -11,7 +11,7 @@
   - Common: `TipoDeDado`, `MetadadosDeAmostra`, `ConfiguracaoDeExtracao`
   - Extraction Context: `ColunaExtraida`, `TabelaExtraida`
   - Curation Context: `ColunaCurada`, `TabelaCurada`, `BancoCurado`
-  - Analysis Context (Value Objects): `MetricaDeColuna`, `MetricasBase`,
+  - Analysis Context (Value Objects): `MetricaDeColuna`, `MetricasBaseColuna`,
     `MetricaDeTabela`, `ColunaAnalisada`, `TabelaAnalisada`,
     `BancoAnalisado`, `ContextoDeAnalise`, `iniciar_contexto()`
   - Pipeline: `Estagio[Entrada, Saida]`, `compor(*estagios)`
@@ -32,15 +32,15 @@
 
 - **Analisadores**
   - `AnalisadorDeMetricasDeColuna` — métricas por coluna via Polars,
-    `produz=[MetricasBase]`
-  - `AnalisadorDeMetricasDeTabela` — `completude`, `produz=[MetricasDeTabela]`,
-    `requer=[MetricasBase]`
+    `produz=[MetricasBaseColuna]`
+  - `AnalisadorDeMetricasDeTabela` — `completude`, `produz=[MetricasBaseTabela]`,
+    `requer=[MetricasBaseColuna]`
 
 - **Geradores concretos**
-  - `GeradorMarkdown` — `requer=[MetricasBase, MetricasDeTabela]`
-  - `GeradorDbt` — `requer=[MetricasBase]`, testes determinísticos, cast SQL,
+  - `GeradorMarkdown` — `requer=[MetricasBaseColuna, MetricasBaseTabela]`
+  - `GeradorDbt` — `requer=[MetricasBaseColuna]`, testes determinísticos, cast SQL,
     única saída em inglês (contrato do dbt)
-  - `GeradorContextoDeIA` — `requer=[MetricasBase]`, JSON compacto
+  - `GeradorContextoDeIA` — `requer=[MetricasBaseColuna]`, JSON compacto
 
 - **CLI real wizard**
   - `FONTES_REGISTRADAS` + `registrar_fonte()`

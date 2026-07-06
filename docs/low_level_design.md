@@ -232,10 +232,10 @@ class MetricaDeColuna(BaseModel):
     origem: str  # nome do Analisador que produziu
 ```
 
-### `MetricasBase` (implementação concreta — `AnalisadorDeMetricasDeColuna`)
+### `MetricasBaseColuna` (implementação concreta — `AnalisadorDeMetricasDeColuna`)
 
 ```python
-class MetricasBase(MetricaDeColuna):
+class MetricasBaseColuna(MetricaDeColuna):
     origem: str = "AnalisadorDeMetricasDeColuna"
     percentual_nulo: float           # 0.0–100.0
     percentual_unico: float         # 0.0–100.0
@@ -253,10 +253,10 @@ class MetricaDeTabela(BaseModel):
     origem: str
 ```
 
-### `MetricasDeTabela` (implementação concreta — `AnalisadorDeMetricasDeTabela`)
+### `MetricasBaseTabela` (implementação concreta — `AnalisadorDeMetricasDeTabela`)
 
 ```python
-class MetricasDeTabela(MetricaDeTabela):
+class MetricasBaseTabela(MetricaDeTabela):
     origem: str = "AnalisadorDeMetricasDeTabela"
     completude: float  # média de (100 - m.percentual_nulo) das colunas
 ```
@@ -277,8 +277,8 @@ class ColunaAnalisada(BaseModel):
 ```
 
 **Comportamento:** `metricas` acumula Value Objects de múltiplos Analisadores
-sem conflito. Um Gerador que quer `MetricasBase` filtra com
-`next((m for m in col.metricas if isinstance(m, MetricasBase)), None)`.
+sem conflito. Um Gerador que quer `MetricasBaseColuna` filtra com
+`next((m for m in col.metricas if isinstance(m, MetricasBaseColuna)), None)`.
 
 ### `TabelaAnalisada`
 
@@ -318,7 +318,7 @@ class ContextoDeAnalise(BaseModel):
 **Comportamento:** é a entrada e saída de cada `Analisador` no `compor()`.
 Cada Analisador lê `curado` para acessar os DataFrames, lê `analisado` para
 acessar métricas calculadas por Analisadores anteriores (ex.:
-`AnalisadorDeMetricasDeTabela` lê `MetricasBase` calculadas pelo
+`AnalisadorDeMetricasDeTabela` lê `MetricasBaseColuna` calculadas pelo
 `AnalisadorDeMetricasDeColuna`), e devolve um `ContextoDeAnalise` com
 `analisado` enriquecido com suas próprias métricas. Os DataFrames em `curado`
 são descartados conforme cada tabela é processada.
@@ -638,7 +638,7 @@ class OrquestradorParalelo:
 
 ```python
 class AnalisadorDeMetricasDeColuna:
-    produz: list[type] = [MetricasBase]
+    produz: list[type] = [MetricasBaseColuna]
     requer: list[type] = []
 
     def __call__(self, entrada: ContextoDeAnalise) -> Resultado[ContextoDeAnalise]: ...
@@ -673,16 +673,16 @@ class AnalisadorDeMetricasDeColuna:
 
 ```python
 class AnalisadorDeMetricasDeTabela:
-    produz: list[type] = [MetricasDeTabela]
-    requer: list[type] = [MetricasBase]  # depende de percentual_nulo calculado
+    produz: list[type] = [MetricasBaseTabela]
+    requer: list[type] = [MetricasBaseColuna]  # depende de percentual_nulo calculado
 
     def __call__(self, entrada: ContextoDeAnalise) -> Resultado[ContextoDeAnalise]: ...
 ```
 
-**Comportamento:** lê `MetricasBase` de cada `ColunaAnalisada` (já preenchida
+**Comportamento:** lê `MetricasBaseColuna` de cada `ColunaAnalisada` (já preenchida
 pelo `AnalisadorDeMetricasDeColuna`), calcula `completude` como média de
-`(100 - m.percentual_nulo)` e acrescenta `MetricasDeTabela` à lista `metricas`
-da `TabelaAnalisada`. `Falha` se `MetricasBase` estiver ausente em qualquer
+`(100 - m.percentual_nulo)` e acrescenta `MetricasBaseTabela` à lista `metricas`
+da `TabelaAnalisada`. `Falha` se `MetricasBaseColuna` estiver ausente em qualquer
 coluna — a CLI valida a dependência antes de rodar, mas o Analisador também
 valida defensivamente.
 
@@ -694,7 +694,7 @@ valida defensivamente.
 
 ```python
 class GeradorMarkdown:
-    requer: list[type] = [MetricasBase, MetricasDeTabela]
+    requer: list[type] = [MetricasBaseColuna, MetricasBaseTabela]
 
     def __call__(self, entrada: BancoAnalisado, destino: Path) -> Resultado[None]: ...
 ```
@@ -711,7 +711,7 @@ de rodapé com `MetadadosDeAmostra` (estratégia, N amostrado, M total).
 
 ```python
 class GeradorDbt:
-    requer: list[type] = [MetricasBase]
+    requer: list[type] = [MetricasBaseColuna]
 
     def __call__(self, entrada: BancoAnalisado, destino: Path) -> Resultado[None]: ...
 ```
@@ -726,7 +726,7 @@ identificadores gerados no artefato (nomes de coluna/tabela em `schema.yml`,
 consumido pelo dbt — não o código Python do `GeradorDbt`, que segue a mesma
 convenção de nomenclatura em português dos demais componentes.
 
-**Testes sugeridos deterministicamente** (lidos de `MetricasBase`):
+**Testes sugeridos deterministicamente** (lidos de `MetricasBaseColuna`):
 
 | Condição | Teste |
 |---|---|
@@ -744,7 +744,7 @@ convenção de nomenclatura em português dos demais componentes.
 
 ```python
 class GeradorContextoDeIA:
-    requer: list[type] = [MetricasBase]
+    requer: list[type] = [MetricasBaseColuna]
 
     def __call__(self, entrada: BancoAnalisado, destino: Path) -> Resultado[None]: ...
 ```

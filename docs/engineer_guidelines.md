@@ -134,7 +134,7 @@ Todo Analisador e Gerador declara `produz` e/ou `requer`:
 ```python
 class MeuAnalisador:
     produz: list[type] = [MinhaMetrica]
-    requer: list[type] = [MetricasBase]  # depende de AnalisadorDeMetricasDeColuna
+    requer: list[type] = [MetricasBaseColuna]  # depende de AnalisadorDeMetricasDeColuna
 ```
 
 A CLI valida essas dependências antes de qualquer execução. **Nunca descobrir
@@ -275,6 +275,6 @@ A função `validar_dependencias(analisadores, geradores)` tem testes para:
 - Combinação válida: `AnalisadorDeMetricasDeColuna` + `GeradorDbt` — passa.
 - Dependência ausente: `AnalisadorDeMetricasDeTabela` sem
   `AnalisadorDeMetricasDeColuna` — `Falha` com mensagem mencionando
-  `MetricasBase`.
+  `MetricasBaseColuna`.
 - Gerador sem Analisador correspondente: `GeradorMarkdown` sem
-  `AnalisadorDeMetricasDeTabela` — `Falha` mencionando `MetricasDeTabela`.
+  `AnalisadorDeMetricasDeTabela` — `Falha` mencionando `MetricasBaseTabela`.
