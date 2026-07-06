@@ -57,11 +57,11 @@
 ### Analysis Context (`domain/model/analysis.py`)
 
 - [ ] `MetricaDeColuna` (BaseModel frozen) — `origem: str` — Value Object base
-- [ ] `MetricasBase(MetricaDeColuna)` — `percentual_nulo`, `percentual_unico`,
+- [ ] `MetricasBaseColuna(MetricaDeColuna)` — `percentual_nulo`, `percentual_unico`,
       `valores_frequentes`, `minimo`, `maximo`, `formato_detectado`;
       `origem = "AnalisadorDeMetricasDeColuna"`
 - [ ] `MetricaDeTabela` (BaseModel frozen) — `origem: str` — Value Object base
-- [ ] `MetricasDeTabela(MetricaDeTabela)` — `completude: float`;
+- [ ] `MetricasBaseTabela(MetricaDeTabela)` — `completude: float`;
       `origem = "AnalisadorDeMetricasDeTabela"`
 - [ ] `ColunaAnalisada` — campos de `ColunaCurada` +
       `metricas: list[MetricaDeColuna]`
@@ -103,7 +103,7 @@
       `cli/validacao.py` — lógica pura, testável sem adapters concretos
 
 - [ ] **Verificação:** testes de validação Pydantic (`percentual_nulo`/
-      `percentual_unico` entre 0–100 em `MetricasBase`; `max_conexoes >=
+      `percentual_unico` entre 0–100 em `MetricasBaseColuna`; `max_conexoes >=
       max_trabalhadores` em `ConfiguracaoDeExtracao`)
 
 ## 3. Adaptador de Extrator concreto
@@ -138,7 +138,7 @@
 ## 5. Analisadores
 
 - [ ] `AnalisadorDeMetricasDeColuna(Analisador)`:
-  - `produz = [MetricasBase]`, `requer = []`
+  - `produz = [MetricasBaseColuna]`, `requer = []`
   - Calcula métricas via Polars: `percentual_nulo`, `percentual_unico`,
     `minimo`, `maximo`, `valores_frequentes`, `formato_detectado` (regex:
     email/cpf/cnpj/phone/cep, threshold 80%)
@@ -146,24 +146,24 @@
   - Seta `tabela.amostra = None` após processar cada tabela (libera memória)
   - `Aviso` se `tamanho_amostra < 100`
 - [ ] `AnalisadorDeMetricasDeTabela(Analisador)`:
-  - `produz = [MetricasDeTabela]`, `requer = [MetricasBase]`
-  - Calcula `completude` a partir de `MetricasBase` já presentes no
+  - `produz = [MetricasBaseTabela]`, `requer = [MetricasBaseColuna]`
+  - Calcula `completude` a partir de `MetricasBaseColuna` já presentes no
     `ContextoDeAnalise.analisado`
-  - `Falha` defensiva se `MetricasBase` ausente em qualquer coluna
+  - `Falha` defensiva se `MetricasBaseColuna` ausente em qualquer coluna
 
 ## 6. Geradores concretos
 
 - [ ] `GeradorMarkdown(Gerador)`:
-  - `requer = [MetricasBase, MetricasDeTabela]`
+  - `requer = [MetricasBaseColuna, MetricasBaseTabela]`
   - Um `.md` por tabela + `index.md`
   - Nota de rodapé com `MetadadosDeAmostra` (estratégia, N amostrado, M total)
 - [ ] `GeradorDbt(Gerador)`:
-  - `requer = [MetricasBase]`
+  - `requer = [MetricasBaseColuna]`
   - `dbt_project.yml` + `sources.yml` + `stg_*.sql` (cast com `TipoDeDado` rico)
     + `schema.yml` com testes sugeridos deterministicamente
   - Única saída cujos identificadores no artefato ficam em inglês (contrato do dbt)
 - [ ] `GeradorContextoDeIA(Gerador)`:
-  - `requer = [MetricasBase]`
+  - `requer = [MetricasBaseColuna]`
   - `ai_context.json` com serialização compacta do `BancoAnalisado`
 
 ## 7. CLI real wizard
