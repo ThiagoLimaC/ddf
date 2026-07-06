@@ -35,3 +35,35 @@ def test_tipo_de_dado_e_imutavel(tipo_varchar: TipoDeDado) -> None:
     """Borda: TipoDeDado é imutável após construção (frozen=True via ConfigDict)."""
     with pytest.raises(ValidationError):
         tipo_varchar.tamanho_maximo = 500
+
+
+def test_integer_com_tamanho_maximo_levanta_validation_error() -> None:
+    """Erro esperado: atributo de outra categoria (tamanho_maximo) em INTEGER."""
+    with pytest.raises(ValidationError, match="INTEGER"):
+        TipoDeDado(categoria=CategoriaDeDado.INTEGER, tamanho_maximo=10)
+
+
+def test_varchar_com_precisao_levanta_validation_error() -> None:
+    """Erro esperado: atributo de NUMERIC (precisao) usado em VARCHAR."""
+    with pytest.raises(ValidationError, match="VARCHAR"):
+        TipoDeDado(categoria=CategoriaDeDado.VARCHAR, precisao=10)
+
+
+def test_numeric_com_tamanho_maximo_levanta_validation_error() -> None:
+    """Erro esperado: atributo de VARCHAR (tamanho_maximo) usado em NUMERIC."""
+    with pytest.raises(ValidationError, match="NUMERIC"):
+        TipoDeDado(categoria=CategoriaDeDado.NUMERIC, tamanho_maximo=10)
+
+
+def test_numeric_apenas_com_precisao_e_aceito() -> None:
+    """Borda: NUMERIC aceita só precisao preenchida, sem escala."""
+    tipo = TipoDeDado(categoria=CategoriaDeDado.NUMERIC, precisao=10)
+
+    assert tipo.precisao == 10
+    assert tipo.escala is None
+
+
+def test_numeric_com_escala_sem_precisao_levanta_validation_error() -> None:
+    """Erro esperado: escala sem precisao é um NUMERIC inconsistente."""
+    with pytest.raises(ValidationError, match="escala"):
+        TipoDeDado(categoria=CategoriaDeDado.NUMERIC, escala=2)
