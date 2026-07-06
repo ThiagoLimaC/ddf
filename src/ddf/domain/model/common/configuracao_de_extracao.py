@@ -1,6 +1,6 @@
 """Configuração de extração compartilhada por todos os Extratores."""
 
-from pydantic import BaseModel, InstanceOf, model_validator
+from pydantic import BaseModel, Field, InstanceOf, model_validator
 
 from ddf.domain.ports.estrategia_de_amostragem import EstrategiaDeAmostragem
 
@@ -9,8 +9,8 @@ class ConfiguracaoDeExtracao(BaseModel):
     """Parâmetros que controlam como a extração paralela é executada."""
 
     estrategia: InstanceOf[EstrategiaDeAmostragem]
-    max_trabalhadores: int = 8
-    max_conexoes: int = 10
+    max_trabalhadores: int = Field(default=8, gt=0)
+    max_conexoes: int = Field(default=10, gt=0)
 
     @model_validator(mode="after")
     def _valida_max_conexoes(self) -> "ConfiguracaoDeExtracao":

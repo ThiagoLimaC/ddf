@@ -41,6 +41,10 @@ implementando (humano ou assistente) **para** e apresenta uma explicação
 antes de avançar para a próxima etapa. Isso vale mesmo em modos de execução
 automática/contínua — a pausa é deliberada, não um efeito colateral de erro.
 
+A regra vale também para arquivos de teste: cada `test_*.py`/`conftest.py`
+entregue é sua própria etapa, com a mesma pausa e explicação antes de seguir
+para o próximo arquivo — não apenas para código de produção em `src/`.
+
 A explicação cobre, para o elemento entregue:
 
 - **Posição na arquitetura** — a qual Bounded Context/camada pertence, e como

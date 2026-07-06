@@ -76,13 +76,22 @@ não mapeia para nenhuma categoria — nunca levanta exceção por tipo desconhe
 class MetadadosDeAmostra(BaseModel):
     estrategia: str      # "random_limit", "tablesample", "full_scan"
     tamanho_amostra: int # linhas efetivamente amostradas
-    total_linhas: int    # total real da tabela (information_schema)
+    total_linhas: int    # universo considerado pela EstrategiaDeAmostragem
 ```
 
 **Comportamento:** imutável. `tamanho_amostra <= total_linhas` sempre. Viaja
 com `TabelaExtraida` e `TabelaCurada`. Usado pelo Analisador para normalizar
 métricas e pelos Geradores para anotar artefatos com a precisão das
 estimativas.
+
+**Não é duplicata de `TabelaExtraida.total_linhas`:** este `total_linhas`
+descreve o universo que a `EstrategiaDeAmostragem` considerou ao amostrar —
+hoje coincide com o total real da tabela porque `LimiteAleatorio` não filtra
+nada, mas é conceitualmente independente. Uma estratégia futura com filtro
+(`WHERE`) amostraria sobre um universo menor que o total real, e esse campo
+capturaria isso — inclusive como possível critério de seleção na CLI no
+futuro. `TabelaExtraida.total_linhas` continua sendo o total real da tabela,
+exibido aos usuários pelos Geradores.
 
 ### `ConfiguracaoDeExtracao`
 
@@ -135,15 +144,16 @@ class TabelaExtraida(BaseModel):
     nome_schema: str
     colunas: list[ColunaExtraida]
     total_linhas: int                  # total real (information_schema)
-    amostra: pl.DataFrame | None        # None após o Analisador descartar para liberar memória
+    amostra: pl.DataFrame              # sempre preenchida pelo Extrator
     metadados_amostra: MetadadosDeAmostra
 ```
 
-**Comportamento:** `amostra` é sempre preenchida pelo Extrator. O Analisador
-seta `None` após processar cada tabela para liberar memória. Código downstream
-que tenta usar `amostra` após o descarte recebe `None` — tratado como `Aviso`
-defensivo dentro do Analisador. Produzida pelo Extrator, consumida pela
-Sobrescrita.
+**Comportamento:** `amostra` é sempre preenchida pelo Extrator e obrigatória —
+`TabelaExtraida` nunca chega ao Analisador (que só opera sobre `TabelaCurada`
+via `ContextoDeAnalise.curado`), então não há estado intermediário em que ela
+possa estar ausente aqui. Produzida pelo Extrator, consumida pela Sobrescrita.
+O campo opcional (`pl.DataFrame | None`) e o descarte por liberação de memória
+vivem em `TabelaCurada`, não em `TabelaExtraida` (ver seção Curation Context).
 
 ---
 
