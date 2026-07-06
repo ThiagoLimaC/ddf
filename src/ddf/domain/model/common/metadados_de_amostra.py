@@ -1,6 +1,6 @@
 """Metadados sobre a amostragem realizada em uma tabela."""
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class MetadadosDeAmostra(BaseModel):
@@ -9,5 +9,10 @@ class MetadadosDeAmostra(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     estrategia: str
-    tamanho_amostra: int
-    total_linhas: int
+    tamanho_amostra: int = Field(ge=0)
+    total_linhas: int = Field(
+        ge=0,
+        description=(
+            "Total de linhas do universo considerado pela EstrategiaDeAmostragem"
+        ),
+    )
