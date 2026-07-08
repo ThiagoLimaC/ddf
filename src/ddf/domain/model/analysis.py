@@ -43,6 +43,10 @@ class MetricasBaseTabela(MetricaDeTabela):
     completude: float = Field(ge=0, le=100)
 
 
+TipoDeMetrica = type[MetricaDeColuna] | type[MetricaDeTabela]
+"""Tipo de métrica declarado em `produz`/`requer` de Analisador e Gerador."""
+
+
 class ColunaAnalisada(BaseModel):
     """Coluna curada acrescida das métricas calculadas pelos Analisadores."""
 
