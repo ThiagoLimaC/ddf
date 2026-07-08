@@ -13,6 +13,12 @@ def registrar_fonte(
     """Registra uma nova fonte de dados no wizard.
 
     Levanta ValueError se `nome` já estiver registrado em `registro`.
+
+    Args:
+        nome: Identificador da fonte exibido ao usuário no wizard.
+        classe_extrator: Classe de Extrator associada à fonte.
+        registro: Dicionário onde a fonte é registrada. Usa
+            FONTES_REGISTRADAS por padrão.
     """
     if nome in registro:
         raise ValueError(f"Fonte '{nome}' já está registrada.")

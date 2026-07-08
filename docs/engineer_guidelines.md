@@ -182,10 +182,36 @@ acima usa `arbitrary_types_allowed=True`.
 
 ## Docstrings: resumo de uma linha, Google style
 
+Funções e métodos sem parâmetros (além de `self`) usam só o resumo de uma
+linha:
+
 ```python
 def is_failure(self) -> bool:
     """Verifica se a operação falhou."""
 ```
+
+Funções e métodos com parâmetros documentam cada um em `Args:`. `Returns:`
+só aparece quando o retorno não é `None` — retorno `None` é comunicado pela
+própria assinatura (`-> None`), repetir na docstring é redundante:
+
+```python
+def extrair_tabela(self, schema: str, tabela: str) -> Resultado[TabelaExtraida]:
+    """Extrai estrutura, amostra e metadados de uma tabela específica.
+
+    Args:
+        schema: Nome do schema onde a tabela está.
+        tabela: Nome da tabela a ser extraída.
+
+    Returns:
+        Sucesso com a TabelaExtraida, ou Falha com a descrição do erro.
+    """
+```
+
+Essa regra vale para todos os Adapters concretos (Extratores, Analisadores,
+Geradores, Orquestradores) que implementam os `Protocol`s de
+`domain/ports/` — os `Protocol`s em si podem manter só o resumo de uma linha
+na assinatura abstrata, e a documentação completa de `Args`/`Returns` vai na
+implementação concreta.
 
 ---
 
