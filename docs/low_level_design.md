@@ -383,9 +383,17 @@ def compor(*estagios: Estagio) -> Estagio:
 
 ## Ports (`src/ddf/domain/ports/`)
 
+Todos os Ports abaixo (além de `EstrategiaDeAmostragem`, já existente) são
+`@runtime_checkable`, permitindo `isinstance(fake, Port)` em testes.
+
+`TipoDeMetrica = type[MetricaDeColuna | MetricaDeTabela]` — alias definido em
+`domain/model/analysis.py` (junto dos tipos que referencia), usado em
+`produz`/`requer` dos Ports `Analisador` e `Gerador`.
+
 ### `Extrator`
 
 ```python
+@runtime_checkable
 class Extrator(Protocol):
     def listar_tabelas(
         self,
@@ -413,9 +421,10 @@ class Extrator(Protocol):
 ### `Analisador`
 
 ```python
+@runtime_checkable
 class Analisador(Protocol):
-    produz: list[type[MetricaDeColuna | MetricaDeTabela]]
-    requer: list[type[MetricaDeColuna | MetricaDeTabela]]
+    produz: list[TipoDeMetrica]
+    requer: list[TipoDeMetrica]
 
     def __call__(
         self,
@@ -438,8 +447,9 @@ class Analisador(Protocol):
 ### `Gerador`
 
 ```python
+@runtime_checkable
 class Gerador(Protocol):
-    requer: list[type[MetricaDeColuna | MetricaDeTabela]]
+    requer: list[TipoDeMetrica]
 
     def __call__(
         self,
@@ -460,6 +470,7 @@ class Gerador(Protocol):
 ### `OrquestradorDeTabelas`
 
 ```python
+@runtime_checkable
 class OrquestradorDeTabelas(Protocol):
     def extrair(
         self,
@@ -776,8 +787,10 @@ def executar(config: Path | None) -> None:
 6. Gerar skeletons de sobrescrita — exibe caminhos gerados.
 7. **Pausa:** `questionary.confirm("Preencheu as sobrescritas? Pressione Enter para continuar.")`.
 8. Aplicar sobrescritas — exibe avisos (colunas adicionadas/removidas).
-9. **Validar dependências** Analisadores + Geradores antes de rodar qualquer um.
-10. Analisar via `compor(*analisadores)` sobre `ContextoDeAnalise` — spinner + avisos.
+9. **Validar dependências** Analisadores + Geradores antes de rodar qualquer um
+    — `validar_dependencias` devolve os Analisadores já na ordem de execução.
+10. Analisar via `compor(*analisadores_ordenados)` sobre `ContextoDeAnalise` —
+    spinner + avisos.
 11. Escolher Geradores (`questionary.checkbox`).
 12. Escolher destino (`questionary.path`).
 13. Confirmar — resumo do que será gerado.
@@ -794,18 +807,26 @@ bloco formatado — nunca silenciosamente.
 def validar_dependencias(
     analisadores: list[Analisador],
     geradores: list[Gerador],
-) -> Resultado[None]:
-    """Valida que todos os requer de Analisadores e Geradores estão satisfeitos."""
+) -> Resultado[list[Analisador]]:
+    """Valida produz/requer e devolve os Analisadores em ordem de execução."""
 ```
 
 **Comportamento:**
-1. Coleta `produz` de todos os Analisadores selecionados.
+1. Ordena os Analisadores recebidos por dependência topológica de
+   `produz`/`requer` — a ordem de seleção do usuário na CLI não determina a
+   ordem de execução, só o conjunto selecionado.
 2. Para cada Analisador: verifica que seus `requer` estão no conjunto `produz`
-   dos Analisadores que vêm antes dele na ordem de execução.
+   dos Analisadores que vêm antes dele na ordem topológica calculada.
 3. Para cada Gerador: verifica que seus `requer` estão no conjunto `produz`
    total dos Analisadores.
 4. `Falha` com mensagem listando cada dependência não satisfeita e qual
    Analisador produziria ela.
+5. `Falha` com mensagem clara se houver ciclo entre `produz`/`requer` dos
+   Analisadores selecionados (ex.: A requer o que só B produz, e B requer o
+   que só A produz).
+6. Em sucesso, `Sucesso(valor=<analisadores ordenados>)` — o wizard usa esse
+   valor diretamente em `compor(*analisadores_ordenados)`, sem recalcular a
+   ordem.
 
 ### Registro de fontes (`cli/fontes.py`)
 
@@ -814,9 +835,16 @@ FONTES_REGISTRADAS: dict[str, type[Extrator]] = {
     "PostgreSQL": ExtratorPostgres,
 }
 
-def registrar_fonte(nome: str, classe_extrator: type[Extrator]) -> None:
+def registrar_fonte(
+    nome: str,
+    classe_extrator: type[Extrator],
+    registro: dict[str, type[Extrator]] = FONTES_REGISTRADAS,
+) -> None:
     """Registra uma nova fonte de dados no wizard."""
 ```
 
 **Comportamento:** ponto de extensão para novas fontes sem editar o wizard.
-Testes de CLI injetam `Extrator` fake via `FONTES_REGISTRADAS`.
+`registro` tem `FONTES_REGISTRADAS` como default (uso normal do wizard), mas
+aceita um dict isolado — testes de `registrar_fonte` injetam um registro
+próprio em vez de mutar o dict global entre execuções. `ValueError` se `nome`
+já existir em `registro` — nunca sobrescreve silenciosamente.
