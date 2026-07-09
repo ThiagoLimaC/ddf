@@ -90,7 +90,8 @@
 - [ ] `OrquestradorDeTabelas` (Protocol) — `extrair(schemas, extrator) ->
       Resultado[list[TabelaExtraida]]` + `aplicar_sobrescritas(tabelas, sobrescrita)
       -> Resultado[BancoCurado]`
-- [ ] `EstrategiaDeAmostragem` (Protocol) — `nome: str`, `consulta(schema, tabela) -> str`
+- [ ] `EstrategiaDeAmostragem` (Protocol) — `nome: str`, `percentual: float`
+      (política pura, sem SQL — cada Extrator traduz pro próprio dialeto)
 
 ### Contrato da CLI (`infrastructure/adapters/cli/`)
 
@@ -108,25 +109,32 @@
 
 ## 3. Adaptador de Extrator concreto
 
-- [ ] `domain/model/common/tipo_de_dado.py` — reabertura de escopo da #5:
+- [x] `domain/model/common/tipo_de_dado.py` — reabertura de escopo da #5:
   novas categorias `FLOAT`, `CHAR`, `UUID`, `TIME`; novos atributos
   `tamanho_fixo` (CHAR) e `com_timezone` (TIMESTAMP e TIME) em `TipoDeDado`;
   `_ATRIBUTOS_PERMITIDOS` atualizado; testes novos em `test_tipo_de_dado.py`
-- [ ] `LimiteAleatorio(EstrategiaDeAmostragem)` — `SELECT * FROM {schema}.{tabela} LIMIT N`
+- [x] `domain/ports/estrategia_de_amostragem.py` — reabertura de escopo da #8:
+  `consulta()` removido do Port; vira política pura (`nome`, `percentual`),
+  sem gerar SQL — cada Extrator traduz pro próprio dialeto
+- [x] `PercentualDeLinhas(EstrategiaDeAmostragem)` — só guarda `percentual`
+  (0, 100]; substitui `LimiteAleatorio` (descartada: LIMIT absoluto não
+  escala entre tabelas de tamanhos muito diferentes)
 - [ ] `ExtratorPostgres(Extrator)`:
   - Construção com `ThreadedConnectionPool` (sem revalidar `max_conexoes >=
     max_trabalhadores` — já garantido por `ConfiguracaoDeExtracao`)
   - `listar_tabelas` via `information_schema.tables`
   - `extrair_tabela` — lê estrutura (colunas + PK via `table_constraints`/
     `key_column_usage` + FK via `constraint_column_usage`) + `total_linhas`
-    via `pg_catalog.pg_class.reltuples` (estimativa) + amostragem via
-    `EstrategiaDeAmostragem` + carrega `pl.DataFrame` + constrói `TabelaExtraida`
+    via `pg_catalog.pg_class.reltuples` (estimativa) + amostra via
+    `TABLESAMPLE BERNOULLI(configuracao.estrategia.percentual)` (sem viés
+    posicional, ao contrário de LIMIT sem ORDER BY) + carrega `pl.DataFrame`
+    + `tamanho_amostra = len(dataframe)` + constrói `TabelaExtraida`
   - Mapeamento completo tipos Postgres → `TipoDeDado` (ver tabela em
     `docs/low_level_design.md`)
-- [ ] `conftest.py` de `tests/unit/infrastructure/adapters/extractors/`
-  - Unit: `LimiteAleatorio` (feliz/borda), função de mapeamento de tipos
-    (feliz por categoria, borda tipo desconhecido → `UNKNOWN`), construção de
-    `ExtratorPostgres` (pool mockado)
+- [x] `conftest.py` de `tests/unit/infrastructure/adapters/extractors/`
+  - Unit: `PercentualDeLinhas` (feliz/erro/borda) já implementado; função de
+    mapeamento de tipos (feliz por categoria, borda tipo desconhecido →
+    `UNKNOWN`) e construção de `ExtratorPostgres` (pool mockado) pendentes
 - [ ] Teste de integração em `tests/integration/extractors/` via
       `testcontainers` (Postgres descartável por execução): `listar_tabelas`
       (feliz/borda) e `extrair_tabela` (feliz completo, erro schema/tabela

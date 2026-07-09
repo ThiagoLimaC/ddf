@@ -53,11 +53,58 @@
 > externa já no ar. Alternativa descartada: `docker-compose` + fixture manual
 > (exigiria orquestração externa ao `pytest`).
 
+> **`LimiteAleatorio` extinta, substituída por `PercentualDeLinhas` — reabre
+> escopo da #8.** Ao revisar como a CLI vai coletar `--sample-size` de um
+> usuário com dezenas de tabelas de tamanhos muito diferentes, ficou claro que
+> um LIMIT absoluto fixo por execução não escala: 500 linhas é quase a tabela
+> inteira numa tabela de 600 linhas e insignificante numa de 50 milhões, e não
+> há como o usuário calibrar isso por tabela numa CLI.
+>
+> Essa discussão passou por duas rodadas:
+>
+> 1. Primeira tentativa: `PercentualDeLinhas` calculando `LIMIT` em **Python**
+>    (`round(total_linhas * percentual / 100)`), mantendo `consulta()` no
+>    Port — decisão tomada para evitar `TABLESAMPLE` (sintaxe do Postgres) e
+>    preservar `EstrategiaDeAmostragem` agnóstica de banco.
+> 2. Ao revisar essa primeira versão, identificamos um problema mais sério:
+>    `LIMIT` sem `ORDER BY` retorna as linhas na ordem física/de inserção da
+>    tabela — **enviesado**, não uma amostra estatística de verdade (as
+>    "primeiras N linhas" tendem a ser as mais antigas, ou seguir qualquer
+>    padrão de clustering físico). Isso importa muito: a amostra alimenta
+>    diretamente os Analisadores (`percentual_nulo`, `percentual_unico`), e um
+>    viés sistemático na amostra vira um viés sistemático nas métricas
+>    reportadas ao usuário.
+>
+> As alternativas sem viés (`TABLESAMPLE BERNOULLI`, sorteio linha a linha; ou
+> `ORDER BY random() LIMIT N`, mais caro por exigir sort completo) exigem SQL
+> específico de qualquer forma — não tem como fugir disso, amostragem sem
+> viés sempre depende do dialeto da fonte. Isso expôs que a divisão de
+> responsabilidade estava errada desde o início: `EstrategiaDeAmostragem` não
+> devia gerar SQL nenhum. **Decisão final:** `EstrategiaDeAmostragem` vira uma
+> política pura (`nome`, `percentual`), sem método `consulta()` — quem traduz
+> a política numa query concreta é o `Extrator` (que já é, por definição,
+> acoplado ao dialeto da própria fonte; `ExtratorPostgres` já lê
+> `information_schema`, já é 100% Postgres). Isso resolve o receio de
+> acoplamento sem custo real: nenhum `Extrator` futuro precisa de uma classe
+> de `EstrategiaDeAmostragem` própria, cada um só interpreta o mesmo
+> `percentual` do jeito que fizer sentido no próprio banco (`ExtratorPostgres`
+> usa `TABLESAMPLE BERNOULLI`). `total_linhas` sai do Port inteiramente —
+> `BERNOULLI(p)` usa percentual diretamente, não precisa saber a contagem de
+> linhas antecipadamente. `MetadadosDeAmostra.tamanho_amostra` deixa de ser
+> calculado e passa a ser observado (`len(dataframe)` após carregar a
+> amostra), já que `TABLESAMPLE` decide dinamicamente quantas linhas sorteia.
+> `tamanho_amostra=0` (percentual baixo numa tabela pequena) continua aceito
+> como estado real, mesmo critério já usado em `MetadadosDeAmostra` desde a
+> #6.
+
 ## Escopo desta issue
 
-- [ ] `domain/model/common/tipo_de_dado.py` — `CategoriaDeDado.FLOAT/CHAR/UUID/TIME`,
+- [x] `domain/model/common/tipo_de_dado.py` — `CategoriaDeDado.FLOAT/CHAR/UUID/TIME`,
       `TipoDeDado.tamanho_fixo`/`com_timezone`, `_ATRIBUTOS_PERMITIDOS` atualizado
-- [ ] `infrastructure/adapters/extractors/limite_aleatorio.py` — `LimiteAleatorio(EstrategiaDeAmostragem)`
+- [x] `domain/ports/estrategia_de_amostragem.py` — `consulta()` removido;
+      Port vira `nome` + `percentual`, sem gerar SQL
+- [x] `infrastructure/adapters/extractors/percentual_de_linhas.py` —
+      `PercentualDeLinhas(EstrategiaDeAmostragem)`, só guarda `percentual`
 - [ ] `infrastructure/adapters/extractors/extrator_postgres.py` — `ExtratorPostgres(Extrator)`:
   - Construção com `ThreadedConnectionPool(minconn=1, maxconn=configuracao.max_conexoes, dsn=dsn)`
   - `listar_tabelas` via `information_schema.tables` (`table_type = 'BASE TABLE'`)
@@ -65,8 +112,9 @@
     - Colunas via `information_schema.columns`
     - PK via `table_constraints` + `key_column_usage`
     - FK via `table_constraints` + `key_column_usage` + `constraint_column_usage`
-    - `total_linhas` via `pg_catalog.pg_class.reltuples`
-    - Amostra via `configuracao.estrategia.consulta(schema, tabela)` → `pl.DataFrame`
+    - `total_linhas` via `pg_catalog.pg_class.reltuples` (independente da amostragem)
+    - Amostra via `TABLESAMPLE BERNOULLI(configuracao.estrategia.percentual)` → `pl.DataFrame`
+    - `tamanho_amostra = len(dataframe)` (observado, não calculado)
   - Mapeamento de tipos completo (tabela em `docs/low_level_design.md`)
   - `Falha("Schema 'x' ou tabela 'y' não encontrada.")` / `Falha("Não foi possível conectar: <detalhe>")`
 - [ ] `pyproject.toml` — `testcontainers[postgres]` no grupo dev
@@ -75,8 +123,9 @@
 
 ### `tests/unit/infrastructure/adapters/extractors/` (com `conftest.py`)
 
-- [ ] `LimiteAleatorio`: caminho feliz (SQL formatada corretamente com schema/tabela/tamanho),
-      borda (`tamanho=1`)
+- [x] `PercentualDeLinhas`: caminho feliz (conformidade ao Port, `percentual`
+      retorna o valor configurado, `nome`), erro esperado (`percentual` fora
+      de `(0, 100]`), borda (`percentual=100`)
 - [ ] Função de mapeamento de tipo Postgres → `TipoDeDado`: caminho feliz por
       categoria (varchar, char, text, numeric, integer incl. smallint, bigint,
       float incl. real/double precision, boolean, timestamp com/sem tz, time

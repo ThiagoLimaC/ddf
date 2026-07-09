@@ -92,7 +92,7 @@ que a v1 original desta issue (`#5`/`#6`) não previa.
 
 ```python
 class MetadadosDeAmostra(BaseModel):
-    estrategia: str      # "random_limit", "tablesample", "full_scan"
+    estrategia: str      # "percentual_de_linhas", "full_scan"
     tamanho_amostra: int # linhas efetivamente amostradas
     total_linhas: int    # universo considerado pela EstrategiaDeAmostragem
 ```
@@ -104,10 +104,10 @@ estimativas.
 
 **Não é duplicata de `TabelaExtraida.total_linhas`:** este `total_linhas`
 descreve o universo que a `EstrategiaDeAmostragem` considerou ao amostrar —
-hoje coincide com o total real da tabela porque `LimiteAleatorio` não filtra
-nada, mas é conceitualmente independente. Uma estratégia futura com filtro
-(`WHERE`) amostraria sobre um universo menor que o total real, e esse campo
-capturaria isso — inclusive como possível critério de seleção na CLI no
+hoje coincide com o total real da tabela porque `PercentualDeLinhas` não
+filtra nada, mas é conceitualmente independente. Uma estratégia futura com
+filtro (`WHERE`) amostraria sobre um universo menor que o total real, e esse
+campo capturaria isso — inclusive como possível critério de seleção na CLI no
 futuro. `TabelaExtraida.total_linhas` continua sendo o total real da tabela,
 exibido aos usuários pelos Geradores.
 
@@ -120,18 +120,18 @@ class ConfiguracaoDeExtracao(BaseModel):
     max_conexoes: int = 10
 ```
 
-**Comportamento:** lida de `ddf.toml` ou flags CLI (`--sample-size`,
+**Comportamento:** lida de `ddf.toml` ou flags CLI (`--sample-percent`,
 `--max-workers`). Valida `max_conexoes >=
 max_trabalhadores` — `ValueError` com mensagem clara se violado.
 
 **Sem campo de tamanho de amostra:** dimensionar a amostra é responsabilidade
-de cada `EstrategiaDeAmostragem` concreta (ex.: `LimiteAleatorio.tamanho`), não
-de `ConfiguracaoDeExtracao` — o conceito de "tamanho" não generaliza para
-estratégias futuras não baseadas em contagem de linhas (`TableSample` é
-percentual, `FullScan` não tem tamanho). `ConfiguracaoDeExtracao` orquestra
-concorrência; a estratégia decide como amostrar. `MetadadosDeAmostra.tamanho_amostra`
-permanece como resultado observado pelo `Extrator` após a amostragem, não como
-parâmetro de configuração.
+de cada `EstrategiaDeAmostragem` concreta (ex.: `PercentualDeLinhas.percentual`),
+não de `ConfiguracaoDeExtracao` — o conceito de "tamanho" não generaliza para
+estratégias futuras (`FullScan` não tem tamanho nem percentual).
+`ConfiguracaoDeExtracao` orquestra concorrência; a estratégia decide como
+amostrar. `MetadadosDeAmostra.tamanho_amostra` permanece como resultado
+observado pelo `Extrator` após a amostragem, não como parâmetro de
+configuração.
 
 ---
 
@@ -428,7 +428,11 @@ class Extrator(Protocol):
 
 **Comportamento esperado de `extrair_tabela`:**
 - Lê estrutura de `information_schema` (colunas, tipos, PKs, FKs).
-- Executa `configuracao.estrategia.consulta(schema, tabela)` para amostrar dados.
+- Lê `total_linhas` da tabela (fonte concreta decide como).
+- Monta e executa a consulta de amostragem **no dialeto da própria fonte**,
+  usando `configuracao.estrategia.percentual` como parâmetro — a
+  `EstrategiaDeAmostragem` só descreve a política (quanto amostrar), nunca
+  gera SQL (ver `EstrategiaDeAmostragem` abaixo).
 - Constrói `TabelaExtraida` com `ColunaExtraida`s, `pl.DataFrame` e
   `MetadadosDeAmostra`.
 - `Falha("Schema 'x' ou tabela 'y' não encontrada.")` se inexistente.
@@ -529,9 +533,19 @@ class EstrategiaDeAmostragem(Protocol):
     def nome(self) -> str: ...
     """Identificador usado em MetadadosDeAmostra.estrategia."""
 
-    def consulta(self, schema: str, tabela: str) -> str: ...
-    """Retorna a SQL de amostragem para a tabela especificada."""
+    @property
+    def percentual(self) -> float: ...
+    """Fração da tabela a amostrar, em porcentagem (0, 100]."""
 ```
+
+**Comportamento:** descreve só a *política* de amostragem (quanto amostrar),
+nunca gera SQL. Traduzir isso numa consulta concreta é responsabilidade de
+cada `Extrator` — que já é, por definição, acoplado ao dialeto da própria
+fonte de dados. Isso evita que `EstrategiaDeAmostragem` (um Port pensado para
+ser agnóstico de fonte, com fontes futuras como MariaDB/API/arquivo) precise
+de uma implementação nova por banco só para gerar SQL diferente — o mesmo
+`PercentualDeLinhas(percentual=5.0)` serve para qualquer `Extrator`, cada um
+decidindo como aplicá-lo no próprio dialeto.
 
 ---
 
@@ -560,10 +574,19 @@ construção (Pydantic), então uma segunda checagem aqui nunca dispararia.
 3. Lê `total_linhas` via `pg_catalog.pg_class.reltuples` — **estimativa**, não
    `COUNT(*)` exato. `information_schema.tables` não expõe contagem de linhas
    no Postgres (isso é comportamento do MySQL); `reltuples` é O(1) mas reflete
-   a última `ANALYZE`/autovacuum, podendo estar desatualizado.
-4. Executa `configuracao.estrategia.consulta(schema, tabela)` e carrega em
-   `pl.DataFrame`.
-5. Retorna `TabelaExtraida`.
+   a última `ANALYZE`/autovacuum, podendo estar desatualizado. Independente da
+   amostragem (não é mais pré-requisito do passo seguinte) — usado só para
+   preencher `TabelaExtraida.total_linhas` e `MetadadosDeAmostra.total_linhas`.
+4. Monta e executa `SELECT * FROM {schema}.{tabela} TABLESAMPLE
+   BERNOULLI(configuracao.estrategia.percentual)` e carrega em `pl.DataFrame`.
+   `BERNOULLI` sorteia cada linha independentemente com probabilidade igual —
+   amostra estatisticamente não enviesada, ao contrário de `LIMIT` sem
+   `ORDER BY` (que reflete a ordem física/de inserção da tabela) e mais barata
+   que `ORDER BY random() LIMIT N` (não exige sort completo da tabela).
+5. `MetadadosDeAmostra.tamanho_amostra` é o número de linhas efetivamente
+   retornadas pela amostra (`len(dataframe)`), não um valor calculado —
+   `TABLESAMPLE` decide dinamicamente quantas linhas sorteia.
+6. Retorna `TabelaExtraida`.
 
 **Mapeamento de tipos:**
 
@@ -594,19 +617,47 @@ SQL incorreto no `GeradorDbt`. `CHAR` foi separada de `VARCHAR` pelo mesmo
 motivo: comprimento fixo (com padding) não é o mesmo conceito que comprimento
 máximo. `UUID` e `TIME` não tinham categoria equivalente antes desta issue.
 
-### `LimiteAleatorio`
+### `PercentualDeLinhas`
 
 ```python
-class LimiteAleatorio:
-    def __init__(self, tamanho: int) -> None: ...
+class PercentualDeLinhas:
+    def __init__(self, percentual: float) -> None: ...
+    # ValueError se percentual não estiver em (0, 100]
 
     @property
     def nome(self) -> str:
-        """Retorna 'random_limit'."""
+        """Retorna 'percentual_de_linhas'."""
 
-    def consulta(self, schema: str, tabela: str) -> str:
-        """Retorna: SELECT * FROM {schema}.{tabela} LIMIT {tamanho}"""
+    @property
+    def percentual(self) -> float:
+        """Retorna a fração da tabela a amostrar, em porcentagem (0, 100]."""
 ```
+
+**Comportamento:** puramente uma política — não sabe nada de SQL nem do
+banco de origem. Só guarda o percentual configurado; é o `ExtratorPostgres`
+(ou qualquer `Extrator` futuro) quem decide como aplicá-lo.
+
+**Por que percentual em vez de um LIMIT absoluto (`LimiteAleatorio`,
+descartada nesta issue):** um valor absoluto fixo por execução (`--sample-size
+500`) não escala entre tabelas de tamanhos muito diferentes — 500 linhas é
+quase a tabela inteira numa tabela de 600 linhas, e uma fração irrisória numa
+de 50 milhões. Calibrar isso por tabela é inviável numa CLI com dezenas de
+tabelas.
+
+**Por que a Estratégia não gera SQL (reabertura de decisão dentro da própria
+#9):** a primeira versão de `PercentualDeLinhas` calculava um `LIMIT N` em
+Python a partir de `total_linhas` para evitar `TABLESAMPLE` (sintaxe do
+Postgres). Mas `LIMIT` sem `ORDER BY` retorna as linhas na ordem física da
+tabela — enviesado, não uma amostra estatística de verdade. A correção óbvia
+seria `TABLESAMPLE BERNOULLI` (sem viés) ou `ORDER BY random() LIMIT N` (sem
+viés, mas cara — sort completo da tabela). Só que ambas exigem SQL específico
+por Extrator de qualquer forma, então a decisão final foi: `EstrategiaDeAmostragem`
+para de gerar SQL — vira só a política (`percentual`), e cada `Extrator`
+(já necessariamente acoplado ao dialeto da própria fonte) decide a melhor
+forma de amostrar sem viés no banco dele. `ExtratorPostgres` usa `TABLESAMPLE
+BERNOULLI`. `tamanho_amostra=0` (percentual muito baixo numa tabela pequena)
+é aceito como estado real, mesmo critério já usado em `MetadadosDeAmostra`
+desde a #6.
 
 ---
 

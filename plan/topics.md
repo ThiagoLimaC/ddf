@@ -19,10 +19,13 @@
     `Gerador` (com `requer`), `OrquestradorDeTabelas`, `EstrategiaDeAmostragem`
 
 - **Adaptador de Extrator concreto**
-  - `LimiteAleatorio` (EstrategiaDeAmostragem padrão)
+  - `PercentualDeLinhas` (EstrategiaDeAmostragem padrão — política pura de
+    percentual, sem SQL; escala entre tabelas de tamanhos diferentes;
+    substitui a `LimiteAleatorio` original de LIMIT absoluto)
   - `ExtratorPostgres` — `information_schema`, `ThreadedConnectionPool`,
     mapeamento de tipos (incluindo `FLOAT`/`CHAR`/`UUID`/`TIME` novos em
-    `TipoDeDado`), amostragem via `EstrategiaDeAmostragem`, `total_linhas`
+    `TipoDeDado`), amostragem via `TABLESAMPLE BERNOULLI` (sem viés
+    posicional), `total_linhas`
     via `pg_class.reltuples`
   - `conftest.py` de `tests/unit/infrastructure/adapters/extractors/`
   - Teste de integração via `testcontainers` em `tests/integration/extractors/`
