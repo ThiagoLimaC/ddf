@@ -108,16 +108,31 @@
 
 ## 3. Adaptador de Extrator concreto
 
+- [ ] `domain/model/common/tipo_de_dado.py` — reabertura de escopo da #5:
+  novas categorias `FLOAT`, `CHAR`, `UUID`, `TIME`; novos atributos
+  `tamanho_fixo` (CHAR) e `com_timezone` (TIMESTAMP e TIME) em `TipoDeDado`;
+  `_ATRIBUTOS_PERMITIDOS` atualizado; testes novos em `test_tipo_de_dado.py`
 - [ ] `LimiteAleatorio(EstrategiaDeAmostragem)` — `SELECT * FROM {schema}.{tabela} LIMIT N`
 - [ ] `ExtratorPostgres(Extrator)`:
-  - Construção com `ThreadedConnectionPool`
+  - Construção com `ThreadedConnectionPool` (sem revalidar `max_conexoes >=
+    max_trabalhadores` — já garantido por `ConfiguracaoDeExtracao`)
   - `listar_tabelas` via `information_schema.tables`
-  - `extrair_tabela` — lê estrutura + amostragem via `EstrategiaDeAmostragem` +
-    carrega `pl.DataFrame` + constrói `TabelaExtraida`
-  - Mapeamento completo tipos Postgres → `TipoDeDado`
+  - `extrair_tabela` — lê estrutura (colunas + PK via `table_constraints`/
+    `key_column_usage` + FK via `constraint_column_usage`) + `total_linhas`
+    via `pg_catalog.pg_class.reltuples` (estimativa) + amostragem via
+    `EstrategiaDeAmostragem` + carrega `pl.DataFrame` + constrói `TabelaExtraida`
+  - Mapeamento completo tipos Postgres → `TipoDeDado` (ver tabela em
+    `docs/low_level_design.md`)
 - [ ] `conftest.py` de `tests/unit/infrastructure/adapters/extractors/`
-- [ ] Teste de integração em `tests/integration/extractors/` contra Postgres
-      real ou containerizado
+  - Unit: `LimiteAleatorio` (feliz/borda), função de mapeamento de tipos
+    (feliz por categoria, borda tipo desconhecido → `UNKNOWN`), construção de
+    `ExtratorPostgres` (pool mockado)
+- [ ] Teste de integração em `tests/integration/extractors/` via
+      `testcontainers` (Postgres descartável por execução): `listar_tabelas`
+      (feliz/borda) e `extrair_tabela` (feliz completo, erro schema/tabela
+      inexistente, erro conexão recusada)
+- [ ] `testcontainers` (extra `postgres`) adicionado ao grupo dev do
+      `pyproject.toml`
 
 ## 4. Sobrescrita (ACL Extraction → Curation) e OrquestradorParalelo
 

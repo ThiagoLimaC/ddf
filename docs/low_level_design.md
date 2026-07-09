@@ -50,25 +50,43 @@ ou por Estagios anteriores em `compor()`) não sejam descartados silenciosamente
 ```python
 class CategoriaDeDado(str, Enum):
     VARCHAR = "VARCHAR"
+    CHAR = "CHAR"
     TEXT = "TEXT"
     NUMERIC = "NUMERIC"
+    FLOAT = "FLOAT"
     INTEGER = "INTEGER"
     BIGINT = "BIGINT"
     BOOLEAN = "BOOLEAN"
     TIMESTAMP = "TIMESTAMP"
+    TIME = "TIME"
     DATE = "DATE"
     JSON = "JSON"
+    UUID = "UUID"
     UNKNOWN = "UNKNOWN"
 
 class TipoDeDado(BaseModel):
     categoria: CategoriaDeDado
-    precisao: int | None = None       # dígitos totais (NUMERIC)
-    escala: int | None = None         # casas decimais (NUMERIC)
-    tamanho_maximo: int | None = None # tamanho máximo (VARCHAR)
+    precisao: int | None = None        # dígitos totais (NUMERIC)
+    escala: int | None = None          # casas decimais (NUMERIC)
+    tamanho_maximo: int | None = None  # tamanho máximo (VARCHAR)
+    tamanho_fixo: int | None = None    # tamanho exato (CHAR)
+    com_timezone: bool | None = None   # TIMESTAMP e TIME
 ```
 
 **Comportamento:** imutável após construção. `UNKNOWN` quando o tipo da fonte
 não mapeia para nenhuma categoria — nunca levanta exceção por tipo desconhecido.
+
+**Adicionado na issue #9:** `FLOAT`, `CHAR`, `UUID`, `TIME` e os atributos
+`tamanho_fixo`/`com_timezone` não existiam na issue #5 original — surgiram da
+necessidade de mapear `ExtratorPostgres` sem perder informação relevante para
+o cast SQL do `GeradorDbt`. `FLOAT` (float binário de largura fixa: `real`,
+`double precision`) foi deliberadamente separado de `NUMERIC` (decimal exato
+com `precisao`/`escala` escolhidos pelo usuário) — misturar os dois sob a
+mesma categoria produziria casts incorretos. `CHAR` foi separado de `VARCHAR`
+pelo mesmo motivo: comprimento fixo (sempre preenchido com padding) não é o
+mesmo conceito que comprimento máximo. `TIME` e `TIMESTAMP` compartilham
+`com_timezone` para capturar a distinção `with/without time zone` do Postgres,
+que a v1 original desta issue (`#5`/`#6`) não previa.
 
 ### `MetadadosDeAmostra`
 
@@ -527,34 +545,54 @@ class ExtratorPostgres:
 ```
 
 **Construção:** cria `ThreadedConnectionPool(minconn=1,
-maxconn=configuracao.max_conexoes, dsn=dsn)`. Valida `max_conexoes >=
-max_trabalhadores`.
+maxconn=configuracao.max_conexoes, dsn=dsn)`. Não revalida `max_conexoes >=
+max_trabalhadores` — `ConfiguracaoDeExtracao` já garante essa invariante por
+construção (Pydantic), então uma segunda checagem aqui nunca dispararia.
 
 **`listar_tabelas`:** query em `information_schema.tables` filtrando
 `table_type = 'BASE TABLE'`.
 
 **`extrair_tabela`:**
-1. Lê estrutura de `information_schema.columns` e constraints.
+1. Lê estrutura de `information_schema.columns` e constraints (`table_constraints`
+   + `key_column_usage` para PK; + `constraint_column_usage` para o destino de
+   cada FK).
 2. Mapeia tipos Postgres → `TipoDeDado` (tabela abaixo).
-3. Lê `total_linhas` via `information_schema.tables`.
+3. Lê `total_linhas` via `pg_catalog.pg_class.reltuples` — **estimativa**, não
+   `COUNT(*)` exato. `information_schema.tables` não expõe contagem de linhas
+   no Postgres (isso é comportamento do MySQL); `reltuples` é O(1) mas reflete
+   a última `ANALYZE`/autovacuum, podendo estar desatualizado.
 4. Executa `configuracao.estrategia.consulta(schema, tabela)` e carrega em
    `pl.DataFrame`.
 5. Retorna `TabelaExtraida`.
 
 **Mapeamento de tipos:**
 
-| Tipo Postgres | `CategoriaDeDado` | Atributos extras |
+| Tipo Postgres (`information_schema.columns.data_type`) | `CategoriaDeDado` | Atributos extras |
 |---|---|---|
-| `varchar(n)`, `character varying(n)` | `VARCHAR` | `tamanho_maximo=n` |
+| `character varying(n)` | `VARCHAR` | `tamanho_maximo=n` |
+| `character(n)` | `CHAR` | `tamanho_fixo=n` |
 | `text` | `TEXT` | — |
 | `numeric(p,s)`, `decimal(p,s)` | `NUMERIC` | `precisao=p`, `escala=s` |
-| `integer`, `int4` | `INTEGER` | — |
-| `bigint`, `int8` | `BIGINT` | — |
+| `smallint`, `integer` | `INTEGER` | — |
+| `bigint` | `BIGINT` | — |
+| `real`, `double precision` | `FLOAT` | — |
 | `boolean` | `BOOLEAN` | — |
-| `timestamp`, `timestamptz` | `TIMESTAMP` | — |
+| `timestamp without time zone` | `TIMESTAMP` | `com_timezone=False` |
+| `timestamp with time zone` | `TIMESTAMP` | `com_timezone=True` |
+| `time without time zone` | `TIME` | `com_timezone=False` |
+| `time with time zone` | `TIME` | `com_timezone=True` |
 | `date` | `DATE` | — |
 | `json`, `jsonb` | `JSON` | — |
+| `uuid` | `UUID` | — |
 | qualquer outro | `UNKNOWN` | — |
+
+**Justificativa das categorias novas (issue #9):** `FLOAT` foi separada de
+`NUMERIC` porque `real`/`double precision` são float binário de largura fixa
+pelo nome do tipo (sem `precisao`/`escala` escolhidos pelo usuário como em
+`numeric(p,s)`) — misturar as duas sob a mesma categoria produziria um cast
+SQL incorreto no `GeradorDbt`. `CHAR` foi separada de `VARCHAR` pelo mesmo
+motivo: comprimento fixo (com padding) não é o mesmo conceito que comprimento
+máximo. `UUID` e `TIME` não tinham categoria equivalente antes desta issue.
 
 ### `LimiteAleatorio`
 

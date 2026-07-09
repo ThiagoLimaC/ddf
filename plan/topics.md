@@ -21,8 +21,11 @@
 - **Adaptador de Extrator concreto**
   - `LimiteAleatorio` (EstrategiaDeAmostragem padrão)
   - `ExtratorPostgres` — `information_schema`, `ThreadedConnectionPool`,
-    mapeamento de tipos, amostragem via `EstrategiaDeAmostragem`
+    mapeamento de tipos (incluindo `FLOAT`/`CHAR`/`UUID`/`TIME` novos em
+    `TipoDeDado`), amostragem via `EstrategiaDeAmostragem`, `total_linhas`
+    via `pg_class.reltuples`
   - `conftest.py` de `tests/unit/infrastructure/adapters/extractors/`
+  - Teste de integração via `testcontainers` em `tests/integration/extractors/`
 
 - **Sobrescrita (ACL Extraction → Curation) e OrquestradorParalelo**
   - `SobrescritaDeTabela` — hash estrutural, skeleton YAML, idempotência,
