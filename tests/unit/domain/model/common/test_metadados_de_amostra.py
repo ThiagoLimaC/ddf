@@ -10,7 +10,7 @@ def test_cria_metadados_com_estrategia_e_tamanhos(
     metadados_de_amostra: MetadadosDeAmostra,
 ) -> None:
     """Caminho feliz: MetadadosDeAmostra guarda estrategia e os dois tamanhos."""
-    assert metadados_de_amostra.estrategia == "random_limit"
+    assert metadados_de_amostra.estrategia == "percentual_de_linhas"
     assert metadados_de_amostra.tamanho_amostra == 10_000
     assert metadados_de_amostra.total_linhas == 50_000
 
