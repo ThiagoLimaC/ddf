@@ -15,6 +15,14 @@ def validar_dependencias(
     Em sucesso, devolve os Analisadores reordenados topologicamente por
     produz/requer — a ordem de seleção do usuário não determina a ordem de
     execução, só o conjunto selecionado.
+
+    Args:
+        analisadores: Analisadores selecionados pelo usuário.
+        geradores: Geradores selecionados pelo usuário.
+
+    Returns:
+        Sucesso com os Analisadores reordenados topologicamente, ou Falha
+        com a descrição da dependência ausente ou do ciclo detectado.
     """
     produzido_por = _mapear_produtores(analisadores)
 
@@ -32,7 +40,14 @@ def validar_dependencias(
 def _mapear_produtores(
     analisadores: list[Analisador],
 ) -> dict[TipoDeMetrica, Analisador]:
-    """Mapeia cada métrica produzida ao Analisador selecionado que a produz."""
+    """Mapeia cada métrica produzida ao Analisador selecionado que a produz.
+
+    Args:
+        analisadores: Analisadores selecionados pelo usuário.
+
+    Returns:
+        Dicionário de TipoDeMetrica para o Analisador que a produz.
+    """
     return {
         metrica: analisador
         for analisador in analisadores
@@ -45,7 +60,16 @@ def _dependencias_ausentes(
     geradores: list[Gerador],
     produzido_por: dict[TipoDeMetrica, Analisador],
 ) -> list[str]:
-    """Lista, em texto, cada requer não satisfeito pelo conjunto selecionado."""
+    """Lista, em texto, cada requer não satisfeito pelo conjunto selecionado.
+
+    Args:
+        analisadores: Analisadores selecionados pelo usuário.
+        geradores: Geradores selecionados pelo usuário.
+        produzido_por: Mapa de TipoDeMetrica para o Analisador que a produz.
+
+    Returns:
+        Lista de mensagens, uma por dependência não satisfeita.
+    """
     ausentes: list[str] = []
     for analisador in analisadores:
         for metrica in analisador.requer:
@@ -68,7 +92,16 @@ def _ordenar_topologicamente(
     analisadores: list[Analisador],
     produzido_por: dict[TipoDeMetrica, Analisador],
 ) -> list[Analisador] | str:
-    """Ordena Analisadores por dependência ou devolve mensagem de ciclo detectado."""
+    """Ordena Analisadores por dependência ou devolve mensagem de ciclo detectado.
+
+    Args:
+        analisadores: Analisadores selecionados pelo usuário.
+        produzido_por: Mapa de TipoDeMetrica para o Analisador que a produz.
+
+    Returns:
+        Lista de Analisadores ordenada topologicamente por produz/requer,
+        ou uma mensagem de texto descrevendo o ciclo detectado.
+    """
     dependencias: dict[int, set[int]] = {
         id(analisador): {id(produzido_por[metrica]) for metrica in analisador.requer}
         for analisador in analisadores
