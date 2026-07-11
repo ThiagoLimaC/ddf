@@ -119,9 +119,12 @@
 - [x] `PercentualDeLinhas(EstrategiaDeAmostragem)` — só guarda `percentual`
   (0, 100]; substitui `LimiteAleatorio` (descartada: LIMIT absoluto não
   escala entre tabelas de tamanhos muito diferentes)
-- [ ] `ExtratorPostgres(Extrator)`:
-  - Construção com `ThreadedConnectionPool` (sem revalidar `max_conexoes >=
-    max_trabalhadores` — já garantido por `ConfiguracaoDeExtracao`)
+- [x] `ExtratorPostgres(Extrator)`:
+  - Pool preguiçoso: `__init__` só guarda `dsn`/`configuracao`, sem revalidar
+    `max_conexoes >= max_trabalhadores` (já garantido por `ConfiguracaoDeExtracao`);
+    `ThreadedConnectionPool` só é criado no 1º uso — corrige bug encontrado
+    durante os testes (o pool conecta de verdade no `__init__`, então DSN
+    inválido levantava exceção crua em vez de `Falha`)
   - `listar_tabelas` via `information_schema.tables`
   - `extrair_tabela` — lê estrutura (colunas + PK via `table_constraints`/
     `key_column_usage` + FK via `constraint_column_usage`) + `total_linhas`
@@ -131,16 +134,18 @@
     + `tamanho_amostra = len(dataframe)` + constrói `TabelaExtraida`
   - Mapeamento completo tipos Postgres → `TipoDeDado` (ver tabela em
     `docs/low_level_design.md`)
-- [x] `conftest.py` de `tests/unit/infrastructure/adapters/extractors/`
-  - Unit: `PercentualDeLinhas` (feliz/erro/borda) já implementado; função de
-    mapeamento de tipos (feliz por categoria, borda tipo desconhecido →
-    `UNKNOWN`) e construção de `ExtratorPostgres` (pool mockado) pendentes
-- [ ] Teste de integração em `tests/integration/extractors/` via
-      `testcontainers` (Postgres descartável por execução): `listar_tabelas`
-      (feliz/borda) e `extrair_tabela` (feliz completo, erro schema/tabela
-      inexistente, erro conexão recusada)
-- [ ] `testcontainers` (extra `postgres`) adicionado ao grupo dev do
-      `pyproject.toml`
+- [x] `conftest.py` de `tests/unit/infrastructure/adapters/extractors/` e
+      `extractors/postgres/` — `PercentualDeLinhas`, `mapear_tipo_postgres` e
+      `ExtratorPostgres` (construção preguiçosa, `listar_tabelas`,
+      `extrair_tabela`) cobertos feliz/erro/borda
+- [x] Teste de integração em `tests/integration/extractors/postgres/` via
+      `testcontainers` (Postgres 16 real, descartável por sessão de teste):
+      `listar_tabelas` (feliz/borda) e `extrair_tabela` (feliz completo incl.
+      `TIMESTAMP com_timezone`, erro schema/tabela inexistente, erro DSN
+      inválido)
+- [x] `testcontainers[postgres]` adicionado ao grupo dev do `pyproject.toml`
+      (junto de `types-psycopg2`, necessário pra `mypy --strict` reconhecer
+      os tipos do `psycopg2`)
 
 ## 4. Sobrescrita (ACL Extraction → Curation) e OrquestradorParalelo
 

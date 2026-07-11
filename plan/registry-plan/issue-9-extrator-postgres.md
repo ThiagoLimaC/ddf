@@ -97,6 +97,73 @@
 > como estado real, mesmo critério já usado em `MetadadosDeAmostra` desde a
 > #6.
 
+> **Subpasta `extractors/postgres/` — reabre convenção de `engineer_guidelines.md`.**
+> `mapeamento_de_tipos.py` (vocabulário de `information_schema.columns.data_type`)
+> é 100% específico do Postgres — um `ExtratorMariaDB` futuro precisaria de um
+> mapeamento totalmente diferente. Deixá-lo lado a lado com
+> `percentual_de_linhas.py` (que é agnóstico de fonte, reutilizável por
+> qualquer `Extrator`) na mesma pasta `extractors/` confundia o que é
+> compartilhado com o que é específico de uma fonte. Decisão: subpasta por
+> fonte (`extractors/postgres/` com `extrator_postgres.py` e
+> `mapeamento_de_tipos.py`), espelhada em `tests/unit/.../extractors/postgres/`
+> e `tests/integration/extractors/postgres/`. `percentual_de_linhas.py`
+> permanece no nível de `extractors/`. `docs/engineer_guidelines.md` atualizado.
+
+> **`types-psycopg2` adicionada ao grupo dev.** `psycopg2-binary` não embute
+> `py.typed`/stubs — sem `types-psycopg2`, qualquer `import psycopg2` quebra
+> `mypy --strict` com `Library stubs not installed`. Necessária pra tipar
+> `ThreadedConnectionPool`, `cursor.description`, `psycopg2.sql.Identifier`/
+> `Literal` etc.
+
+> **`conexao.autocommit = True` em toda extração.** `ExtratorPostgres` só lê
+> dados — nunca escreve — então não há razão pra manter uma transação aberta
+> quando a conexão volta pro pool sem `commit()`/`rollback()` explícito.
+
+> **`MetadadosDeAmostra.total_linhas` removido — reabre escopo da #6.** Ao
+> implementar `extrair_tabela`, o mesmo valor de `total_linhas` (via
+> `reltuples`) acabava preenchendo tanto `TabelaExtraida.total_linhas` quanto
+> `MetadadosDeAmostra.total_linhas` — o que gerou dúvida sobre se isso era
+> intencional. Investigando, confirmamos que a distinção documentada na #6
+> ("universo considerado pela `EstrategiaDeAmostragem`", conceitualmente
+> diferente do total real) nunca teve consumidor real: nenhum
+> `model_validator` chegou a impor `tamanho_amostra <= total_linhas` (só
+> existia na documentação, nunca no código), e nem o Analisador nem os
+> Geradores liam esse campo — os Geradores exibem `TabelaExtraida.total_linhas`
+> (`low_level_design.md:111`, `:804`). Era complexidade especulativa para uma
+> estratégia futura filtrada (`WHERE`) que não existe. Decisão: campo
+> removido de `MetadadosDeAmostra`. `TabelaExtraida.total_linhas` é a única
+> fonte de verdade pro total de linhas da tabela.
+
+> **Bug real encontrado ao preparar o teste de integração: pool preguiçoso.**
+> `ThreadedConnectionPool` conecta `minconn` conexões já no `__init__` —
+> confirmado empiricamente com um DSN inválido, que levanta `OperationalError`
+> na construção do pool, não em `getconn()`. Isso contradizia o contrato
+> documentado (`Falha("Não foi possível conectar: <detalhe>")` é comportamento
+> de `extrair_tabela`, não da construção do `Extrator`) e nenhum teste unitário
+> pegou isso, porque todos mockavam `ThreadedConnectionPool` inteiro — testavam
+> que o código trata `OperationalError`, não que o psycopg2 a levanta nesse
+> ponto exato do fluxo. Corrigido: `ExtratorPostgres.__init__` só guarda `dsn`/
+> `configuracao`; o pool é criado sob demanda em `_obter_pool()`, chamado no
+> início de `listar_tabelas`/`extrair_tabela`, com o mesmo `try/except
+> OperationalError` que já existia — agora cobrindo o caso real. Teste novo
+> (`test_listar_tabelas_com_dsn_invalido_retorna_falha_sem_lancar_excecao`)
+> força esse cenário via `pool_classe_fake.side_effect`, não só `getconn.side_effect`.
+> Lição: mockar a interface externa inteira (a classe do driver) esconde bugs
+> de *quando* uma operação de I/O realmente acontece — só o teste de
+> integração contra Postgres real (ainda pendente) prova isso de verdade.
+
+> **`FLOAT` ganha `com_precisao_dupla` — correção de inconsistência dentro da
+> própria #9.** Na primeira versão, `real` e `double precision` colapsavam em
+> `FLOAT` sem nenhum atributo — mas eles têm larguras diferentes (4 bytes/~6
+> dígitos vs. 8 bytes/~15 dígitos), e o próprio motivo de existir de `FLOAT`
+> era não perder informação relevante pro cast do `GeradorDbt`. Revisando o
+> mesmo padrão já aplicado em `TIME`/`TIMESTAMP` (`com_timezone`, categoria
+> única + atributo booleano em vez de categorias separadas), aplicamos a
+> mesma solução aqui: `TipoDeDado.com_precisao_dupla: bool | None`,
+> `_ATRIBUTOS_PERMITIDOS[FLOAT] = {"com_precisao_dupla"}`, `real` mapeia com
+> `com_precisao_dupla=False`, `double precision` com `True`. Testes
+> atualizados em `test_tipo_de_dado.py` e `test_mapeamento_de_tipos.py`.
+
 ## Escopo desta issue
 
 - [x] `domain/model/common/tipo_de_dado.py` — `CategoriaDeDado.FLOAT/CHAR/UUID/TIME`,
@@ -105,8 +172,11 @@
       Port vira `nome` + `percentual`, sem gerar SQL
 - [x] `infrastructure/adapters/extractors/percentual_de_linhas.py` —
       `PercentualDeLinhas(EstrategiaDeAmostragem)`, só guarda `percentual`
-- [ ] `infrastructure/adapters/extractors/extrator_postgres.py` — `ExtratorPostgres(Extrator)`:
-  - Construção com `ThreadedConnectionPool(minconn=1, maxconn=configuracao.max_conexoes, dsn=dsn)`
+- [x] `infrastructure/adapters/extractors/postgres/mapeamento_de_tipos.py` —
+      `mapear_tipo_postgres()`, função pura, testada isoladamente
+- [x] `infrastructure/adapters/extractors/postgres/extrator_postgres.py` — `ExtratorPostgres(Extrator)`:
+  - Pool preguiçoso: `__init__` só guarda `dsn`/`configuracao`; `ThreadedConnectionPool`
+    criado sob demanda em `_obter_pool()`, no primeiro `listar_tabelas`/`extrair_tabela`
   - `listar_tabelas` via `information_schema.tables` (`table_type = 'BASE TABLE'`)
   - `extrair_tabela`:
     - Colunas via `information_schema.columns`
@@ -117,7 +187,7 @@
     - `tamanho_amostra = len(dataframe)` (observado, não calculado)
   - Mapeamento de tipos completo (tabela em `docs/low_level_design.md`)
   - `Falha("Schema 'x' ou tabela 'y' não encontrada.")` / `Falha("Não foi possível conectar: <detalhe>")`
-- [ ] `pyproject.toml` — `testcontainers[postgres]` no grupo dev
+- [x] `pyproject.toml` — `testcontainers[postgres]` no grupo dev
 
 ## Testes
 
@@ -126,28 +196,38 @@
 - [x] `PercentualDeLinhas`: caminho feliz (conformidade ao Port, `percentual`
       retorna o valor configurado, `nome`), erro esperado (`percentual` fora
       de `(0, 100]`), borda (`percentual=100`)
-- [ ] Função de mapeamento de tipo Postgres → `TipoDeDado`: caminho feliz por
-      categoria (varchar, char, text, numeric, integer incl. smallint, bigint,
-      float incl. real/double precision, boolean, timestamp com/sem tz, time
-      com/sem tz, date, json/jsonb, uuid), borda (tipo desconhecido → `UNKNOWN`)
-- [ ] Construção de `ExtratorPostgres`: caminho feliz (pool criado com os
-      parâmetros corretos, `ThreadedConnectionPool` mockado)
+
+### `tests/unit/infrastructure/adapters/extractors/postgres/`
+
+- [x] `mapear_tipo_postgres`: caminho feliz por categoria (varchar, char,
+      text, numeric, integer incl. smallint, bigint, float incl.
+      real/double precision, boolean, timestamp com/sem tz, time com/sem tz,
+      date, json/jsonb, uuid), borda (tipo desconhecido → `UNKNOWN`)
+- [x] `ExtratorPostgres`: conformidade ao Port `Extrator`, construção (pool
+      criado com os parâmetros corretos no 1º uso, pool reaproveitado entre
+      chamadas), `listar_tabelas` (feliz/borda lista vazia), `extrair_tabela`
+      (feliz completo — colunas/PK/FK/total_linhas/amostra —, erro schema/
+      tabela inexistente, erro DSN inválido na criação do pool, erro conexão
+      recusada em `getconn`, borda `reltuples` negativo)
 
 ### `tests/unit/domain/model/common/test_tipo_de_dado.py` (extensão da #5)
 
-- [ ] Caminho feliz: `FLOAT`, `CHAR` com `tamanho_fixo`, `UUID`, `TIME`/`TIMESTAMP`
+- [x] Caminho feliz: `FLOAT`, `CHAR` com `tamanho_fixo`, `UUID`, `TIME`/`TIMESTAMP`
       com `com_timezone`
-- [ ] Erro esperado: `CHAR` com `tamanho_maximo` (em vez de `tamanho_fixo`),
+- [x] Erro esperado: `CHAR` com `tamanho_maximo` (em vez de `tamanho_fixo`),
       `FLOAT`/`UUID` com qualquer atributo extra
 
-### `tests/integration/extractors/` (via `testcontainers`)
+### `tests/integration/extractors/postgres/` (via `testcontainers`, Postgres 16 real)
 
-- [ ] `listar_tabelas`: caminho feliz (lista ordenada por nome), borda (schema
+- [x] `listar_tabelas`: caminho feliz (lista ordenada por nome), borda (schema
       sem tabelas → lista vazia)
-- [ ] `extrair_tabela`: caminho feliz (estrutura completa: colunas, PK, FK,
-      `total_linhas`, amostra, metadados), erro esperado (schema/tabela
-      inexistente → `Falha`), erro esperado (DSN inválido/conexão recusada →
-      `Falha`)
+- [x] `extrair_tabela`: caminho feliz (estrutura completa: colunas, PK, FK,
+      `total_linhas`, amostra, metadados; mapeamento `TIMESTAMP com_timezone`),
+      erro esperado (schema/tabela inexistente → `Falha`), erro esperado (DSN
+      inválido/conexão recusada → `Falha`)
+- [x] Schema semeado por sessão (`clientes`/`pedidos`/schema `vazio`) em
+      `conftest.py`; `PercentualDeLinhas(percentual=100)` garante amostra
+      determinística nos testes (sem depender de aleatoriedade do `BERNOULLI`)
 
 ## Pendências para próximas issues (não resolvidas aqui)
 

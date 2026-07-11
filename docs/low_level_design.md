@@ -71,22 +71,28 @@ class TipoDeDado(BaseModel):
     tamanho_maximo: int | None = None  # tamanho máximo (VARCHAR)
     tamanho_fixo: int | None = None    # tamanho exato (CHAR)
     com_timezone: bool | None = None   # TIMESTAMP e TIME
+    com_precisao_dupla: bool | None = None  # FLOAT (real vs. double precision)
 ```
 
 **Comportamento:** imutável após construção. `UNKNOWN` quando o tipo da fonte
 não mapeia para nenhuma categoria — nunca levanta exceção por tipo desconhecido.
 
 **Adicionado na issue #9:** `FLOAT`, `CHAR`, `UUID`, `TIME` e os atributos
-`tamanho_fixo`/`com_timezone` não existiam na issue #5 original — surgiram da
-necessidade de mapear `ExtratorPostgres` sem perder informação relevante para
-o cast SQL do `GeradorDbt`. `FLOAT` (float binário de largura fixa: `real`,
-`double precision`) foi deliberadamente separado de `NUMERIC` (decimal exato
-com `precisao`/`escala` escolhidos pelo usuário) — misturar os dois sob a
-mesma categoria produziria casts incorretos. `CHAR` foi separado de `VARCHAR`
-pelo mesmo motivo: comprimento fixo (sempre preenchido com padding) não é o
-mesmo conceito que comprimento máximo. `TIME` e `TIMESTAMP` compartilham
-`com_timezone` para capturar a distinção `with/without time zone` do Postgres,
-que a v1 original desta issue (`#5`/`#6`) não previa.
+`tamanho_fixo`/`com_timezone`/`com_precisao_dupla` não existiam na issue #5
+original — surgiram da necessidade de mapear `ExtratorPostgres` sem perder
+informação relevante para o cast SQL do `GeradorDbt`. `FLOAT` (float binário
+de largura fixa: `real`, `double precision`) foi deliberadamente separado de
+`NUMERIC` (decimal exato com `precisao`/`escala` escolhidos pelo usuário) —
+misturar os dois sob a mesma categoria produziria casts incorretos. Dentro de
+`FLOAT`, `real` (4 bytes, ~6 dígitos) e `double precision` (8 bytes, ~15
+dígitos) ainda são larguras diferentes — perder essa distinção também
+produziria cast incorreto (`REAL` vs. `DOUBLE PRECISION` no destino), então
+`com_precisao_dupla` capura isso, no mesmo padrão de `com_timezone`. `CHAR`
+foi separado de `VARCHAR` pelo mesmo motivo original: comprimento fixo
+(sempre preenchido com padding) não é o mesmo conceito que comprimento
+máximo. `TIME` e `TIMESTAMP` compartilham `com_timezone` para capturar a
+distinção `with/without time zone` do Postgres, que a v1 original desta issue
+(`#5`/`#6`) não previa.
 
 ### `MetadadosDeAmostra`
 
@@ -94,22 +100,23 @@ que a v1 original desta issue (`#5`/`#6`) não previa.
 class MetadadosDeAmostra(BaseModel):
     estrategia: str      # "percentual_de_linhas", "full_scan"
     tamanho_amostra: int # linhas efetivamente amostradas
-    total_linhas: int    # universo considerado pela EstrategiaDeAmostragem
 ```
 
-**Comportamento:** imutável. `tamanho_amostra <= total_linhas` sempre. Viaja
-com `TabelaExtraida` e `TabelaCurada`. Usado pelo Analisador para normalizar
-métricas e pelos Geradores para anotar artefatos com a precisão das
-estimativas.
+**Comportamento:** imutável. Viaja com `TabelaExtraida` e `TabelaCurada`.
+Usado pelo Analisador para normalizar métricas (`percentual_nulo`,
+`percentual_unico`) e pelos Geradores para anotar artefatos com a precisão
+das estimativas.
 
-**Não é duplicata de `TabelaExtraida.total_linhas`:** este `total_linhas`
-descreve o universo que a `EstrategiaDeAmostragem` considerou ao amostrar —
-hoje coincide com o total real da tabela porque `PercentualDeLinhas` não
-filtra nada, mas é conceitualmente independente. Uma estratégia futura com
-filtro (`WHERE`) amostraria sobre um universo menor que o total real, e esse
-campo capturaria isso — inclusive como possível critério de seleção na CLI no
-futuro. `TabelaExtraida.total_linhas` continua sendo o total real da tabela,
-exibido aos usuários pelos Geradores.
+**Sem `total_linhas` (removido na issue #9):** a versão original deste modelo
+(issue #6) tinha um `total_linhas` próprio, descrito como "o universo que a
+`EstrategiaDeAmostragem` considerou ao amostrar", distinto de
+`TabelaExtraida.total_linhas`. Na prática, nenhum consumidor real usava essa
+distinção — nem um `model_validator` (`tamanho_amostra <= total_linhas`)
+chegou a ser implementado, nem o Analisador ou os Geradores liam esse campo
+(os Geradores exibem `TabelaExtraida.total_linhas`, o total real). Era
+complexidade especulativa para uma estratégia futura com filtro (`WHERE`) que
+não existe. Removido — `TabelaExtraida.total_linhas` é a única fonte de
+verdade para "quantas linhas a tabela tem".
 
 ### `ConfiguracaoDeExtracao`
 
@@ -575,8 +582,8 @@ construção (Pydantic), então uma segunda checagem aqui nunca dispararia.
    `COUNT(*)` exato. `information_schema.tables` não expõe contagem de linhas
    no Postgres (isso é comportamento do MySQL); `reltuples` é O(1) mas reflete
    a última `ANALYZE`/autovacuum, podendo estar desatualizado. Independente da
-   amostragem (não é mais pré-requisito do passo seguinte) — usado só para
-   preencher `TabelaExtraida.total_linhas` e `MetadadosDeAmostra.total_linhas`.
+   amostragem (não é pré-requisito do passo seguinte) — usado só para
+   preencher `TabelaExtraida.total_linhas`.
 4. Monta e executa `SELECT * FROM {schema}.{tabela} TABLESAMPLE
    BERNOULLI(configuracao.estrategia.percentual)` e carrega em `pl.DataFrame`.
    `BERNOULLI` sorteia cada linha independentemente com probabilidade igual —
@@ -598,7 +605,8 @@ construção (Pydantic), então uma segunda checagem aqui nunca dispararia.
 | `numeric(p,s)`, `decimal(p,s)` | `NUMERIC` | `precisao=p`, `escala=s` |
 | `smallint`, `integer` | `INTEGER` | — |
 | `bigint` | `BIGINT` | — |
-| `real`, `double precision` | `FLOAT` | — |
+| `real` | `FLOAT` | `com_precisao_dupla=False` |
+| `double precision` | `FLOAT` | `com_precisao_dupla=True` |
 | `boolean` | `BOOLEAN` | — |
 | `timestamp without time zone` | `TIMESTAMP` | `com_timezone=False` |
 | `timestamp with time zone` | `TIMESTAMP` | `com_timezone=True` |
@@ -613,9 +621,12 @@ construção (Pydantic), então uma segunda checagem aqui nunca dispararia.
 `NUMERIC` porque `real`/`double precision` são float binário de largura fixa
 pelo nome do tipo (sem `precisao`/`escala` escolhidos pelo usuário como em
 `numeric(p,s)`) — misturar as duas sob a mesma categoria produziria um cast
-SQL incorreto no `GeradorDbt`. `CHAR` foi separada de `VARCHAR` pelo mesmo
-motivo: comprimento fixo (com padding) não é o mesmo conceito que comprimento
-máximo. `UUID` e `TIME` não tinham categoria equivalente antes desta issue.
+SQL incorreto no `GeradorDbt`. Dentro de `FLOAT`, `real` (4 bytes) e `double
+precision` (8 bytes) ainda têm larguras diferentes — `com_precisao_dupla`
+distingue as duas, mesmo padrão de `com_timezone` em `TIME`/`TIMESTAMP`.
+`CHAR` foi separada de `VARCHAR` pelo mesmo motivo: comprimento fixo (com
+padding) não é o mesmo conceito que comprimento máximo. `UUID` e `TIME` não
+tinham categoria equivalente antes desta issue.
 
 ### `PercentualDeLinhas`
 

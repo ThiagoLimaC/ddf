@@ -266,14 +266,23 @@ tests/
 │   │   └── shared/                      # Resultado[T], Aviso
 │   └── infrastructure/adapters/
 │       ├── extractors/                  # conftest.py desde o 1º teste
+│       │   └── postgres/                # específico de ExtratorPostgres (mapeamento de tipos etc.)
 │       ├── analyzers/                   # conftest.py desde o 1º teste
 │       ├── generators/                  # conftest.py desde o 1º teste
 │       ├── overrides/
 │       └── orchestrator/
 └── integration/
-    ├── extractors/                      # Postgres real ou containerizado
+    ├── extractors/
+    │   └── postgres/                    # Postgres real ou containerizado
     └── cli/                             # wizard end-to-end com Extrator fake
 ```
+
+**Subpastas por fonte dentro de `extractors/`:** só o que é específico de uma
+fonte concreta (ex.: `postgres/` — vocabulário de tipos do
+`information_schema`, sintaxe SQL do próprio banco) fica na subpasta. O que é
+agnóstico de fonte (ex.: `percentual_de_linhas.py`, implementação de
+`EstrategiaDeAmostragem`) fica no nível de `extractors/`, reutilizável por
+qualquer `Extrator` futuro.
 
 ## `conftest.py` desde o primeiro teste de cada camada
 
