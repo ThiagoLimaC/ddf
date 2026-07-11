@@ -17,11 +17,12 @@ def test_cria_tipo_numeric_com_precisao_e_escala() -> None:
     assert tipo.escala == 2
 
 
-def test_cria_tipo_float_sem_atributos() -> None:
-    """Caminho feliz: FLOAT (real/double precision) não aceita precisao/escala."""
-    tipo = TipoDeDado(categoria=CategoriaDeDado.FLOAT)
+def test_cria_tipo_float_com_precisao_dupla() -> None:
+    """Caminho feliz: FLOAT distingue real/double precision via com_precisao_dupla."""
+    tipo = TipoDeDado(categoria=CategoriaDeDado.FLOAT, com_precisao_dupla=True)
 
     assert tipo.categoria == CategoriaDeDado.FLOAT
+    assert tipo.com_precisao_dupla is True
     assert tipo.precisao is None
     assert tipo.escala is None
 
@@ -105,6 +106,12 @@ def test_date_com_timezone_levanta_validation_error() -> None:
     """Erro esperado: com_timezone é exclusivo de TIMESTAMP/TIME, não de DATE."""
     with pytest.raises(ValidationError, match="DATE"):
         TipoDeDado(categoria=CategoriaDeDado.DATE, com_timezone=True)
+
+
+def test_numeric_com_precisao_dupla_levanta_validation_error() -> None:
+    """Erro esperado: com_precisao_dupla é exclusivo de FLOAT, não de NUMERIC."""
+    with pytest.raises(ValidationError, match="NUMERIC"):
+        TipoDeDado(categoria=CategoriaDeDado.NUMERIC, com_precisao_dupla=True)
 
 
 # Borda

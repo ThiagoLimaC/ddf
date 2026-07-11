@@ -31,6 +31,7 @@ _ATRIBUTOS_PERMITIDOS: dict[CategoriaDeDado, set[str]] = {
     CategoriaDeDado.CHAR: {"tamanho_fixo"},
     CategoriaDeDado.TIMESTAMP: {"com_timezone"},
     CategoriaDeDado.TIME: {"com_timezone"},
+    CategoriaDeDado.FLOAT: {"com_precisao_dupla"},
 }
 
 
@@ -45,6 +46,7 @@ class TipoDeDado(BaseModel):
     tamanho_maximo: int | None = None
     tamanho_fixo: int | None = None
     com_timezone: bool | None = None
+    com_precisao_dupla: bool | None = None
 
     @model_validator(mode="after")
     def _valida_atributos_por_categoria(self) -> Self:
@@ -58,6 +60,7 @@ class TipoDeDado(BaseModel):
                 "tamanho_maximo",
                 "tamanho_fixo",
                 "com_timezone",
+                "com_precisao_dupla",
             )
             if getattr(self, campo) is not None
         }
