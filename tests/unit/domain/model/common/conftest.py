@@ -15,9 +15,7 @@ def tipo_varchar() -> TipoDeDado:
 @pytest.fixture
 def metadados_de_amostra() -> MetadadosDeAmostra:
     """Retorna um MetadadosDeAmostra de exemplo (percentual_de_linhas)."""
-    return MetadadosDeAmostra(
-        estrategia="percentual_de_linhas", tamanho_amostra=10_000, total_linhas=50_000
-    )
+    return MetadadosDeAmostra(estrategia="percentual_de_linhas", tamanho_amostra=10_000)
 
 
 class EstrategiaFake:

@@ -15,10 +15,8 @@ def tipo_integer() -> TipoDeDado:
 
 @pytest.fixture
 def metadados_de_amostra() -> MetadadosDeAmostra:
-    """Retorna um MetadadosDeAmostra de exemplo (random_limit)."""
-    return MetadadosDeAmostra(
-        estrategia="random_limit", tamanho_amostra=2, total_linhas=10
-    )
+    """Retorna um MetadadosDeAmostra de exemplo (percentual_de_linhas)."""
+    return MetadadosDeAmostra(estrategia="percentual_de_linhas", tamanho_amostra=2)
 
 
 @pytest.fixture
