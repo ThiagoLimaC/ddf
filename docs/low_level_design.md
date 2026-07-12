@@ -50,48 +50,73 @@ ou por Estagios anteriores em `compor()`) não sejam descartados silenciosamente
 ```python
 class CategoriaDeDado(str, Enum):
     VARCHAR = "VARCHAR"
+    CHAR = "CHAR"
     TEXT = "TEXT"
     NUMERIC = "NUMERIC"
+    FLOAT = "FLOAT"
     INTEGER = "INTEGER"
     BIGINT = "BIGINT"
     BOOLEAN = "BOOLEAN"
     TIMESTAMP = "TIMESTAMP"
+    TIME = "TIME"
     DATE = "DATE"
     JSON = "JSON"
+    UUID = "UUID"
     UNKNOWN = "UNKNOWN"
 
 class TipoDeDado(BaseModel):
     categoria: CategoriaDeDado
-    precisao: int | None = None       # dígitos totais (NUMERIC)
-    escala: int | None = None         # casas decimais (NUMERIC)
-    tamanho_maximo: int | None = None # tamanho máximo (VARCHAR)
+    precisao: int | None = None        # dígitos totais (NUMERIC)
+    escala: int | None = None          # casas decimais (NUMERIC)
+    tamanho_maximo: int | None = None  # tamanho máximo (VARCHAR)
+    tamanho_fixo: int | None = None    # tamanho exato (CHAR)
+    com_timezone: bool | None = None   # TIMESTAMP e TIME
+    com_precisao_dupla: bool | None = None  # FLOAT (real vs. double precision)
 ```
 
 **Comportamento:** imutável após construção. `UNKNOWN` quando o tipo da fonte
 não mapeia para nenhuma categoria — nunca levanta exceção por tipo desconhecido.
 
+**Adicionado na issue #9:** `FLOAT`, `CHAR`, `UUID`, `TIME` e os atributos
+`tamanho_fixo`/`com_timezone`/`com_precisao_dupla` não existiam na issue #5
+original — surgiram da necessidade de mapear `ExtratorPostgres` sem perder
+informação relevante para o cast SQL do `GeradorDbt`. `FLOAT` (float binário
+de largura fixa: `real`, `double precision`) foi deliberadamente separado de
+`NUMERIC` (decimal exato com `precisao`/`escala` escolhidos pelo usuário) —
+misturar os dois sob a mesma categoria produziria casts incorretos. Dentro de
+`FLOAT`, `real` (4 bytes, ~6 dígitos) e `double precision` (8 bytes, ~15
+dígitos) ainda são larguras diferentes — perder essa distinção também
+produziria cast incorreto (`REAL` vs. `DOUBLE PRECISION` no destino), então
+`com_precisao_dupla` capura isso, no mesmo padrão de `com_timezone`. `CHAR`
+foi separado de `VARCHAR` pelo mesmo motivo original: comprimento fixo
+(sempre preenchido com padding) não é o mesmo conceito que comprimento
+máximo. `TIME` e `TIMESTAMP` compartilham `com_timezone` para capturar a
+distinção `with/without time zone` do Postgres, que a v1 original desta issue
+(`#5`/`#6`) não previa.
+
 ### `MetadadosDeAmostra`
 
 ```python
 class MetadadosDeAmostra(BaseModel):
-    estrategia: str      # "random_limit", "tablesample", "full_scan"
+    estrategia: str      # "percentual_de_linhas", "full_scan"
     tamanho_amostra: int # linhas efetivamente amostradas
-    total_linhas: int    # universo considerado pela EstrategiaDeAmostragem
 ```
 
-**Comportamento:** imutável. `tamanho_amostra <= total_linhas` sempre. Viaja
-com `TabelaExtraida` e `TabelaCurada`. Usado pelo Analisador para normalizar
-métricas e pelos Geradores para anotar artefatos com a precisão das
-estimativas.
+**Comportamento:** imutável. Viaja com `TabelaExtraida` e `TabelaCurada`.
+Usado pelo Analisador para normalizar métricas (`percentual_nulo`,
+`percentual_unico`) e pelos Geradores para anotar artefatos com a precisão
+das estimativas.
 
-**Não é duplicata de `TabelaExtraida.total_linhas`:** este `total_linhas`
-descreve o universo que a `EstrategiaDeAmostragem` considerou ao amostrar —
-hoje coincide com o total real da tabela porque `LimiteAleatorio` não filtra
-nada, mas é conceitualmente independente. Uma estratégia futura com filtro
-(`WHERE`) amostraria sobre um universo menor que o total real, e esse campo
-capturaria isso — inclusive como possível critério de seleção na CLI no
-futuro. `TabelaExtraida.total_linhas` continua sendo o total real da tabela,
-exibido aos usuários pelos Geradores.
+**Sem `total_linhas` (removido na issue #9):** a versão original deste modelo
+(issue #6) tinha um `total_linhas` próprio, descrito como "o universo que a
+`EstrategiaDeAmostragem` considerou ao amostrar", distinto de
+`TabelaExtraida.total_linhas`. Na prática, nenhum consumidor real usava essa
+distinção — nem um `model_validator` (`tamanho_amostra <= total_linhas`)
+chegou a ser implementado, nem o Analisador ou os Geradores liam esse campo
+(os Geradores exibem `TabelaExtraida.total_linhas`, o total real). Era
+complexidade especulativa para uma estratégia futura com filtro (`WHERE`) que
+não existe. Removido — `TabelaExtraida.total_linhas` é a única fonte de
+verdade para "quantas linhas a tabela tem".
 
 ### `ConfiguracaoDeExtracao`
 
@@ -102,18 +127,18 @@ class ConfiguracaoDeExtracao(BaseModel):
     max_conexoes: int = 10
 ```
 
-**Comportamento:** lida de `ddf.toml` ou flags CLI (`--sample-size`,
+**Comportamento:** lida de `ddf.toml` ou flags CLI (`--sample-percent`,
 `--max-workers`). Valida `max_conexoes >=
 max_trabalhadores` — `ValueError` com mensagem clara se violado.
 
 **Sem campo de tamanho de amostra:** dimensionar a amostra é responsabilidade
-de cada `EstrategiaDeAmostragem` concreta (ex.: `LimiteAleatorio.tamanho`), não
-de `ConfiguracaoDeExtracao` — o conceito de "tamanho" não generaliza para
-estratégias futuras não baseadas em contagem de linhas (`TableSample` é
-percentual, `FullScan` não tem tamanho). `ConfiguracaoDeExtracao` orquestra
-concorrência; a estratégia decide como amostrar. `MetadadosDeAmostra.tamanho_amostra`
-permanece como resultado observado pelo `Extrator` após a amostragem, não como
-parâmetro de configuração.
+de cada `EstrategiaDeAmostragem` concreta (ex.: `PercentualDeLinhas.percentual`),
+não de `ConfiguracaoDeExtracao` — o conceito de "tamanho" não generaliza para
+estratégias futuras (`FullScan` não tem tamanho nem percentual).
+`ConfiguracaoDeExtracao` orquestra concorrência; a estratégia decide como
+amostrar. `MetadadosDeAmostra.tamanho_amostra` permanece como resultado
+observado pelo `Extrator` após a amostragem, não como parâmetro de
+configuração.
 
 ---
 
@@ -410,7 +435,11 @@ class Extrator(Protocol):
 
 **Comportamento esperado de `extrair_tabela`:**
 - Lê estrutura de `information_schema` (colunas, tipos, PKs, FKs).
-- Executa `configuracao.estrategia.consulta(schema, tabela)` para amostrar dados.
+- Lê `total_linhas` da tabela (fonte concreta decide como).
+- Monta e executa a consulta de amostragem **no dialeto da própria fonte**,
+  usando `configuracao.estrategia.percentual` como parâmetro — a
+  `EstrategiaDeAmostragem` só descreve a política (quanto amostrar), nunca
+  gera SQL (ver `EstrategiaDeAmostragem` abaixo).
 - Constrói `TabelaExtraida` com `ColunaExtraida`s, `pl.DataFrame` e
   `MetadadosDeAmostra`.
 - `Falha("Schema 'x' ou tabela 'y' não encontrada.")` se inexistente.
@@ -511,9 +540,19 @@ class EstrategiaDeAmostragem(Protocol):
     def nome(self) -> str: ...
     """Identificador usado em MetadadosDeAmostra.estrategia."""
 
-    def consulta(self, schema: str, tabela: str) -> str: ...
-    """Retorna a SQL de amostragem para a tabela especificada."""
+    @property
+    def percentual(self) -> float: ...
+    """Fração da tabela a amostrar, em porcentagem (0, 100]."""
 ```
+
+**Comportamento:** descreve só a *política* de amostragem (quanto amostrar),
+nunca gera SQL. Traduzir isso numa consulta concreta é responsabilidade de
+cada `Extrator` — que já é, por definição, acoplado ao dialeto da própria
+fonte de dados. Isso evita que `EstrategiaDeAmostragem` (um Port pensado para
+ser agnóstico de fonte, com fontes futuras como MariaDB/API/arquivo) precise
+de uma implementação nova por banco só para gerar SQL diferente — o mesmo
+`PercentualDeLinhas(percentual=5.0)` serve para qualquer `Extrator`, cada um
+decidindo como aplicá-lo no próprio dialeto.
 
 ---
 
@@ -527,48 +566,109 @@ class ExtratorPostgres:
 ```
 
 **Construção:** cria `ThreadedConnectionPool(minconn=1,
-maxconn=configuracao.max_conexoes, dsn=dsn)`. Valida `max_conexoes >=
-max_trabalhadores`.
+maxconn=configuracao.max_conexoes, dsn=dsn)`. Não revalida `max_conexoes >=
+max_trabalhadores` — `ConfiguracaoDeExtracao` já garante essa invariante por
+construção (Pydantic), então uma segunda checagem aqui nunca dispararia.
 
 **`listar_tabelas`:** query em `information_schema.tables` filtrando
 `table_type = 'BASE TABLE'`.
 
 **`extrair_tabela`:**
-1. Lê estrutura de `information_schema.columns` e constraints.
+1. Lê estrutura de `information_schema.columns` e constraints (`table_constraints`
+   + `key_column_usage` para PK; + `constraint_column_usage` para o destino de
+   cada FK).
 2. Mapeia tipos Postgres → `TipoDeDado` (tabela abaixo).
-3. Lê `total_linhas` via `information_schema.tables`.
-4. Executa `configuracao.estrategia.consulta(schema, tabela)` e carrega em
-   `pl.DataFrame`.
-5. Retorna `TabelaExtraida`.
+3. Lê `total_linhas` via `pg_catalog.pg_class.reltuples` — **estimativa**, não
+   `COUNT(*)` exato. `information_schema.tables` não expõe contagem de linhas
+   no Postgres (isso é comportamento do MySQL); `reltuples` é O(1) mas reflete
+   a última `ANALYZE`/autovacuum, podendo estar desatualizado. Independente da
+   amostragem (não é pré-requisito do passo seguinte) — usado só para
+   preencher `TabelaExtraida.total_linhas`.
+4. Monta e executa `SELECT * FROM {schema}.{tabela} TABLESAMPLE
+   BERNOULLI(configuracao.estrategia.percentual)` e carrega em `pl.DataFrame`.
+   `BERNOULLI` sorteia cada linha independentemente com probabilidade igual —
+   amostra estatisticamente não enviesada, ao contrário de `LIMIT` sem
+   `ORDER BY` (que reflete a ordem física/de inserção da tabela) e mais barata
+   que `ORDER BY random() LIMIT N` (não exige sort completo da tabela).
+5. `MetadadosDeAmostra.tamanho_amostra` é o número de linhas efetivamente
+   retornadas pela amostra (`len(dataframe)`), não um valor calculado —
+   `TABLESAMPLE` decide dinamicamente quantas linhas sorteia.
+6. Retorna `TabelaExtraida`.
 
 **Mapeamento de tipos:**
 
-| Tipo Postgres | `CategoriaDeDado` | Atributos extras |
+| Tipo Postgres (`information_schema.columns.data_type`) | `CategoriaDeDado` | Atributos extras |
 |---|---|---|
-| `varchar(n)`, `character varying(n)` | `VARCHAR` | `tamanho_maximo=n` |
+| `character varying(n)` | `VARCHAR` | `tamanho_maximo=n` |
+| `character(n)` | `CHAR` | `tamanho_fixo=n` |
 | `text` | `TEXT` | — |
 | `numeric(p,s)`, `decimal(p,s)` | `NUMERIC` | `precisao=p`, `escala=s` |
-| `integer`, `int4` | `INTEGER` | — |
-| `bigint`, `int8` | `BIGINT` | — |
+| `smallint`, `integer` | `INTEGER` | — |
+| `bigint` | `BIGINT` | — |
+| `real` | `FLOAT` | `com_precisao_dupla=False` |
+| `double precision` | `FLOAT` | `com_precisao_dupla=True` |
 | `boolean` | `BOOLEAN` | — |
-| `timestamp`, `timestamptz` | `TIMESTAMP` | — |
+| `timestamp without time zone` | `TIMESTAMP` | `com_timezone=False` |
+| `timestamp with time zone` | `TIMESTAMP` | `com_timezone=True` |
+| `time without time zone` | `TIME` | `com_timezone=False` |
+| `time with time zone` | `TIME` | `com_timezone=True` |
 | `date` | `DATE` | — |
 | `json`, `jsonb` | `JSON` | — |
+| `uuid` | `UUID` | — |
 | qualquer outro | `UNKNOWN` | — |
 
-### `LimiteAleatorio`
+**Justificativa das categorias novas (issue #9):** `FLOAT` foi separada de
+`NUMERIC` porque `real`/`double precision` são float binário de largura fixa
+pelo nome do tipo (sem `precisao`/`escala` escolhidos pelo usuário como em
+`numeric(p,s)`) — misturar as duas sob a mesma categoria produziria um cast
+SQL incorreto no `GeradorDbt`. Dentro de `FLOAT`, `real` (4 bytes) e `double
+precision` (8 bytes) ainda têm larguras diferentes — `com_precisao_dupla`
+distingue as duas, mesmo padrão de `com_timezone` em `TIME`/`TIMESTAMP`.
+`CHAR` foi separada de `VARCHAR` pelo mesmo motivo: comprimento fixo (com
+padding) não é o mesmo conceito que comprimento máximo. `UUID` e `TIME` não
+tinham categoria equivalente antes desta issue.
+
+### `PercentualDeLinhas`
 
 ```python
-class LimiteAleatorio:
-    def __init__(self, tamanho: int) -> None: ...
+class PercentualDeLinhas:
+    def __init__(self, percentual: float) -> None: ...
+    # ValueError se percentual não estiver em (0, 100]
 
     @property
     def nome(self) -> str:
-        """Retorna 'random_limit'."""
+        """Retorna 'percentual_de_linhas'."""
 
-    def consulta(self, schema: str, tabela: str) -> str:
-        """Retorna: SELECT * FROM {schema}.{tabela} LIMIT {tamanho}"""
+    @property
+    def percentual(self) -> float:
+        """Retorna a fração da tabela a amostrar, em porcentagem (0, 100]."""
 ```
+
+**Comportamento:** puramente uma política — não sabe nada de SQL nem do
+banco de origem. Só guarda o percentual configurado; é o `ExtratorPostgres`
+(ou qualquer `Extrator` futuro) quem decide como aplicá-lo.
+
+**Por que percentual em vez de um LIMIT absoluto (`LimiteAleatorio`,
+descartada nesta issue):** um valor absoluto fixo por execução (`--sample-size
+500`) não escala entre tabelas de tamanhos muito diferentes — 500 linhas é
+quase a tabela inteira numa tabela de 600 linhas, e uma fração irrisória numa
+de 50 milhões. Calibrar isso por tabela é inviável numa CLI com dezenas de
+tabelas.
+
+**Por que a Estratégia não gera SQL (reabertura de decisão dentro da própria
+#9):** a primeira versão de `PercentualDeLinhas` calculava um `LIMIT N` em
+Python a partir de `total_linhas` para evitar `TABLESAMPLE` (sintaxe do
+Postgres). Mas `LIMIT` sem `ORDER BY` retorna as linhas na ordem física da
+tabela — enviesado, não uma amostra estatística de verdade. A correção óbvia
+seria `TABLESAMPLE BERNOULLI` (sem viés) ou `ORDER BY random() LIMIT N` (sem
+viés, mas cara — sort completo da tabela). Só que ambas exigem SQL específico
+por Extrator de qualquer forma, então a decisão final foi: `EstrategiaDeAmostragem`
+para de gerar SQL — vira só a política (`percentual`), e cada `Extrator`
+(já necessariamente acoplado ao dialeto da própria fonte) decide a melhor
+forma de amostrar sem viés no banco dele. `ExtratorPostgres` usa `TABLESAMPLE
+BERNOULLI`. `tamanho_amostra=0` (percentual muito baixo numa tabela pequena)
+é aceito como estado real, mesmo critério já usado em `MetadadosDeAmostra`
+desde a #6.
 
 ---
 

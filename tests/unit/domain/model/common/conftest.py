@@ -14,23 +14,22 @@ def tipo_varchar() -> TipoDeDado:
 
 @pytest.fixture
 def metadados_de_amostra() -> MetadadosDeAmostra:
-    """Retorna um MetadadosDeAmostra de exemplo (random_limit)."""
-    return MetadadosDeAmostra(
-        estrategia="random_limit", tamanho_amostra=10_000, total_linhas=50_000
-    )
+    """Retorna um MetadadosDeAmostra de exemplo (percentual_de_linhas)."""
+    return MetadadosDeAmostra(estrategia="percentual_de_linhas", tamanho_amostra=10_000)
 
 
 class EstrategiaFake:
-    """EstrategiaDeAmostragem fake para testes, sem depender de LimiteAleatorio."""
+    """EstrategiaDeAmostragem fake para testes, sem depender de PercentualDeLinhas."""
 
     @property
     def nome(self) -> str:
         """Retorna o identificador fixo 'fake'."""
         return "fake"
 
-    def consulta(self, schema: str, tabela: str) -> str:
-        """Retorna uma consulta fixa, ignorando schema e tabela."""
-        return f"SELECT * FROM {schema}.{tabela} LIMIT 1"
+    @property
+    def percentual(self) -> float:
+        """Retorna um percentual fixo de 1%."""
+        return 1.0
 
 
 @pytest.fixture

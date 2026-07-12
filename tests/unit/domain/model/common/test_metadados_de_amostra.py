@@ -5,29 +5,28 @@ from pydantic import ValidationError
 
 from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
 
+# Caminho feliz
 
-def test_cria_metadados_com_estrategia_e_tamanhos(
+
+def test_cria_metadados_com_estrategia_e_tamanho_amostra(
     metadados_de_amostra: MetadadosDeAmostra,
 ) -> None:
-    """Caminho feliz: MetadadosDeAmostra guarda estrategia e os dois tamanhos."""
-    assert metadados_de_amostra.estrategia == "random_limit"
+    """Caminho feliz: MetadadosDeAmostra guarda estrategia e tamanho_amostra."""
+    assert metadados_de_amostra.estrategia == "percentual_de_linhas"
     assert metadados_de_amostra.tamanho_amostra == 10_000
-    assert metadados_de_amostra.total_linhas == 50_000
+
+
+# Erro esperado
+
 
 def test_tamanho_amostra_negativo_levanta_validation_error() -> None:
     """Erro esperado: tamanho_amostra negativo é logicamente impossível."""
     with pytest.raises(ValidationError, match="tamanho_amostra"):
-        MetadadosDeAmostra(
-            estrategia="random_limit", tamanho_amostra=-1, total_linhas=10
-        )
+        MetadadosDeAmostra(estrategia="percentual_de_linhas", tamanho_amostra=-1)
 
 
-def test_total_linhas_negativo_levanta_validation_error() -> None:
-    """Erro esperado: total_linhas negativo é logicamente impossível."""
-    with pytest.raises(ValidationError, match="total_linhas"):
-        MetadadosDeAmostra(
-            estrategia="random_limit", tamanho_amostra=10, total_linhas=-1
-        )
+# Borda
+
 
 def test_metadados_de_amostra_e_imutavel(
     metadados_de_amostra: MetadadosDeAmostra,
@@ -37,11 +36,8 @@ def test_metadados_de_amostra_e_imutavel(
         metadados_de_amostra.tamanho_amostra = 20_000
 
 
-def test_tamanho_amostra_e_total_linhas_zero_sao_aceitos() -> None:
-    """Borda: tabela vazia (0 linhas) é um estado real e válido."""
-    metadados = MetadadosDeAmostra(
-        estrategia="random_limit", tamanho_amostra=0, total_linhas=0
-    )
+def test_tamanho_amostra_zero_e_aceito() -> None:
+    """Borda: tabela vazia (0 linhas amostradas) é um estado real e válido."""
+    metadados = MetadadosDeAmostra(estrategia="percentual_de_linhas", tamanho_amostra=0)
 
     assert metadados.tamanho_amostra == 0
-    assert metadados.total_linhas == 0

@@ -10,9 +10,3 @@ class MetadadosDeAmostra(BaseModel):
 
     estrategia: str
     tamanho_amostra: int = Field(ge=0)
-    total_linhas: int = Field(
-        ge=0,
-        description=(
-            "Total de linhas do universo considerado pela EstrategiaDeAmostragem"
-        ),
-    )
