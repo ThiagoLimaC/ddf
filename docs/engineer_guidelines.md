@@ -163,6 +163,32 @@ acima usa `arbitrary_types_allowed=True`.
 
 ---
 
+## Loops explícitos em vez de comprehensions densas
+
+Comprehensions de dict/set com múltiplos campos, ou que desempacotam tuplas
+por posição (`linha[0]`, `linha[1]`...), custam mais pra ler do que
+economizam em linhas — principalmente pra quem vem de uma linguagem
+fortemente tipada. Prefira um loop explícito, com desempacotamento nomeado e
+tipo declarado na variável acumuladora:
+
+```python
+# Evitar
+colunas_fk = {linha[0]: (linha[1], linha[2]) for linha in cursor.fetchall()}
+
+# Preferir
+colunas_fk: dict[str, tuple[str, str]] = {}
+for linha in cursor.fetchall():
+    nome_coluna, tabela_referenciada, coluna_referenciada = linha
+    colunas_fk[nome_coluna] = (tabela_referenciada, coluna_referenciada)
+```
+
+Uma comprehension de uma linha, sem desempacotamento posicional nem
+aninhamento (`[x.campo for x in itens]`), continua aceitável — o critério é
+se a forma compacta esconde o que cada posição/campo significa, não o
+comprimento da linha.
+
+---
+
 ## Nomenclatura: idioma como contrato
 
 - **Convenções de arquitetura** — estrutura de pastas (`domain/model`,
@@ -266,14 +292,23 @@ tests/
 │   │   └── shared/                      # Resultado[T], Aviso
 │   └── infrastructure/adapters/
 │       ├── extractors/                  # conftest.py desde o 1º teste
+│       │   └── postgres/                # específico de ExtratorPostgres (mapeamento de tipos etc.)
 │       ├── analyzers/                   # conftest.py desde o 1º teste
 │       ├── generators/                  # conftest.py desde o 1º teste
 │       ├── overrides/
 │       └── orchestrator/
 └── integration/
-    ├── extractors/                      # Postgres real ou containerizado
+    ├── extractors/
+    │   └── postgres/                    # Postgres real ou containerizado
     └── cli/                             # wizard end-to-end com Extrator fake
 ```
+
+**Subpastas por fonte dentro de `extractors/`:** só o que é específico de uma
+fonte concreta (ex.: `postgres/` — vocabulário de tipos do
+`information_schema`, sintaxe SQL do próprio banco) fica na subpasta. O que é
+agnóstico de fonte (ex.: `percentual_de_linhas.py`, implementação de
+`EstrategiaDeAmostragem`) fica no nível de `extractors/`, reutilizável por
+qualquer `Extrator` futuro.
 
 ## `conftest.py` desde o primeiro teste de cada camada
 

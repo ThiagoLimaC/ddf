@@ -90,7 +90,8 @@
 - [ ] `OrquestradorDeTabelas` (Protocol) — `extrair(schemas, extrator) ->
       Resultado[list[TabelaExtraida]]` + `aplicar_sobrescritas(tabelas, sobrescrita)
       -> Resultado[BancoCurado]`
-- [ ] `EstrategiaDeAmostragem` (Protocol) — `nome: str`, `consulta(schema, tabela) -> str`
+- [ ] `EstrategiaDeAmostragem` (Protocol) — `nome: str`, `percentual: float`
+      (política pura, sem SQL — cada Extrator traduz pro próprio dialeto)
 
 ### Contrato da CLI (`infrastructure/adapters/cli/`)
 
@@ -108,16 +109,43 @@
 
 ## 3. Adaptador de Extrator concreto
 
-- [ ] `LimiteAleatorio(EstrategiaDeAmostragem)` — `SELECT * FROM {schema}.{tabela} LIMIT N`
-- [ ] `ExtratorPostgres(Extrator)`:
-  - Construção com `ThreadedConnectionPool`
+- [x] `domain/model/common/tipo_de_dado.py` — reabertura de escopo da #5:
+  novas categorias `FLOAT`, `CHAR`, `UUID`, `TIME`; novos atributos
+  `tamanho_fixo` (CHAR) e `com_timezone` (TIMESTAMP e TIME) em `TipoDeDado`;
+  `_ATRIBUTOS_PERMITIDOS` atualizado; testes novos em `test_tipo_de_dado.py`
+- [x] `domain/ports/estrategia_de_amostragem.py` — reabertura de escopo da #8:
+  `consulta()` removido do Port; vira política pura (`nome`, `percentual`),
+  sem gerar SQL — cada Extrator traduz pro próprio dialeto
+- [x] `PercentualDeLinhas(EstrategiaDeAmostragem)` — só guarda `percentual`
+  (0, 100]; substitui `LimiteAleatorio` (descartada: LIMIT absoluto não
+  escala entre tabelas de tamanhos muito diferentes)
+- [x] `ExtratorPostgres(Extrator)`:
+  - Pool preguiçoso: `__init__` só guarda `dsn`/`configuracao`, sem revalidar
+    `max_conexoes >= max_trabalhadores` (já garantido por `ConfiguracaoDeExtracao`);
+    `ThreadedConnectionPool` só é criado no 1º uso — corrige bug encontrado
+    durante os testes (o pool conecta de verdade no `__init__`, então DSN
+    inválido levantava exceção crua em vez de `Falha`)
   - `listar_tabelas` via `information_schema.tables`
-  - `extrair_tabela` — lê estrutura + amostragem via `EstrategiaDeAmostragem` +
-    carrega `pl.DataFrame` + constrói `TabelaExtraida`
-  - Mapeamento completo tipos Postgres → `TipoDeDado`
-- [ ] `conftest.py` de `tests/unit/infrastructure/adapters/extractors/`
-- [ ] Teste de integração em `tests/integration/extractors/` contra Postgres
-      real ou containerizado
+  - `extrair_tabela` — lê estrutura (colunas + PK via `table_constraints`/
+    `key_column_usage` + FK via `constraint_column_usage`) + `total_linhas`
+    via `pg_catalog.pg_class.reltuples` (estimativa) + amostra via
+    `TABLESAMPLE BERNOULLI(configuracao.estrategia.percentual)` (sem viés
+    posicional, ao contrário de LIMIT sem ORDER BY) + carrega `pl.DataFrame`
+    + `tamanho_amostra = len(dataframe)` + constrói `TabelaExtraida`
+  - Mapeamento completo tipos Postgres → `TipoDeDado` (ver tabela em
+    `docs/low_level_design.md`)
+- [x] `conftest.py` de `tests/unit/infrastructure/adapters/extractors/` e
+      `extractors/postgres/` — `PercentualDeLinhas`, `mapear_tipo_postgres` e
+      `ExtratorPostgres` (construção preguiçosa, `listar_tabelas`,
+      `extrair_tabela`) cobertos feliz/erro/borda
+- [x] Teste de integração em `tests/integration/extractors/postgres/` via
+      `testcontainers` (Postgres 16 real, descartável por sessão de teste):
+      `listar_tabelas` (feliz/borda) e `extrair_tabela` (feliz completo incl.
+      `TIMESTAMP com_timezone`, erro schema/tabela inexistente, erro DSN
+      inválido)
+- [x] `testcontainers[postgres]` adicionado ao grupo dev do `pyproject.toml`
+      (junto de `types-psycopg2`, necessário pra `mypy --strict` reconhecer
+      os tipos do `psycopg2`)
 
 ## 4. Sobrescrita (ACL Extraction → Curation) e OrquestradorParalelo
 
