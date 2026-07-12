@@ -1,5 +1,7 @@
 """Extrator concreto para bancos Postgres."""
 
+from typing import NamedTuple
+
 import polars as pl
 from psycopg2 import OperationalError, sql
 from psycopg2.pool import ThreadedConnectionPool
@@ -58,18 +60,35 @@ _TOTAL_LINHAS_SQL = """
 """
 
 
+class _LinhaColuna(NamedTuple):
+    """Uma linha de information_schema.columns, nomeada por campo.
+
+    A ordem dos campos aqui precisa acompanhar a ordem do SELECT em
+    _COLUNAS_SQL — construir a tupla (`_LinhaColuna(*linha)`) é o único
+    ponto onde essa correspondência posicional existe; daqui pra frente,
+    todo o código lê por nome (`linha.data_type`), não por índice.
+    """
+
+    nome: str
+    data_type: str
+    tamanho_maximo: int | None
+    precisao: int | None
+    escala: int | None
+
+
 def _construir_coluna(
-    linha: tuple[str, str, int | None, int | None, int | None],
+    linha: _LinhaColuna,
     colunas_pk: set[str],
     colunas_fk: dict[str, tuple[str, str]],
 ) -> ColunaExtraida:
     """Combina uma linha de information_schema.columns com PK/FK já lidas."""
-    nome, data_type, tamanho_maximo, precisao, escala = linha
-    referencia = colunas_fk.get(nome)
+    referencia = colunas_fk.get(linha.nome)
     return ColunaExtraida(
-        nome=nome,
-        tipo_dado=mapear_tipo_postgres(data_type, tamanho_maximo, precisao, escala),
-        chave_primaria=nome in colunas_pk,
+        nome=linha.nome,
+        tipo_dado=mapear_tipo_postgres(
+            linha.data_type, linha.tamanho_maximo, linha.precisao, linha.escala
+        ),
+        chave_primaria=linha.nome in colunas_pk,
         chave_estrangeira=referencia is not None,
         tabela_referenciada=referencia[0] if referencia else None,
         coluna_referenciada=referencia[1] if referencia else None,
@@ -117,7 +136,10 @@ class ExtratorPostgres:
             conexao.autocommit = True
             with conexao.cursor() as cursor:
                 cursor.execute(_LISTAR_TABELAS_SQL, (schema,))
-                tabelas = [(linha[0], linha[1]) for linha in cursor.fetchall()]
+                tabelas: list[tuple[str, str]] = []
+                for linha_tabela in cursor.fetchall():
+                    nome_schema, nome_tabela = linha_tabela
+                    tabelas.append((nome_schema, nome_tabela))
             return Sucesso(tabelas)
         finally:
             pool.putconn(conexao)
@@ -136,24 +158,34 @@ class ExtratorPostgres:
             conexao.autocommit = True
             with conexao.cursor() as cursor:
                 cursor.execute(_COLUNAS_SQL, (schema, tabela))
-                linhas_colunas = cursor.fetchall()
+                linhas_colunas: list[_LinhaColuna] = []
+                for linha_bruta in cursor.fetchall():
+                    linhas_colunas.append(_LinhaColuna(*linha_bruta))
                 if not linhas_colunas:
                     return Falha(
                         f"Schema '{schema}' ou tabela '{tabela}' não encontrada."
                     )
 
                 cursor.execute(_CHAVES_PRIMARIAS_SQL, (schema, tabela))
-                colunas_pk = {linha[0] for linha in cursor.fetchall()}
+                colunas_pk: set[str] = set()
+                for linha_pk in cursor.fetchall():
+                    nome_coluna_pk = linha_pk[0]
+                    colunas_pk.add(nome_coluna_pk)
 
                 cursor.execute(_CHAVES_ESTRANGEIRAS_SQL, (schema, tabela))
-                colunas_fk = {
-                    linha[0]: (linha[1], linha[2]) for linha in cursor.fetchall()
-                }
+                colunas_fk: dict[str, tuple[str, str]] = {}
+                for linha_fk in cursor.fetchall():
+                    nome_coluna_fk, tabela_referenciada, coluna_referenciada = linha_fk
+                    colunas_fk[nome_coluna_fk] = (
+                        tabela_referenciada,
+                        coluna_referenciada,
+                    )
 
-                colunas = [
-                    _construir_coluna(linha, colunas_pk, colunas_fk)
-                    for linha in linhas_colunas
-                ]
+                colunas: list[ColunaExtraida] = []
+                for linha_coluna in linhas_colunas:
+                    colunas.append(
+                        _construir_coluna(linha_coluna, colunas_pk, colunas_fk)
+                    )
 
                 cursor.execute(_TOTAL_LINHAS_SQL, (schema, tabela))
                 linha_total = cursor.fetchone()
@@ -167,7 +199,9 @@ class ExtratorPostgres:
                     sql.Literal(self._configuracao.estrategia.percentual),
                 )
                 cursor.execute(consulta_amostra)
-                nomes_colunas = [coluna.name for coluna in cursor.description or ()]
+                nomes_colunas: list[str] = []
+                for coluna_amostra in cursor.description or ():
+                    nomes_colunas.append(coluna_amostra.name)
                 linhas_amostra = cursor.fetchall()
                 amostra = (
                     pl.DataFrame(linhas_amostra, schema=nomes_colunas, orient="row")
