@@ -163,6 +163,32 @@ acima usa `arbitrary_types_allowed=True`.
 
 ---
 
+## Loops explícitos em vez de comprehensions densas
+
+Comprehensions de dict/set com múltiplos campos, ou que desempacotam tuplas
+por posição (`linha[0]`, `linha[1]`...), custam mais pra ler do que
+economizam em linhas — principalmente pra quem vem de uma linguagem
+fortemente tipada. Prefira um loop explícito, com desempacotamento nomeado e
+tipo declarado na variável acumuladora:
+
+```python
+# Evitar
+colunas_fk = {linha[0]: (linha[1], linha[2]) for linha in cursor.fetchall()}
+
+# Preferir
+colunas_fk: dict[str, tuple[str, str]] = {}
+for linha in cursor.fetchall():
+    nome_coluna, tabela_referenciada, coluna_referenciada = linha
+    colunas_fk[nome_coluna] = (tabela_referenciada, coluna_referenciada)
+```
+
+Uma comprehension de uma linha, sem desempacotamento posicional nem
+aninhamento (`[x.campo for x in itens]`), continua aceitável — o critério é
+se a forma compacta esconde o que cada posição/campo significa, não o
+comprimento da linha.
+
+---
+
 ## Nomenclatura: idioma como contrato
 
 - **Convenções de arquitetura** — estrutura de pastas (`domain/model`,
