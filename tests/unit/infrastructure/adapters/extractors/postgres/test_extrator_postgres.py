@@ -4,6 +4,7 @@ import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
 from psycopg2 import OperationalError
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
@@ -153,6 +154,16 @@ def test_extrair_tabela_retorna_estrutura_completa(
 # Erro esperado
 
 
+def test_max_conexoes_zero_levanta_value_error(
+    configuracao: ConfiguracaoDeExtracao,
+) -> None:
+    """Erro esperado: max_conexoes=0 travaria o semáforo pra sempre — rejeitado cedo."""
+    with pytest.raises(ValueError, match="max_conexoes"):
+        ExtratorPostgres(
+            dsn="postgresql://fake", configuracao=configuracao, max_conexoes=0
+        )
+
+
 def test_listar_tabelas_com_dsn_invalido_retorna_falha_sem_lancar_excecao(
     pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
 ) -> None:
@@ -219,6 +230,42 @@ def test_extrair_tabela_com_conexao_recusada_retorna_falha(
 
 
 # Borda
+
+
+def test_primeiro_uso_concorrente_cria_pool_uma_unica_vez(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: chamadas concorrentes no 1º uso criam o pool uma única vez.
+
+    Sem lock em _obter_pool, duas threads poderiam ver self._pool is None ao
+    mesmo tempo e construir o pool duas vezes — exatamente o cenário que o
+    lock existe para prevenir.
+    """
+    primeira_thread_entrou = threading.Event()
+    pode_prosseguir = threading.Event()
+
+    def construir_pool_lento(**_kwargs: object) -> MagicMock:
+        if not primeira_thread_entrou.is_set():
+            primeira_thread_entrou.set()
+            pode_prosseguir.wait(timeout=1)
+        return MagicMock()
+
+    pool_classe_fake.side_effect = construir_pool_lento
+
+    extrator = ExtratorPostgres(
+        dsn="postgresql://fake", configuracao=configuracao, max_conexoes=10
+    )
+
+    thread_lenta = threading.Thread(target=extrator._obter_pool)
+    thread_lenta.start()
+    assert primeira_thread_entrou.wait(timeout=1) is True
+
+    resultado_concorrente = extrator._obter_pool()
+    pode_prosseguir.set()
+    thread_lenta.join(timeout=1)
+
+    assert pool_classe_fake.call_count == 1
+    assert isinstance(resultado_concorrente, Sucesso)
 
 
 def test_listar_tabelas_sem_tabelas_retorna_lista_vazia(

@@ -7,27 +7,27 @@ import yaml
 from pydantic import BaseModel, Field, ValidationError
 
 from ddf.domain.model.curation import ColunaCurada, TabelaCurada
-from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
+from ddf.domain.model.extraction import TabelaExtraida
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 
 _ORIGEM = "SobrescritaDeTabela"
 
 
-class _ColunaOverrideYAML(BaseModel):
+class _ColunaSobrescritaYAML(BaseModel):
     """Curadoria de uma coluna, tal como persistida no skeleton YAML."""
 
     papel_de_negocio: str = ""
     regras_de_negocio: list[str] = Field(default_factory=list)
 
 
-class _TabelaOverrideYAML(BaseModel):
+class _TabelaSobrescritaYAML(BaseModel):
     """Curadoria de uma tabela, tal como persistida no skeleton YAML."""
 
     hash: str
     papel_de_negocio: str = ""
     regras_de_negocio: list[str] = Field(default_factory=list)
-    colunas: dict[str, _ColunaOverrideYAML] = Field(default_factory=dict)
+    colunas: dict[str, _ColunaSobrescritaYAML] = Field(default_factory=dict)
 
 
 def _calcular_hash_estrutural(tabela: TabelaExtraida) -> str:
@@ -87,7 +87,7 @@ class SobrescritaDeTabela:
 
         try:
             bruto = yaml.safe_load(caminho.read_text(encoding="utf-8"))
-            override = _TabelaOverrideYAML.model_validate(bruto)
+            override = _TabelaSobrescritaYAML.model_validate(bruto)
         except (yaml.YAMLError, ValidationError) as erro:
             return Falha(
                 f"Sobrescrita de '{entrada.nome_schema}.{entrada.nome_tabela}' "
@@ -102,32 +102,32 @@ class SobrescritaDeTabela:
         )
 
     def _traduzir(self, tabela: TabelaExtraida) -> TabelaCurada:
-        """Mapeia estrutura de TabelaExtraida para TabelaCurada, sem curadoria."""
-        colunas: list[ColunaCurada] = []
-        for coluna in tabela.colunas:
-            colunas.append(self._traduzir_coluna(coluna))
-        return TabelaCurada(
-            nome_tabela=tabela.nome_tabela,
-            nome_schema=tabela.nome_schema,
-            colunas=colunas,
-            total_linhas=tabela.total_linhas,
-            amostra=tabela.amostra,
-            metadados_amostra=tabela.metadados_amostra,
-        )
+        """Mapeia estrutura de TabelaExtraida para TabelaCurada, sem curadoria.
 
-    def _traduzir_coluna(self, coluna: ColunaExtraida) -> ColunaCurada:
-        """Mapeia estrutura de ColunaExtraida para ColunaCurada, sem curadoria."""
-        return ColunaCurada(
-            nome=coluna.nome,
-            tipo_dado=coluna.tipo_dado,
-            chave_primaria=coluna.chave_primaria,
-            chave_estrangeira=coluna.chave_estrangeira,
-            tabela_referenciada=coluna.tabela_referenciada,
-            coluna_referenciada=coluna.coluna_referenciada,
+        Usa o mesmo padrão model_dump/model_validate de
+        `iniciar_contexto` (ddf.domain.model.analysis) — qualquer campo novo
+        em ColunaExtraida/TabelaExtraida que também exista em
+        ColunaCurada/TabelaCurada é copiado automaticamente; se não existir,
+        model_validate levanta ValidationError, forçando decisão explícita.
+
+        Args:
+            tabela: tabela extraída, sem curadoria.
+
+        Returns:
+            TabelaCurada com a mesma estrutura, curadoria vazia (defaults).
+        """
+        colunas = [
+            ColunaCurada.model_validate(coluna.model_dump())
+            for coluna in tabela.colunas
+        ]
+        return TabelaCurada(
+            **tabela.model_dump(exclude={"colunas", "amostra"}),
+            colunas=colunas,
+            amostra=tabela.amostra,
         )
 
     def _aplicar_curadoria(
-        self, tabela_traduzida: TabelaCurada, override: _TabelaOverrideYAML
+        self, tabela_traduzida: TabelaCurada, override: _TabelaSobrescritaYAML
     ) -> TabelaCurada:
         """Aplica papel_de_negocio/regras_de_negocio do YAML sobre a tradução."""
         colunas: list[ColunaCurada] = []
@@ -174,7 +174,7 @@ class SobrescritaDeTabela:
         self,
         entrada: TabelaExtraida,
         tabela_traduzida: TabelaCurada,
-        override: _TabelaOverrideYAML,
+        override: _TabelaSobrescritaYAML,
         caminho: Path,
         hash_atual: str,
     ) -> Resultado[TabelaCurada]:
@@ -211,7 +211,7 @@ class SobrescritaDeTabela:
         entrada: TabelaExtraida,
         caminho: Path,
         hash_atual: str,
-        override: _TabelaOverrideYAML | None,
+        override: _TabelaSobrescritaYAML | None,
     ) -> None:
         """Serializa o skeleton (novo ou atualizado) em disco."""
         colunas_yaml: dict[str, dict[str, str | list[str]]] = {}

@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+import pytest
+
 from ddf.domain.model.curation import BancoCurado
 from ddf.domain.model.extraction import TabelaExtraida
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
@@ -66,6 +68,12 @@ def test_aplicar_sobrescritas_agrega_banco_curado_ordenado(
 
 
 # Erro esperado
+
+
+def test_max_trabalhadores_zero_levanta_value_error() -> None:
+    """Erro esperado: max_trabalhadores=0 quebraria o ThreadPoolExecutor — rejeitado."""
+    with pytest.raises(ValueError, match="max_trabalhadores"):
+        OrquestradorParalelo(max_trabalhadores=0)
 
 
 def test_extrair_com_tabela_com_falha_retorna_falha_agregada(

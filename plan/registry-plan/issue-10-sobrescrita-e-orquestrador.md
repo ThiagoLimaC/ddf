@@ -25,14 +25,21 @@
 > adicionar/remover coluna já dispara. `docs/low_level_design.md` atualizado
 > com os 6 campos.
 
-> **Um `Aviso` por tabela no mismatch de hash, não um por categoria de
-> mudança.** O "diff" de uma tabela pode ter três categorias: colunas
-> adicionadas, colunas removidas, colunas com destino de FK alterado (nome
-> igual, `tabela_referenciada`/`coluna_referenciada` diferentes). Decisão: um
-> único `Aviso` por tabela, resumindo as três categorias com cláusulas
-> omitidas quando vazias, ex.: `"Estrutura de 'public.pedidos' mudou: colunas
-> adicionadas: ['desconto']; colunas com FK alterada: ['cliente_id']"` (sem
-> cláusula de removidas, se nenhuma coluna foi removida).
+> **Um `Aviso` por tabela no mismatch de hash — só cláusulas de nome, sem
+> apontar mudança de FK/tipo por coluna (revisado durante a implementação).**
+> A ideia original desta seção era um único `Aviso` por tabela com três
+> categorias: colunas adicionadas, colunas removidas, colunas com destino de
+> FK alterado. Na implementação, ficou claro que a terceira categoria não é
+> viável só com o hash de tabela: o skeleton YAML nunca guardou um retrato
+> estrutural por coluna (só `papel_de_negocio`/`regras_de_negocio`), então no
+> mismatch só dá pra comparar **nomes** de coluna entre o YAML antigo e a
+> nova extração — não dá pra apontar qual coluna teve tipo/PK/FK alterado
+> quando o nome continua o mesmo. Decisão final: `Aviso` único por tabela com
+> cláusulas `adicionadas`/`removidas` (omitidas quando vazias); se os nomes
+> de coluna são os mesmos mas o hash mudou mesmo assim, mensagem genérica
+> ("estrutura mudou, nomes preservados"). Hash por coluna (que resolveria
+> isso com precisão) foi avaliado e adiado — ver "Pendências" no fim deste
+> arquivo.
 
 > **`ConfiguracaoDeExtracao` perde `max_trabalhadores`/`max_conexoes` — reabre
 > escopo da `#5`.** Investigação levantou que os dois campos nunca precisavam
@@ -225,3 +232,8 @@
   se `schema: str` continua fazendo sentido como nome, ou se merece um termo
   mais neutro (`namespace`, `origem`). Não é bloqueante — o tipo já é opaco
   o bastante pra não impedir uma implementação não-relacional agora.
+- **Hash por coluna em `SobrescritaDeTabela`**: permitiria apontar exatamente
+  qual coluna teve a estrutura alterada (tipo, PK, FK) num mismatch de hash,
+  em vez da mensagem genérica atual quando os nomes de coluna não mudaram.
+  Avaliado e adiado nesta issue — aumentaria a complexidade do skeleton sem
+  um caso de uso concreto pedindo essa precisão ainda.

@@ -113,24 +113,32 @@ class ExtratorPostgres:
             max_conexoes: nº máximo de conexões simultâneas que este Postgres
                 aguenta com segurança — dimensiona o pool e o semáforo interno
                 que impede o esgotamento do pool sob chamadas concorrentes.
+
+        Raises:
+            ValueError: se `max_conexoes` não for positivo.
         """
+        if max_conexoes <= 0:
+            raise ValueError(f"max_conexoes deve ser positivo ({max_conexoes}).")
         self._dsn = dsn
         self._configuracao = configuracao
         self._max_conexoes = max_conexoes
         self._pool: ThreadedConnectionPool | None = None
         self._semaforo = threading.Semaphore(max_conexoes)
+        self._lock_pool = threading.Lock()
 
     def _obter_pool(self) -> Resultado[ThreadedConnectionPool]:
         """Cria o pool sob demanda, pra falha de conexão virar Falha, não exceção."""
         if self._pool is None:
-            try:
-                self._pool = ThreadedConnectionPool(
-                    minconn=1,
-                    maxconn=self._max_conexoes,
-                    dsn=self._dsn,
-                )
-            except OperationalError as erro:
-                return Falha(f"Não foi possível conectar: {erro}")
+            with self._lock_pool:
+                if self._pool is None:
+                    try:
+                        self._pool = ThreadedConnectionPool(
+                            minconn=1,
+                            maxconn=self._max_conexoes,
+                            dsn=self._dsn,
+                        )
+                    except OperationalError as erro:
+                        return Falha(f"Não foi possível conectar: {erro}")
         return Sucesso(self._pool)
 
     def listar_tabelas(self, schema: str) -> Resultado[list[tuple[str, str]]]:
