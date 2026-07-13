@@ -708,12 +708,23 @@ class SobrescritaDeTabela:
 ```
 
 **Comportamento:**
-1. Calcula hash SHA-256 sobre `(nome_tabela, nome_schema, [(col.nome,
-   col.tipo_dado, col.chave_primaria, col.chave_estrangeira) for col in colunas])`.
+1. Calcula hash SHA-256 sobre `(nome_schema, nome_tabela, [(col.nome,
+   col.tipo_dado.model_dump_json(), col.chave_primaria, col.chave_estrangeira,
+   col.tabela_referenciada, col.coluna_referenciada) for col in colunas])` —
+   `model_dump_json()` porque `TipoDeDado` é um `BaseModel`, não um
+   primitivo hasheável diretamente; inclui o destino da FK (issue #10, reabre
+   o hash original da #7/#8) pra detectar mudança de tabela/coluna
+   referenciada mesmo quando `chave_estrangeira` continua `True`.
 2. Lê `diretorio_sobrescritas/<schema>/<tabela>.yaml` se existir.
 3. **Hash bate:** aplica `papel_de_negocio`/`regras_de_negocio` do YAML.
 4. **Hash não bate (estrutura mudou):** atualiza skeleton preservando curadoria
-   de colunas que ainda existem; emite `Aviso` com colunas adicionadas/removidas.
+   de colunas que ainda existem (por nome); emite um único `Aviso` por tabela,
+   comparando os nomes de coluna do YAML com os da nova extração — cláusulas
+   `colunas adicionadas`/`colunas removidas` (omitidas se vazias). Se os nomes
+   de coluna são os mesmos mas o hash mudou (ex.: tipo ou FK de uma coluna
+   existente mudou), emite uma mensagem genérica ("estrutura mudou, nomes
+   preservados") — o hash é só no nível da tabela, não por coluna, então não
+   dá pra apontar qual coluna específica mudou (ver nota abaixo).
 5. **Arquivo não existe:** gera skeleton YAML e emite `Aviso` informando criação.
 6. Retorna `TabelaCurada` com curadoria aplicada (ou campos vazios na 1ª vez).
 
@@ -730,6 +741,12 @@ colunas:
 
 **Erro esperado:** YAML malformado →
 `Falha("Sobrescrita de '<schema>.<tabela>' está malformada: <detalhe>")`.
+
+**Possível melhoria futura (não implementada):** um hash por coluna (além do
+hash da tabela) permitiria apontar exatamente qual coluna teve a estrutura
+alterada num mismatch, em vez da mensagem genérica atual. Avaliado e adiado
+na issue #10 — aumentaria a complexidade do skeleton sem um caso de uso
+concreto ainda pedindo essa precisão.
 
 ---
 
@@ -754,16 +771,32 @@ class OrquestradorParalelo:
     ) -> Resultado[BancoCurado]: ...
 ```
 
+**`max_trabalhadores` (issue #10):** número genérico de chamadas concorrentes
+por fase — higiene de recurso local (não criar threads demais pra um banco
+com centenas de tabelas), sem nenhuma relação com concorrência segura contra
+a fonte. Cada `Extrator` concreto já garante isso internamente (ver
+`ExtratorPostgres`, que usa um semáforo próprio) — o Orquestrador nunca lê
+`ConfiguracaoDeExtracao` nem nenhuma propriedade do `Extrator` além dos dois
+métodos do Port.
+
 **Comportamento de `extrair`:**
-1. Lista tabelas por schema — sequencial (operação leve).
-2. Distribui `extrair_tabela(schema, tabela)` em `ThreadPoolExecutor(max_trabalhadores)`.
-3. Acumula erros sem interromper outros workers.
-4. `Falha` com resumo se qualquer tabela falhou; senão retorna `list[TabelaExtraida]`.
+1. Lista tabelas por schema — sequencial (operação leve). Falha de listagem
+   de um schema acumula (mesma política do item 3), não aborta os demais.
+2. Distribui `extrair_tabela(schema, tabela)` em `ThreadPoolExecutor(max_trabalhadores)`
+   para todos os pares `(schema, tabela)` listados com sucesso.
+3. Acumula erros — de listagem e de extração — sem interromper outros workers.
+4. `Falha("Falha ao extrair N de M tabelas: <schema.tabela ou schema>: <erro>; ...")`
+   se qualquer schema/tabela falhou — sem dado parcial dos que tiveram
+   sucesso na mesma execução. Senão, `Sucesso` com `list[TabelaExtraida]`
+   ordenada por `(nome_schema, nome_tabela)` (`ThreadPoolExecutor` não
+   garante ordem de conclusão).
 
 **Comportamento de `aplicar_sobrescritas`:**
 1. Distribui `sobrescrita(tabela)` em `ThreadPoolExecutor(max_trabalhadores)`.
 2. Acumula erros sem interromper outros workers.
-3. `Falha` com resumo se qualquer tabela falhou; senão agrega em `BancoCurado`.
+3. `Falha("Falha ao aplicar sobrescritas em N de M tabelas: <schema.tabela>: <erro>; ...")`
+   se qualquer tabela falhou; senão `Sucesso` com `BancoCurado` cujas
+   `tabelas` estão ordenadas por `(nome_schema, nome_tabela)`.
 
 ---
 
