@@ -123,13 +123,22 @@ verdade para "quantas linhas a tabela tem".
 ```python
 class ConfiguracaoDeExtracao(BaseModel):
     estrategia: EstrategiaDeAmostragem
-    max_trabalhadores: int = 8
-    max_conexoes: int = 10
 ```
 
-**Comportamento:** lida de `ddf.toml` ou flags CLI (`--sample-percent`,
-`--max-workers`). Valida `max_conexoes >=
-max_trabalhadores` — `ValueError` com mensagem clara se violado.
+**Comportamento:** lida de `ddf.toml` ou flags CLI (`--sample-percent`) —
+único campo genuinamente compartilhável entre qualquer `Extrator` futuro,
+sem exigir do usuário conhecimento específico de uma fonte concreta.
+
+**Sem `max_trabalhadores`/`max_conexoes` (removidos na issue #10):** a versão
+original (issue #5) tinha os dois campos aqui, com uma validação cruzada
+(`max_conexoes >= max_trabalhadores`). Investigação da #10 mostrou que os
+dois nunca precisavam ser números diferentes — cada chamada de `Extrator`
+retém exatamente 1 conexão do pool por vez, e só o `OrquestradorParalelo`
+dispara chamadas concorrentes contra ele. Concorrência segura virou
+responsabilidade interna de cada `Extrator` concreto (ver `ExtratorPostgres`
+abaixo, que ganhou um parâmetro `max_conexoes` próprio e um semáforo
+interno) — `ConfiguracaoDeExtracao` deixou de carregar qualquer conceito de
+concorrência, e o `OrquestradorParalelo` nunca a lê.
 
 **Sem campo de tamanho de amostra:** dimensionar a amostra é responsabilidade
 de cada `EstrategiaDeAmostragem` concreta (ex.: `PercentualDeLinhas.percentual`),
@@ -562,13 +571,28 @@ decidindo como aplicá-lo no próprio dialeto.
 
 ```python
 class ExtratorPostgres:
-    def __init__(self, dsn: str, configuracao: ConfiguracaoDeExtracao) -> None: ...
+    def __init__(
+        self,
+        dsn: str,
+        configuracao: ConfiguracaoDeExtracao,
+        max_conexoes: int = 8,
+    ) -> None: ...
 ```
 
-**Construção:** cria `ThreadedConnectionPool(minconn=1,
-maxconn=configuracao.max_conexoes, dsn=dsn)`. Não revalida `max_conexoes >=
-max_trabalhadores` — `ConfiguracaoDeExtracao` já garante essa invariante por
-construção (Pydantic), então uma segunda checagem aqui nunca dispararia.
+**Construção:** cria `ThreadedConnectionPool(minconn=1, maxconn=max_conexoes,
+dsn=dsn)` e um `threading.Semaphore(max_conexoes)` interno. `max_conexoes` é
+parâmetro próprio de `ExtratorPostgres` (não vem de `ConfiguracaoDeExtracao`,
+que não carrega mais nenhum conceito de concorrência desde a issue #10) —
+conhecimento específico de quanto este Postgres aguenta com segurança,
+default `8`.
+
+**Semáforo interno (issue #10):** `listar_tabelas`/`extrair_tabela` adquirem
+o semáforo antes de `pool.getconn()` e o liberam depois de `pool.putconn()`
+(ou de um erro de conexão). Isso garante que o pool nunca é solicitado além
+de `max_conexoes` simultaneamente — se o `OrquestradorParalelo` disparar mais
+chamadas concorrentes do que o pool aguenta, o excesso **espera** no
+semáforo em vez de estourar `PoolError` (que `ThreadedConnectionPool.getconn()`
+levantaria imediatamente, sem bloquear, caso o pool estivesse esgotado).
 
 **`listar_tabelas`:** query em `information_schema.tables` filtrando
 `table_type = 'BASE TABLE'`.

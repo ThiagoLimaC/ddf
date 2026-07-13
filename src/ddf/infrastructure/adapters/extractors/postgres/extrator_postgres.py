@@ -1,5 +1,6 @@
 """Extrator concreto para bancos Postgres."""
 
+import threading
 from typing import NamedTuple
 
 import polars as pl
@@ -98,16 +99,26 @@ def _construir_coluna(
 class ExtratorPostgres:
     """Extrai estrutura e amostra de tabelas de um banco Postgres."""
 
-    def __init__(self, dsn: str, configuracao: ConfiguracaoDeExtracao) -> None:
+    def __init__(
+        self,
+        dsn: str,
+        configuracao: ConfiguracaoDeExtracao,
+        max_conexoes: int = 8,
+    ) -> None:
         """Guarda os parâmetros de conexão — o pool só é criado no primeiro uso.
 
         Args:
             dsn: string de conexão do Postgres.
-            configuracao: parâmetros de concorrência e política de amostragem.
+            configuracao: política de amostragem, agnóstica de fonte.
+            max_conexoes: nº máximo de conexões simultâneas que este Postgres
+                aguenta com segurança — dimensiona o pool e o semáforo interno
+                que impede o esgotamento do pool sob chamadas concorrentes.
         """
         self._dsn = dsn
         self._configuracao = configuracao
+        self._max_conexoes = max_conexoes
         self._pool: ThreadedConnectionPool | None = None
+        self._semaforo = threading.Semaphore(max_conexoes)
 
     def _obter_pool(self) -> Resultado[ThreadedConnectionPool]:
         """Cria o pool sob demanda, pra falha de conexão virar Falha, não exceção."""
@@ -115,7 +126,7 @@ class ExtratorPostgres:
             try:
                 self._pool = ThreadedConnectionPool(
                     minconn=1,
-                    maxconn=self._configuracao.max_conexoes,
+                    maxconn=self._max_conexoes,
                     dsn=self._dsn,
                 )
             except OperationalError as erro:
@@ -128,9 +139,11 @@ class ExtratorPostgres:
         if isinstance(resultado_pool, Falha):
             return resultado_pool
         pool = resultado_pool.valor
+        self._semaforo.acquire()
         try:
             conexao = pool.getconn()
         except OperationalError as erro:
+            self._semaforo.release()
             return Falha(f"Não foi possível conectar: {erro}")
         try:
             conexao.autocommit = True
@@ -143,6 +156,7 @@ class ExtratorPostgres:
             return Sucesso(tabelas)
         finally:
             pool.putconn(conexao)
+            self._semaforo.release()
 
     def extrair_tabela(self, schema: str, tabela: str) -> Resultado[TabelaExtraida]:
         """Extrai estrutura, amostra e metadados de uma tabela específica."""
@@ -150,9 +164,11 @@ class ExtratorPostgres:
         if isinstance(resultado_pool, Falha):
             return resultado_pool
         pool = resultado_pool.valor
+        self._semaforo.acquire()
         try:
             conexao = pool.getconn()
         except OperationalError as erro:
+            self._semaforo.release()
             return Falha(f"Não foi possível conectar: {erro}")
         try:
             conexao.autocommit = True
@@ -225,3 +241,4 @@ class ExtratorPostgres:
             )
         finally:
             pool.putconn(conexao)
+            self._semaforo.release()

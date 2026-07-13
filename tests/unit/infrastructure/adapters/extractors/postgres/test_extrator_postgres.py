@@ -1,5 +1,6 @@
 """Testes de ExtratorPostgres."""
 
+import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -43,11 +44,30 @@ def test_primeiro_uso_cria_pool_com_parametros_corretos(
     cursor_fake.fetchall.return_value = []
     pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
+    extrator = ExtratorPostgres(
+        dsn="postgresql://fake", configuracao=configuracao, max_conexoes=5
+    )
+    extrator.listar_tabelas("public")
+
+    pool_classe_fake.assert_called_once_with(
+        minconn=1, maxconn=5, dsn="postgresql://fake"
+    )
+
+
+def test_max_conexoes_padrao_dimensiona_pool_com_oito(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Caminho feliz: sem max_conexoes explícito, pool e semáforo usam o default 8."""
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.return_value = []
+    pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
     extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
     extrator.listar_tabelas("public")
 
     pool_classe_fake.assert_called_once_with(
-        minconn=1, maxconn=configuracao.max_conexoes, dsn="postgresql://fake"
+        minconn=1, maxconn=8, dsn="postgresql://fake"
     )
 
 
@@ -238,3 +258,47 @@ def test_extrair_tabela_com_reltuples_negativo_usa_total_linhas_zero(
     assert isinstance(resultado, Sucesso)
     assert resultado.valor.total_linhas == 0
     assert resultado.valor.metadados_amostra.tamanho_amostra == 0
+
+
+def test_max_conexoes_um_faz_segunda_chamada_concorrente_esperar(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: max_conexoes=1 serializa chamadas concorrentes em vez de exaurir o pool.
+
+    ThreadedConnectionPool.getconn() levantaria PoolError se duas chamadas
+    pedissem conexão ao mesmo tempo com maxconn=1 — o semáforo interno faz a
+    2ª chamada esperar a 1ª liberar a conexão, em vez de deixar o erro escapar.
+    """
+    primeira_em_andamento = threading.Event()
+    pode_liberar_primeira = threading.Event()
+
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+
+    def fetchall_bloqueante() -> list[tuple[str, str]]:
+        primeira_em_andamento.set()
+        pode_liberar_primeira.wait(timeout=1)
+        return []
+
+    cursor_fake.fetchall.side_effect = fetchall_bloqueante
+    pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+    extrator = ExtratorPostgres(
+        dsn="postgresql://fake", configuracao=configuracao, max_conexoes=1
+    )
+
+    thread_primeira = threading.Thread(
+        target=lambda: extrator.listar_tabelas("public")
+    )
+    thread_primeira.start()
+    assert primeira_em_andamento.wait(timeout=1) is True
+
+    semaforo_livre_durante_a_primeira = extrator._semaforo.acquire(timeout=0.2)
+    assert semaforo_livre_durante_a_primeira is False
+
+    pode_liberar_primeira.set()
+    thread_primeira.join(timeout=1)
+
+    semaforo_livre_apos_a_primeira = extrator._semaforo.acquire(timeout=1)
+    assert semaforo_livre_apos_a_primeira is True
+    extrator._semaforo.release()

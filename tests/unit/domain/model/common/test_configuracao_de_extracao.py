@@ -17,6 +17,6 @@ def test_cria_configuracao_com_estrategia(
 
 
 def test_estrategia_que_nao_implementa_protocol_e_rejeitada() -> None:
-    """Erro esperado: objeto sem 'nome'/'percentual' não satisfaz o Protocol via InstanceOf."""
+    """Erro esperado: objeto sem 'nome'/'percentual' não satisfaz o Protocol."""
     with pytest.raises(ValidationError):
         ConfiguracaoDeExtracao(estrategia=object())  # type: ignore[arg-type]
