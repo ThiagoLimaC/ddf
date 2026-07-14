@@ -15,10 +15,11 @@ class OrquestradorDeTabelas(Protocol):
 
     def extrair(
         self,
-        schemas: list[str],
+        escopos: list[str],
         extrator: Extrator,
+        /,
     ) -> Resultado[list[TabelaExtraida]]:
-        """Extrai, em paralelo, todas as tabelas dos schemas informados."""
+        """Extrai, em paralelo, todas as tabelas dos escopos informados."""
         ...
 
     def aplicar_sobrescritas(

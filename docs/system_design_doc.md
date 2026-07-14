@@ -112,6 +112,9 @@ amostra como `pl.DataFrame` e `MetadadosDeAmostra`.
 - Usa `psycopg2.pool.ThreadedConnectionPool` para suporte ao paralelo.
 - `EstrategiaDeAmostragem` plugável via `ConfiguracaoDeExtracao` — nenhuma
   camada sabe que `tamanho_amostra` existe além do Extrator.
+- `listar_escopos()` descobre os escopos disponíveis na fonte (schemas,
+  databases, ou o que a fonte concreta usar como agrupamento acima de
+  tabela) — a CLI usa isso pra oferecer a escolha ao usuário sem SQL direto.
 
 ### 2. EstrategiaDeAmostragem
 
@@ -141,7 +144,7 @@ declarar nos artefatos que as métricas são estimativas sobre amostra.
 distintas — separadas para que a CLI possa pausar entre elas para curadoria
 humana dos skeletons de sobrescrita:
 
-- **`extrair(schemas, extrator)`** — extração paralela, retorna
+- **`extrair(escopos, extrator)`** — extração paralela, retorna
   `list[TabelaExtraida]`.
 - **`aplicar_sobrescritas(tabelas, sobrescrita)`** — sobrescrita paralela,
   retorna `BancoCurado`.
@@ -158,7 +161,7 @@ Bounded Contexts. Puro e thread-safe por design: não agrega, não acumula
 estado.
 
 Aplica `papel_de_negocio`/`regras_de_negocio` de
-`overrides/<schema>/<tabela>.yaml`. Garante idempotência via hash de campos
+`overrides/<escopo>/<tabela>.yaml`. Garante idempotência via hash de campos
 estruturais. Na primeira execução, gera skeleton YAML e a CLI pausa aguardando
 confirmação do usuário.
 
@@ -203,7 +206,7 @@ Exibe `Aviso`s em streaming por etapa concluída.
 | Estágio | Entrada | Saída |
 |---|---|---|
 | Extrator (por tabela) | credenciais + `ConfiguracaoDeExtracao` | `TabelaExtraida` |
-| OrquestradorParalelo.extrair | schemas + Extrator | `list[TabelaExtraida]` |
+| OrquestradorParalelo.extrair | escopos + Extrator | `list[TabelaExtraida]` |
 | [pausa para curadoria humana] | — | — |
 | Sobrescrita (por tabela) | `TabelaExtraida` | `TabelaCurada` |
 | OrquestradorParalelo.aplicar_sobrescritas | `list[TabelaExtraida]` | `BancoCurado` |

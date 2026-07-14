@@ -123,13 +123,22 @@ verdade para "quantas linhas a tabela tem".
 ```python
 class ConfiguracaoDeExtracao(BaseModel):
     estrategia: EstrategiaDeAmostragem
-    max_trabalhadores: int = 8
-    max_conexoes: int = 10
 ```
 
-**Comportamento:** lida de `ddf.toml` ou flags CLI (`--sample-percent`,
-`--max-workers`). Valida `max_conexoes >=
-max_trabalhadores` — `ValueError` com mensagem clara se violado.
+**Comportamento:** lida de `ddf.toml` ou flags CLI (`--sample-percent`) —
+único campo genuinamente compartilhável entre qualquer `Extrator` futuro,
+sem exigir do usuário conhecimento específico de uma fonte concreta.
+
+**Sem `max_trabalhadores`/`max_conexoes` (removidos na issue #10):** a versão
+original (issue #5) tinha os dois campos aqui, com uma validação cruzada
+(`max_conexoes >= max_trabalhadores`). Investigação da #10 mostrou que os
+dois nunca precisavam ser números diferentes — cada chamada de `Extrator`
+retém exatamente 1 conexão do pool por vez, e só o `OrquestradorParalelo`
+dispara chamadas concorrentes contra ele. Concorrência segura virou
+responsabilidade interna de cada `Extrator` concreto (ver `ExtratorPostgres`
+abaixo, que ganhou um parâmetro `max_conexoes` próprio e um semáforo
+interno) — `ConfiguracaoDeExtracao` deixou de carregar qualquer conceito de
+concorrência, e o `OrquestradorParalelo` nunca a lê.
 
 **Sem campo de tamanho de amostra:** dimensionar a amostra é responsabilidade
 de cada `EstrategiaDeAmostragem` concreta (ex.: `PercentualDeLinhas.percentual`),
@@ -155,9 +164,18 @@ class ColunaExtraida(BaseModel):
     tipo_dado: TipoDeDado
     chave_primaria: bool = False
     chave_estrangeira: bool = False
-    tabela_referenciada: str | None = None
-    coluna_referenciada: str | None = None
+    referencia: ReferenciaDeColuna | None = None
 ```
+
+**`referencia: ReferenciaDeColuna | None`** — Value Object compartilhado
+(`domain/model/common/referencia_de_coluna.py`) com `nome_escopo`,
+`nome_tabela`, `nome_coluna`. Substituiu `tabela_referenciada`/
+`coluna_referenciada: str | None` soltos (issue #10, achado ao testar
+contra um schema real multi-escopo): sem o escopo de destino, uma FK que
+aponta pra uma tabela em **outro** escopo perdia essa informação — o modelo
+só guardava o nome da tabela, nunca em qual escopo ela estava, deixando a
+referência ambígua (ou errada) quando dois escopos tinham tabela com o
+mesmo nome.
 
 ### `TabelaExtraida`
 
@@ -166,7 +184,7 @@ class TabelaExtraida(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     nome_tabela: str
-    nome_schema: str
+    nome_escopo: str
     colunas: list[ColunaExtraida]
     total_linhas: int                  # total real (information_schema)
     amostra: pl.DataFrame              # sempre preenchida pelo Extrator
@@ -194,8 +212,7 @@ class ColunaCurada(BaseModel):
     tipo_dado: TipoDeDado
     chave_primaria: bool = False
     chave_estrangeira: bool = False
-    tabela_referenciada: str | None = None
-    coluna_referenciada: str | None = None
+    referencia: ReferenciaDeColuna | None = None
     papel_de_negocio: str | None = None     # adicionado neste contexto
     regras_de_negocio: list[str] = Field(default_factory=list)
 ```
@@ -207,7 +224,7 @@ class TabelaCurada(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     nome_tabela: str
-    nome_schema: str
+    nome_escopo: str
     colunas: list[ColunaCurada]
     total_linhas: int
     papel_de_negocio: str | None = None
@@ -294,8 +311,7 @@ class ColunaAnalisada(BaseModel):
     tipo_dado: TipoDeDado
     chave_primaria: bool
     chave_estrangeira: bool
-    tabela_referenciada: str | None
-    coluna_referenciada: str | None
+    referencia: ReferenciaDeColuna | None
     papel_de_negocio: str | None
     regras_de_negocio: list[str]
     metricas: list[MetricaDeColuna] = Field(default_factory=list)
@@ -310,7 +326,7 @@ sem conflito. Um Gerador que quer `MetricasBaseColuna` filtra com
 ```python
 class TabelaAnalisada(BaseModel):
     nome_tabela: str
-    nome_schema: str
+    nome_escopo: str
     colunas: list[ColunaAnalisada]
     total_linhas: int
     papel_de_negocio: str | None
@@ -420,18 +436,32 @@ Todos os Ports abaixo (além de `EstrategiaDeAmostragem`, já existente) são
 ```python
 @runtime_checkable
 class Extrator(Protocol):
+    def listar_escopos(self) -> Resultado[list[str]]: ...
+    # lista os escopos disponíveis na fonte, ordenados por nome — schemas no
+    # Postgres/SQL Server, databases no MySQL/MariaDB, etc.
+
     def listar_tabelas(
         self,
-        schema: str,
+        escopo: str,
+        /,
     ) -> Resultado[list[tuple[str, str]]]: ...
-    # retorna list[(schema, nome_tabela)] ordenada por nome_tabela
+    # retorna list[(escopo, nome_tabela)] ordenada por nome_tabela
+    # parâmetro positional-only (`/`) — adapters concretos podem usar outro
+    # nome internamente (ex.: ExtratorPostgres usa "schema") sem quebrar em
+    # runtime uma chamada por keyword feita contra o tipo Extrator
 
     def extrair_tabela(
         self,
-        schema: str,
+        escopo: str,
         tabela: str,
+        /,
     ) -> Resultado[TabelaExtraida]: ...
 ```
+
+**Comportamento esperado de `listar_escopos`:**
+- Lista os escopos (schemas, databases, ou o que a fonte concreta usar como
+  nível de agrupamento acima de tabela) disponíveis na conexão atual.
+- `Falha("Não foi possível conectar: <detalhe>")` se conexão recusada.
 
 **Comportamento esperado de `extrair_tabela`:**
 - Lê estrutura de `information_schema` (colunas, tipos, PKs, FKs).
@@ -442,7 +472,11 @@ class Extrator(Protocol):
   gera SQL (ver `EstrategiaDeAmostragem` abaixo).
 - Constrói `TabelaExtraida` com `ColunaExtraida`s, `pl.DataFrame` e
   `MetadadosDeAmostra`.
-- `Falha("Schema 'x' ou tabela 'y' não encontrada.")` se inexistente.
+- `Falha` legível nomeando o escopo/tabela não encontrados se inexistente —
+  a redação exata é decisão de cada `Extrator` concreto, no vocabulário da
+  própria fonte (`ExtratorPostgres` usa "Schema 'x' ou tabela 'y' não
+  encontrada.", já que é assim que o Postgres chama a coisa; a Port não
+  manda mais essa string específica como contrato).
 - `Falha("Não foi possível conectar: <detalhe>")` se conexão recusada.
 
 ---
@@ -503,8 +537,9 @@ class Gerador(Protocol):
 class OrquestradorDeTabelas(Protocol):
     def extrair(
         self,
-        schemas: list[str],
+        escopos: list[str],
         extrator: Extrator,
+        /,
     ) -> Resultado[list[TabelaExtraida]]: ...
 
     def aplicar_sobrescritas(
@@ -515,7 +550,7 @@ class OrquestradorDeTabelas(Protocol):
 ```
 
 **Comportamento esperado de `extrair`:**
-- Lista tabelas via `extrator.listar_tabelas()` para cada schema.
+- Lista tabelas via `extrator.listar_tabelas()` para cada escopo.
 - Distribui `extrair_tabela()` em workers paralelos.
 - Erros de tabelas individuais são acumulados — não interrompem as demais.
 - Se qualquer tabela falhou: `Falha` com resumo de todas as falhas.
@@ -562,13 +597,32 @@ decidindo como aplicá-lo no próprio dialeto.
 
 ```python
 class ExtratorPostgres:
-    def __init__(self, dsn: str, configuracao: ConfiguracaoDeExtracao) -> None: ...
+    def __init__(
+        self,
+        dsn: str,
+        configuracao: ConfiguracaoDeExtracao,
+        max_conexoes: int = 8,
+    ) -> None: ...
 ```
 
-**Construção:** cria `ThreadedConnectionPool(minconn=1,
-maxconn=configuracao.max_conexoes, dsn=dsn)`. Não revalida `max_conexoes >=
-max_trabalhadores` — `ConfiguracaoDeExtracao` já garante essa invariante por
-construção (Pydantic), então uma segunda checagem aqui nunca dispararia.
+**Construção:** cria `ThreadedConnectionPool(minconn=1, maxconn=max_conexoes,
+dsn=dsn)` e um `threading.Semaphore(max_conexoes)` interno. `max_conexoes` é
+parâmetro próprio de `ExtratorPostgres` (não vem de `ConfiguracaoDeExtracao`,
+que não carrega mais nenhum conceito de concorrência desde a issue #10) —
+conhecimento específico de quanto este Postgres aguenta com segurança,
+default `8`.
+
+**Semáforo interno (issue #10):** `listar_tabelas`/`extrair_tabela` adquirem
+o semáforo antes de `pool.getconn()` e o liberam depois de `pool.putconn()`
+(ou de um erro de conexão). Isso garante que o pool nunca é solicitado além
+de `max_conexoes` simultaneamente — se o `OrquestradorParalelo` disparar mais
+chamadas concorrentes do que o pool aguenta, o excesso **espera** no
+semáforo em vez de estourar `PoolError` (que `ThreadedConnectionPool.getconn()`
+levantaria imediatamente, sem bloquear, caso o pool estivesse esgotado).
+
+**`listar_escopos`:** query em `information_schema.schemata`, excluindo os
+schemas de sistema do Postgres (`information_schema`, `pg_catalog`,
+`pg_toast`, `pg_temp_%`, `pg_toast_temp_%`).
 
 **`listar_tabelas`:** query em `information_schema.tables` filtrando
 `table_type = 'BASE TABLE'`.
@@ -576,7 +630,13 @@ construção (Pydantic), então uma segunda checagem aqui nunca dispararia.
 **`extrair_tabela`:**
 1. Lê estrutura de `information_schema.columns` e constraints (`table_constraints`
    + `key_column_usage` para PK; + `constraint_column_usage` para o destino de
-   cada FK).
+   cada FK — inclui `ccu.table_schema` além de `ccu.table_name`/`ccu.column_name`,
+   pra `ReferenciaDeColuna` capturar FK que aponta pra outro escopo). O `JOIN`
+   entre `table_constraints` e `constraint_column_usage` casa por
+   `constraint_schema` (não `table_schema`) — `constraint_column_usage.table_schema`
+   identifica a tabela *referenciada* pela FK, não a tabela onde ela foi
+   declarada, então casar por `table_schema` excluiria toda FK cross-escopo
+   do resultado (issue #10).
 2. Mapeia tipos Postgres → `TipoDeDado` (tabela abaixo).
 3. Lê `total_linhas` via `pg_catalog.pg_class.reltuples` — **estimativa**, não
    `COUNT(*)` exato. `information_schema.tables` não expõe contagem de linhas
@@ -684,12 +744,26 @@ class SobrescritaDeTabela:
 ```
 
 **Comportamento:**
-1. Calcula hash SHA-256 sobre `(nome_tabela, nome_schema, [(col.nome,
-   col.tipo_dado, col.chave_primaria, col.chave_estrangeira) for col in colunas])`.
-2. Lê `diretorio_sobrescritas/<schema>/<tabela>.yaml` se existir.
+1. Calcula hash SHA-256 sobre `(nome_escopo, nome_tabela, [(col.nome,
+   col.tipo_dado.model_dump_json(), col.chave_primaria, col.chave_estrangeira,
+   col.referencia.model_dump_json() if col.referencia else "None") for col
+   in colunas])` — `model_dump_json()` porque `TipoDeDado`/`ReferenciaDeColuna`
+   são `BaseModel`, não primitivos hasheáveis diretamente; inclui o destino
+   completo da FK (escopo + tabela + coluna, issue #10 reabre o hash
+   original da #7/#8; mesma issue introduz `ReferenciaDeColuna` pra incluir
+   o escopo de destino, corrigindo perda de informação em FK cross-escopo)
+   pra detectar mudança de referência mesmo quando `chave_estrangeira`
+   continua `True`.
+2. Lê `diretorio_sobrescritas/<escopo>/<tabela>.yaml` se existir.
 3. **Hash bate:** aplica `papel_de_negocio`/`regras_de_negocio` do YAML.
 4. **Hash não bate (estrutura mudou):** atualiza skeleton preservando curadoria
-   de colunas que ainda existem; emite `Aviso` com colunas adicionadas/removidas.
+   de colunas que ainda existem (por nome); emite um único `Aviso` por tabela,
+   comparando os nomes de coluna do YAML com os da nova extração — cláusulas
+   `colunas adicionadas`/`colunas removidas` (omitidas se vazias). Se os nomes
+   de coluna são os mesmos mas o hash mudou (ex.: tipo ou FK de uma coluna
+   existente mudou), emite uma mensagem genérica ("estrutura mudou, nomes
+   preservados") — o hash é só no nível da tabela, não por coluna, então não
+   dá pra apontar qual coluna específica mudou (ver nota abaixo).
 5. **Arquivo não existe:** gera skeleton YAML e emite `Aviso` informando criação.
 6. Retorna `TabelaCurada` com curadoria aplicada (ou campos vazios na 1ª vez).
 
@@ -705,7 +779,13 @@ colunas:
 ```
 
 **Erro esperado:** YAML malformado →
-`Falha("Sobrescrita de '<schema>.<tabela>' está malformada: <detalhe>")`.
+`Falha("Sobrescrita de '<escopo>.<tabela>' está malformada: <detalhe>")`.
+
+**Possível melhoria futura (não implementada):** um hash por coluna (além do
+hash da tabela) permitiria apontar exatamente qual coluna teve a estrutura
+alterada num mismatch, em vez da mensagem genérica atual. Avaliado e adiado
+na issue #10 — aumentaria a complexidade do skeleton sem um caso de uso
+concreto ainda pedindo essa precisão.
 
 ---
 
@@ -719,7 +799,7 @@ class OrquestradorParalelo:
 
     def extrair(
         self,
-        schemas: list[str],
+        escopos: list[str],
         extrator: Extrator,
     ) -> Resultado[list[TabelaExtraida]]: ...
 
@@ -730,16 +810,32 @@ class OrquestradorParalelo:
     ) -> Resultado[BancoCurado]: ...
 ```
 
+**`max_trabalhadores` (issue #10):** número genérico de chamadas concorrentes
+por fase — higiene de recurso local (não criar threads demais pra um banco
+com centenas de tabelas), sem nenhuma relação com concorrência segura contra
+a fonte. Cada `Extrator` concreto já garante isso internamente (ver
+`ExtratorPostgres`, que usa um semáforo próprio) — o Orquestrador nunca lê
+`ConfiguracaoDeExtracao` nem nenhuma propriedade do `Extrator` além dos dois
+métodos do Port.
+
 **Comportamento de `extrair`:**
-1. Lista tabelas por schema — sequencial (operação leve).
-2. Distribui `extrair_tabela(schema, tabela)` em `ThreadPoolExecutor(max_trabalhadores)`.
-3. Acumula erros sem interromper outros workers.
-4. `Falha` com resumo se qualquer tabela falhou; senão retorna `list[TabelaExtraida]`.
+1. Lista tabelas por escopo — sequencial (operação leve). Falha de listagem
+   de um escopo acumula (mesma política do item 3), não aborta os demais.
+2. Distribui `extrair_tabela(escopo, tabela)` em `ThreadPoolExecutor(max_trabalhadores)`
+   para todos os pares `(escopo, tabela)` listados com sucesso.
+3. Acumula erros — de listagem e de extração — sem interromper outros workers.
+4. `Falha("Falha ao extrair N de M tabelas: <escopo.tabela ou escopo>: <erro>; ...")`
+   se qualquer escopo/tabela falhou — sem dado parcial dos que tiveram
+   sucesso na mesma execução. Senão, `Sucesso` com `list[TabelaExtraida]`
+   ordenada por `(nome_escopo, nome_tabela)` (`ThreadPoolExecutor` não
+   garante ordem de conclusão).
 
 **Comportamento de `aplicar_sobrescritas`:**
 1. Distribui `sobrescrita(tabela)` em `ThreadPoolExecutor(max_trabalhadores)`.
 2. Acumula erros sem interromper outros workers.
-3. `Falha` com resumo se qualquer tabela falhou; senão agrega em `BancoCurado`.
+3. `Falha("Falha ao aplicar sobrescritas em N de M tabelas: <escopo.tabela>: <erro>; ...")`
+   se qualquer tabela falhou; senão `Sucesso` com `BancoCurado` cujas
+   `tabelas` estão ordenadas por `(nome_escopo, nome_tabela)`.
 
 ---
 
@@ -810,9 +906,9 @@ class GeradorMarkdown:
     def __call__(self, entrada: BancoAnalisado, destino: Path) -> Resultado[None]: ...
 ```
 
-**Saída:** `<destino>/<schema>/<tabela>.md` por tabela + `<destino>/index.md`.
+**Saída:** `<destino>/<escopo>/<tabela>.md` por tabela + `<destino>/index.md`.
 
-**Conteúdo por arquivo:** nome, schema, `total_linhas`, `completude`,
+**Conteúdo por arquivo:** nome, escopo, `total_linhas`, `completude`,
 `papel_de_negocio`, `regras_de_negocio`, tabela de colunas com métricas, nota
 de rodapé com `MetadadosDeAmostra` (estratégia, N amostrado, M total).
 
@@ -882,7 +978,7 @@ def executar(config: Path | None) -> None:
 1. Escolher fonte (`questionary.select` com `FONTES_REGISTRADAS`).
 2. Informar credenciais (DSN ou campos separados).
 3. Testar conexão — retry até 3 tentativas em falha.
-4. Escolher schema(s) (`questionary.checkbox`).
+4. Escolher escopo(s) (`questionary.checkbox`).
 5. Extrair em paralelo via `OrquestradorParalelo` — exibe spinner + avisos.
 6. Gerar skeletons de sobrescrita — exibe caminhos gerados.
 7. **Pausa:** `questionary.confirm("Preencheu as sobrescritas? Pressione Enter para continuar.")`.

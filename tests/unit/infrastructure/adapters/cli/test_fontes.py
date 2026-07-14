@@ -9,13 +9,17 @@ from ddf.infrastructure.adapters.cli.fontes import FONTES_REGISTRADAS, registrar
 class ExtratorFake:
     """Extrator fake usado só para popular o registro nos testes."""
 
-    def listar_tabelas(self, schema: str) -> object:
+    def listar_escopos(self) -> object:
         """Não é exercitado por registrar_fonte — não precisa de corpo real."""
-        raise NotImplementedError
+        ...
 
-    def extrair_tabela(self, schema: str, tabela: str) -> object:
+    def listar_tabelas(self, escopo: str) -> object:
         """Não é exercitado por registrar_fonte — não precisa de corpo real."""
-        raise NotImplementedError
+        ...
+
+    def extrair_tabela(self, escopo: str, tabela: str) -> object:
+        """Não é exercitado por registrar_fonte — não precisa de corpo real."""
+        ...
 
 
 # Caminho feliz
