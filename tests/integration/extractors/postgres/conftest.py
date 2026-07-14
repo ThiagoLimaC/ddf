@@ -13,6 +13,8 @@ from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
 
 _SETUP_SQL = """
     CREATE SCHEMA vazio;
+    CREATE SCHEMA pessoa;
+    CREATE SCHEMA rh;
 
     CREATE TABLE public.clientes (
         id SERIAL PRIMARY KEY,
@@ -32,6 +34,25 @@ _SETUP_SQL = """
 
     ANALYZE public.clientes;
     ANALYZE public.pedidos;
+
+    -- FK cross-schema (rh.funcionario -> pessoa.pessoa): prova que o escopo
+    -- de destino da FK é capturado mesmo quando difere do escopo de origem.
+    CREATE TABLE pessoa.pessoa (
+        id SERIAL PRIMARY KEY,
+        nome VARCHAR(100) NOT NULL
+    );
+
+    CREATE TABLE rh.funcionario (
+        id SERIAL PRIMARY KEY,
+        pessoa_id INTEGER NOT NULL REFERENCES pessoa.pessoa(id),
+        cargo VARCHAR(100) NOT NULL
+    );
+
+    INSERT INTO pessoa.pessoa (nome) VALUES ('duda'), ('elias');
+    INSERT INTO rh.funcionario (pessoa_id, cargo) VALUES (1, 'engenheira');
+
+    ANALYZE pessoa.pessoa;
+    ANALYZE rh.funcionario;
 """
 
 

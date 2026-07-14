@@ -1,5 +1,6 @@
 """Extrator concreto para bancos Postgres."""
 
+import threading
 from typing import NamedTuple
 
 import polars as pl
@@ -8,11 +9,21 @@ from psycopg2.pool import ThreadedConnectionPool
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
+from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.extractors.postgres.mapeamento_de_tipos import (
     mapear_tipo_postgres,
 )
+
+_LISTAR_ESCOPOS_SQL = """
+    SELECT schema_name
+    FROM information_schema.schemata
+    WHERE schema_name NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+      AND schema_name NOT LIKE 'pg_temp_%'
+      AND schema_name NOT LIKE 'pg_toast_temp_%'
+    ORDER BY schema_name
+"""
 
 _LISTAR_TABELAS_SQL = """
     SELECT table_schema, table_name
@@ -40,14 +51,14 @@ _CHAVES_PRIMARIAS_SQL = """
 """
 
 _CHAVES_ESTRANGEIRAS_SQL = """
-    SELECT kcu.column_name, ccu.table_name, ccu.column_name
+    SELECT kcu.column_name, ccu.table_schema, ccu.table_name, ccu.column_name
     FROM information_schema.table_constraints tc
     JOIN information_schema.key_column_usage kcu
         ON tc.constraint_name = kcu.constraint_name
         AND tc.table_schema = kcu.table_schema
     JOIN information_schema.constraint_column_usage ccu
         ON tc.constraint_name = ccu.constraint_name
-        AND tc.table_schema = ccu.table_schema
+        AND tc.constraint_schema = ccu.constraint_schema
     WHERE tc.constraint_type = 'FOREIGN KEY'
         AND tc.table_schema = %s AND tc.table_name = %s
 """
@@ -79,7 +90,7 @@ class _LinhaColuna(NamedTuple):
 def _construir_coluna(
     linha: _LinhaColuna,
     colunas_pk: set[str],
-    colunas_fk: dict[str, tuple[str, str]],
+    colunas_fk: dict[str, ReferenciaDeColuna],
 ) -> ColunaExtraida:
     """Combina uma linha de information_schema.columns com PK/FK já lidas."""
     referencia = colunas_fk.get(linha.nome)
@@ -90,37 +101,79 @@ def _construir_coluna(
         ),
         chave_primaria=linha.nome in colunas_pk,
         chave_estrangeira=referencia is not None,
-        tabela_referenciada=referencia[0] if referencia else None,
-        coluna_referenciada=referencia[1] if referencia else None,
+        referencia=referencia,
     )
 
 
 class ExtratorPostgres:
     """Extrai estrutura e amostra de tabelas de um banco Postgres."""
 
-    def __init__(self, dsn: str, configuracao: ConfiguracaoDeExtracao) -> None:
+    def __init__(
+        self,
+        dsn: str,
+        configuracao: ConfiguracaoDeExtracao,
+        max_conexoes: int = 8,
+    ) -> None:
         """Guarda os parâmetros de conexão — o pool só é criado no primeiro uso.
 
         Args:
             dsn: string de conexão do Postgres.
-            configuracao: parâmetros de concorrência e política de amostragem.
+            configuracao: política de amostragem, agnóstica de fonte.
+            max_conexoes: nº máximo de conexões simultâneas que este Postgres
+                aguenta com segurança — dimensiona o pool e o semáforo interno
+                que impede o esgotamento do pool sob chamadas concorrentes.
+
+        Raises:
+            ValueError: se `max_conexoes` não for positivo.
         """
+        if max_conexoes <= 0:
+            raise ValueError(f"max_conexoes deve ser positivo ({max_conexoes}).")
         self._dsn = dsn
         self._configuracao = configuracao
+        self._max_conexoes = max_conexoes
         self._pool: ThreadedConnectionPool | None = None
+        self._semaforo = threading.Semaphore(max_conexoes)
+        self._lock_pool = threading.Lock()
 
     def _obter_pool(self) -> Resultado[ThreadedConnectionPool]:
         """Cria o pool sob demanda, pra falha de conexão virar Falha, não exceção."""
         if self._pool is None:
-            try:
-                self._pool = ThreadedConnectionPool(
-                    minconn=1,
-                    maxconn=self._configuracao.max_conexoes,
-                    dsn=self._dsn,
-                )
-            except OperationalError as erro:
-                return Falha(f"Não foi possível conectar: {erro}")
+            with self._lock_pool:
+                if self._pool is None:
+                    try:
+                        self._pool = ThreadedConnectionPool(
+                            minconn=1,
+                            maxconn=self._max_conexoes,
+                            dsn=self._dsn,
+                        )
+                    except OperationalError as erro:
+                        return Falha(f"Não foi possível conectar: {erro}")
         return Sucesso(self._pool)
+
+    def listar_escopos(self) -> Resultado[list[str]]:
+        """Lista os escopos (schemas) disponíveis, ordenados por nome."""
+        resultado_pool = self._obter_pool()
+        if isinstance(resultado_pool, Falha):
+            return resultado_pool
+        pool = resultado_pool.valor
+        self._semaforo.acquire()
+        try:
+            conexao = pool.getconn()
+        except OperationalError as erro:
+            self._semaforo.release()
+            return Falha(f"Não foi possível conectar: {erro}")
+        try:
+            conexao.autocommit = True
+            with conexao.cursor() as cursor:
+                cursor.execute(_LISTAR_ESCOPOS_SQL)
+                escopos: list[str] = []
+                for linha_escopo in cursor.fetchall():
+                    nome_schema = linha_escopo[0]
+                    escopos.append(nome_schema)
+            return Sucesso(escopos)
+        finally:
+            pool.putconn(conexao)
+            self._semaforo.release()
 
     def listar_tabelas(self, schema: str) -> Resultado[list[tuple[str, str]]]:
         """Lista (schema, nome_tabela) do schema informado, ordenado por nome_tabela."""
@@ -128,9 +181,11 @@ class ExtratorPostgres:
         if isinstance(resultado_pool, Falha):
             return resultado_pool
         pool = resultado_pool.valor
+        self._semaforo.acquire()
         try:
             conexao = pool.getconn()
         except OperationalError as erro:
+            self._semaforo.release()
             return Falha(f"Não foi possível conectar: {erro}")
         try:
             conexao.autocommit = True
@@ -143,6 +198,7 @@ class ExtratorPostgres:
             return Sucesso(tabelas)
         finally:
             pool.putconn(conexao)
+            self._semaforo.release()
 
     def extrair_tabela(self, schema: str, tabela: str) -> Resultado[TabelaExtraida]:
         """Extrai estrutura, amostra e metadados de uma tabela específica."""
@@ -150,9 +206,11 @@ class ExtratorPostgres:
         if isinstance(resultado_pool, Falha):
             return resultado_pool
         pool = resultado_pool.valor
+        self._semaforo.acquire()
         try:
             conexao = pool.getconn()
         except OperationalError as erro:
+            self._semaforo.release()
             return Falha(f"Não foi possível conectar: {erro}")
         try:
             conexao.autocommit = True
@@ -173,12 +231,18 @@ class ExtratorPostgres:
                     colunas_pk.add(nome_coluna_pk)
 
                 cursor.execute(_CHAVES_ESTRANGEIRAS_SQL, (schema, tabela))
-                colunas_fk: dict[str, tuple[str, str]] = {}
+                colunas_fk: dict[str, ReferenciaDeColuna] = {}
                 for linha_fk in cursor.fetchall():
-                    nome_coluna_fk, tabela_referenciada, coluna_referenciada = linha_fk
-                    colunas_fk[nome_coluna_fk] = (
+                    (
+                        nome_coluna_fk,
+                        escopo_referenciado,
                         tabela_referenciada,
                         coluna_referenciada,
+                    ) = linha_fk
+                    colunas_fk[nome_coluna_fk] = ReferenciaDeColuna(
+                        nome_escopo=escopo_referenciado,
+                        nome_tabela=tabela_referenciada,
+                        nome_coluna=coluna_referenciada,
                     )
 
                 colunas: list[ColunaExtraida] = []
@@ -216,7 +280,7 @@ class ExtratorPostgres:
             return Sucesso(
                 TabelaExtraida(
                     nome_tabela=tabela,
-                    nome_schema=schema,
+                    nome_escopo=schema,
                     colunas=colunas,
                     total_linhas=total_linhas,
                     amostra=amostra,
@@ -225,3 +289,4 @@ class ExtratorPostgres:
             )
         finally:
             pool.putconn(conexao)
+            self._semaforo.release()
