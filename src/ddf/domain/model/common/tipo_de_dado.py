@@ -22,6 +22,8 @@ class CategoriaDeDado(str, Enum):
     DATE = "DATE"
     JSON = "JSON"
     UUID = "UUID"
+    ENUM = "ENUM"
+    SET = "SET"
     UNKNOWN = "UNKNOWN"
 
 
@@ -32,6 +34,8 @@ _ATRIBUTOS_PERMITIDOS: dict[CategoriaDeDado, set[str]] = {
     CategoriaDeDado.TIMESTAMP: {"com_timezone"},
     CategoriaDeDado.TIME: {"com_timezone"},
     CategoriaDeDado.FLOAT: {"com_precisao_dupla"},
+    CategoriaDeDado.ENUM: {"valores_permitidos"},
+    CategoriaDeDado.SET: {"valores_permitidos"},
 }
 
 
@@ -47,6 +51,7 @@ class TipoDeDado(BaseModel):
     tamanho_fixo: int | None = None
     com_timezone: bool | None = None
     com_precisao_dupla: bool | None = None
+    valores_permitidos: tuple[str, ...] | None = None
 
     @model_validator(mode="after")
     def _valida_atributos_por_categoria(self) -> Self:
@@ -61,6 +66,7 @@ class TipoDeDado(BaseModel):
                 "tamanho_fixo",
                 "com_timezone",
                 "com_precisao_dupla",
+                "valores_permitidos",
             )
             if getattr(self, campo) is not None
         }
