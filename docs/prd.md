@@ -49,7 +49,10 @@ entre reexecuções.
    ferramenta).
 2. **Idempotência:** rodar a ferramenta de novo sobre a mesma fonte, sem
    mudanças estruturais nela, nunca apaga ou sobrescreve curadoria humana já
-   feita anteriormente.
+   feita anteriormente. Quando há mudança estrutural (colunas adicionadas,
+   removidas ou alteradas), a reextração detecta e avisa explicitamente o
+   usuário sobre o que mudou, preservando a curadoria do que permaneceu
+   igual.
 3. **Confiabilidade dos testes sugeridos:** toda sugestão de teste de
    qualidade tem uma razão identificável e consistente — a mesma métrica
    sempre gera a mesma sugestão, nunca uma sugestão estatística ou
@@ -69,12 +72,15 @@ entre reexecuções.
 8. **Usabilidade**: A CLI deve ter a capacidade de operar com warnings a cada etapa
    e aguardar resposta do usuário para determinadas ações (confirmar escrita de overrides,
    e teste de string de conexão)
+9. **Desempenho:** a extração processa as tabelas da fonte em paralelo (não
+   sequencialmente), para que fontes com dezenas ou centenas de tabelas sejam
+   extraídas em tempo razoável.
 
 ## Restrições do produto
 
-1. **Fonte de dados suportada na v1: apenas bancos Postgres.** Suporte a
-   MariaDB, APIs ou arquivos fica para versões futuras, sem ordem de
-   prioridade definida ainda.
+1. **Fonte de dados suportada na v1: apenas bancos Postgres.** MariaDB é a
+   próxima fonte prevista (ordem de prioridade já definida); suporte a APIs
+   ou arquivos fica para avaliação futura, sem prioridade definida ainda.
 2. **Não é uma ferramenta de conexão ao vivo/contínua** — não monitora a fonte
    nem expõe um serviço consultável em tempo real (não é um MCP server); é
    uma ferramenta de análise sob demanda que produz artefatos versionáveis.
@@ -87,5 +93,7 @@ entre reexecuções.
 5. **Sem heurísticas de análise automática avançadas nesta versão** (como
    inferir relacionamentos por convenção de nome ou gerar glossário de
    domínio automaticamente) — fica para avaliação futura.
-6. **Sem testes de integração extensivos contra banco real** nesta fase, além
-   de uma verificação pontual de que a conexão com a fonte funciona.
+6. **Testes de integração contra banco real cobrem apenas a fonte Postgres**
+   nesta fase (via testcontainers) — extensão da mesma prática de teste para
+   novas fontes (ex. MariaDB) acompanha a chegada de cada fonte, não é
+   antecipada.

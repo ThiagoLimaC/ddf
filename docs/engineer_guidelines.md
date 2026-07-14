@@ -192,13 +192,17 @@ tipo declarado na variável acumuladora:
 
 ```python
 # Evitar
-colunas_fk = {linha[0]: (linha[1], linha[2]) for linha in cursor.fetchall()}
+colunas_fk = {linha[0]: (linha[1], linha[2], linha[3]) for linha in cursor.fetchall()}
 
 # Preferir
-colunas_fk: dict[str, tuple[str, str]] = {}
+colunas_fk: dict[str, ReferenciaDeColuna] = {}
 for linha in cursor.fetchall():
-    nome_coluna, tabela_referenciada, coluna_referenciada = linha
-    colunas_fk[nome_coluna] = (tabela_referenciada, coluna_referenciada)
+    nome_coluna, escopo_referenciado, tabela_referenciada, coluna_referenciada = linha
+    colunas_fk[nome_coluna] = ReferenciaDeColuna(
+        nome_escopo=escopo_referenciado,
+        nome_tabela=tabela_referenciada,
+        nome_coluna=coluna_referenciada,
+    )
 ```
 
 Uma comprehension de uma linha, sem desempacotamento posicional nem

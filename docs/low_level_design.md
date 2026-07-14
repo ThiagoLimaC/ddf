@@ -164,9 +164,18 @@ class ColunaExtraida(BaseModel):
     tipo_dado: TipoDeDado
     chave_primaria: bool = False
     chave_estrangeira: bool = False
-    tabela_referenciada: str | None = None
-    coluna_referenciada: str | None = None
+    referencia: ReferenciaDeColuna | None = None
 ```
+
+**`referencia: ReferenciaDeColuna | None`** — Value Object compartilhado
+(`domain/model/common/referencia_de_coluna.py`) com `nome_escopo`,
+`nome_tabela`, `nome_coluna`. Substituiu `tabela_referenciada`/
+`coluna_referenciada: str | None` soltos (issue #10, achado ao testar
+contra um schema real multi-escopo): sem o escopo de destino, uma FK que
+aponta pra uma tabela em **outro** escopo perdia essa informação — o modelo
+só guardava o nome da tabela, nunca em qual escopo ela estava, deixando a
+referência ambígua (ou errada) quando dois escopos tinham tabela com o
+mesmo nome.
 
 ### `TabelaExtraida`
 
@@ -203,8 +212,7 @@ class ColunaCurada(BaseModel):
     tipo_dado: TipoDeDado
     chave_primaria: bool = False
     chave_estrangeira: bool = False
-    tabela_referenciada: str | None = None
-    coluna_referenciada: str | None = None
+    referencia: ReferenciaDeColuna | None = None
     papel_de_negocio: str | None = None     # adicionado neste contexto
     regras_de_negocio: list[str] = Field(default_factory=list)
 ```
@@ -303,8 +311,7 @@ class ColunaAnalisada(BaseModel):
     tipo_dado: TipoDeDado
     chave_primaria: bool
     chave_estrangeira: bool
-    tabela_referenciada: str | None
-    coluna_referenciada: str | None
+    referencia: ReferenciaDeColuna | None
     papel_de_negocio: str | None
     regras_de_negocio: list[str]
     metricas: list[MetricaDeColuna] = Field(default_factory=list)
@@ -623,7 +630,13 @@ schemas de sistema do Postgres (`information_schema`, `pg_catalog`,
 **`extrair_tabela`:**
 1. Lê estrutura de `information_schema.columns` e constraints (`table_constraints`
    + `key_column_usage` para PK; + `constraint_column_usage` para o destino de
-   cada FK).
+   cada FK — inclui `ccu.table_schema` além de `ccu.table_name`/`ccu.column_name`,
+   pra `ReferenciaDeColuna` capturar FK que aponta pra outro escopo). O `JOIN`
+   entre `table_constraints` e `constraint_column_usage` casa por
+   `constraint_schema` (não `table_schema`) — `constraint_column_usage.table_schema`
+   identifica a tabela *referenciada* pela FK, não a tabela onde ela foi
+   declarada, então casar por `table_schema` excluiria toda FK cross-escopo
+   do resultado (issue #10).
 2. Mapeia tipos Postgres → `TipoDeDado` (tabela abaixo).
 3. Lê `total_linhas` via `pg_catalog.pg_class.reltuples` — **estimativa**, não
    `COUNT(*)` exato. `information_schema.tables` não expõe contagem de linhas
@@ -733,11 +746,14 @@ class SobrescritaDeTabela:
 **Comportamento:**
 1. Calcula hash SHA-256 sobre `(nome_escopo, nome_tabela, [(col.nome,
    col.tipo_dado.model_dump_json(), col.chave_primaria, col.chave_estrangeira,
-   col.tabela_referenciada, col.coluna_referenciada) for col in colunas])` —
-   `model_dump_json()` porque `TipoDeDado` é um `BaseModel`, não um
-   primitivo hasheável diretamente; inclui o destino da FK (issue #10, reabre
-   o hash original da #7/#8) pra detectar mudança de tabela/coluna
-   referenciada mesmo quando `chave_estrangeira` continua `True`.
+   col.referencia.model_dump_json() if col.referencia else "None") for col
+   in colunas])` — `model_dump_json()` porque `TipoDeDado`/`ReferenciaDeColuna`
+   são `BaseModel`, não primitivos hasheáveis diretamente; inclui o destino
+   completo da FK (escopo + tabela + coluna, issue #10 reabre o hash
+   original da #7/#8; mesma issue introduz `ReferenciaDeColuna` pra incluir
+   o escopo de destino, corrigindo perda de informação em FK cross-escopo)
+   pra detectar mudança de referência mesmo quando `chave_estrangeira`
+   continua `True`.
 2. Lê `diretorio_sobrescritas/<escopo>/<tabela>.yaml` se existir.
 3. **Hash bate:** aplica `papel_de_negocio`/`regras_de_negocio` do YAML.
 4. **Hash não bate (estrutura mudou):** atualiza skeleton preservando curadoria
