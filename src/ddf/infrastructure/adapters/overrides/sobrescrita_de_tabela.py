@@ -45,8 +45,11 @@ def _calcular_hash_estrutural(tabela: TabelaExtraida) -> str:
         partes.append(coluna.tipo_dado.model_dump_json())
         partes.append(str(coluna.chave_primaria))
         partes.append(str(coluna.chave_estrangeira))
-        partes.append(str(coluna.tabela_referenciada))
-        partes.append(str(coluna.coluna_referenciada))
+        partes.append(
+            coluna.referencia.model_dump_json()
+            if coluna.referencia is not None
+            else "None"
+        )
     bruto = "|".join(partes).encode("utf-8")
     return hashlib.sha256(bruto).hexdigest()
 

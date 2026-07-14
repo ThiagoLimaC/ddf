@@ -12,6 +12,7 @@ from ddf.domain.model.analysis import (
     iniciar_contexto,
 )
 from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
+from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
 from ddf.domain.model.common.tipo_de_dado import TipoDeDado
 from ddf.domain.model.curation import BancoCurado, ColunaCurada, TabelaCurada
 
@@ -223,8 +224,9 @@ def test_coluna_analisada_referencia_sem_fk_levanta_validation_error(
         ColunaAnalisada(
             nome="cliente_id",
             tipo_dado=tipo_integer,
-            tabela_referenciada="clientes",
-            coluna_referenciada="id",
+            referencia=ReferenciaDeColuna(
+                nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
+            ),
         )
 
 

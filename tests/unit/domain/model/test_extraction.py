@@ -5,6 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
+from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
 from ddf.domain.model.common.tipo_de_dado import TipoDeDado
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
 
@@ -16,13 +17,15 @@ def test_cria_coluna_extraida_com_chave_estrangeira(tipo_integer: TipoDeDado) ->
         nome="cliente_id",
         tipo_dado=tipo_integer,
         chave_estrangeira=True,
-        tabela_referenciada="clientes",
-        coluna_referenciada="id",
+        referencia=ReferenciaDeColuna(
+            nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
+        ),
     )
 
     assert coluna.chave_estrangeira is True
-    assert coluna.tabela_referenciada == "clientes"
-    assert coluna.coluna_referenciada == "id"
+    assert coluna.referencia == ReferenciaDeColuna(
+        nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
+    )
 
 
 def test_cria_tabela_extraida_com_amostra(
@@ -65,8 +68,9 @@ def test_coluna_extraida_referencia_sem_fk_levanta_validation_error(
         ColunaExtraida(
             nome="cliente_id",
             tipo_dado=tipo_integer,
-            tabela_referenciada="clientes",
-            coluna_referenciada="id",
+            referencia=ReferenciaDeColuna(
+                nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
+            ),
         )
 
 
@@ -129,5 +133,4 @@ def test_coluna_extraida_sem_chaves_usa_defaults(tipo_integer: TipoDeDado) -> No
 
     assert coluna.chave_primaria is False
     assert coluna.chave_estrangeira is False
-    assert coluna.tabela_referenciada is None
-    assert coluna.coluna_referenciada is None
+    assert coluna.referencia is None

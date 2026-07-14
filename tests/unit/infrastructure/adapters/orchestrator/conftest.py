@@ -99,8 +99,7 @@ class SobrescritaFake:
                     tipo_dado=coluna.tipo_dado,
                     chave_primaria=coluna.chave_primaria,
                     chave_estrangeira=coluna.chave_estrangeira,
-                    tabela_referenciada=coluna.tabela_referenciada,
-                    coluna_referenciada=coluna.coluna_referenciada,
+                    referencia=coluna.referencia,
                 )
             )
         return Sucesso(
