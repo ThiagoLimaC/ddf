@@ -88,6 +88,22 @@ def test_pool_e_reutilizado_entre_chamadas(
     pool_classe_fake.assert_called_once()
 
 
+def test_listar_escopos_retorna_escopos_ordenados(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Caminho feliz: listar_escopos devolve os schemas retornados pelo cursor."""
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.return_value = [("public",), ("vendas",)]
+    pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+    extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
+    resultado = extrator.listar_escopos()
+
+    assert resultado == Sucesso(["public", "vendas"])
+    pool_classe_fake.return_value.putconn.assert_called_once_with(conexao_fake)
+
+
 def test_listar_tabelas_retorna_tabelas_ordenadas(
     pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
 ) -> None:
@@ -137,7 +153,7 @@ def test_extrair_tabela_retorna_estrutura_completa(
     assert isinstance(resultado, Sucesso)
     tabela = resultado.valor
     assert tabela.nome_tabela == "pedidos"
-    assert tabela.nome_schema == "public"
+    assert tabela.nome_escopo == "public"
     assert tabela.total_linhas == 1000
     assert [coluna.nome for coluna in tabela.colunas] == ["id", "nome", "cliente_id"]
     assert tabela.colunas[0].chave_primaria is True
@@ -162,6 +178,21 @@ def test_max_conexoes_zero_levanta_value_error(
         ExtratorPostgres(
             dsn="postgresql://fake", configuracao=configuracao, max_conexoes=0
         )
+
+
+def test_listar_escopos_com_conexao_recusada_retorna_falha(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Erro esperado: falha ao obter conexão do pool vira Falha."""
+    pool_classe_fake.return_value.getconn.side_effect = OperationalError(
+        "connection refused"
+    )
+
+    extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
+    resultado = extrator.listar_escopos()
+
+    assert isinstance(resultado, Falha)
+    assert "Não foi possível conectar" in resultado.erro
 
 
 def test_listar_tabelas_com_dsn_invalido_retorna_falha_sem_lancar_excecao(
@@ -230,6 +261,21 @@ def test_extrair_tabela_com_conexao_recusada_retorna_falha(
 
 
 # Borda
+
+
+def test_listar_escopos_sem_escopos_de_usuario_retorna_lista_vazia(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: só schemas de sistema (já filtrados na query) retorna lista vazia."""
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.return_value = []
+    pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+    extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
+    resultado = extrator.listar_escopos()
+
+    assert resultado == Sucesso([])
 
 
 def test_primeiro_uso_concorrente_cria_pool_uma_unica_vez(

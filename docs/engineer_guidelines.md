@@ -127,6 +127,25 @@ um tipo ou componente próprio.
 - Um `Estagio` que não implementa o `Protocol` correspondente não compila
   contra `compor()` — verificado por `mypy --strict`.
 
+### Parâmetros de Port são positional-only
+
+Todo método de `Protocol` em `domain/ports/` que recebe parâmetros além de
+`self` declara esses parâmetros como positional-only (`/`):
+
+```python
+def extrair_tabela(self, escopo: str, tabela: str, /) -> Resultado[TabelaExtraida]: ...
+```
+
+**Por quê:** o nome do parâmetro na Port é só documentação — cada Extrator
+concreto pode (e deve, quando fizer sentido pro próprio dialeto) usar outro
+nome internamente (ex.: `ExtratorPostgres` usa `schema`, não `escopo`, porque
+é assim que Postgres chama a coisa). Sem `/`, `mypy --strict` aceita uma
+chamada por keyword contra uma variável tipada pela Port
+(`extrator.extrair_tabela(escopo=..., tabela=...)`) mesmo quando o adapter
+concreto por trás usa outro nome — e isso quebra em **runtime** com
+`TypeError`, sem o `mypy` avisar. Achado real na issue #34, quando a Port
+passou a usar `escopo` mas `ExtratorPostgres` manteve `schema` internamente.
+
 ### Analisadores e Geradores declaram dependências explicitamente
 
 Todo Analisador e Gerador declara `produz` e/ou `requer`:
@@ -221,11 +240,11 @@ só aparece quando o retorno não é `None` — retorno `None` é comunicado pel
 própria assinatura (`-> None`), repetir na docstring é redundante:
 
 ```python
-def extrair_tabela(self, schema: str, tabela: str) -> Resultado[TabelaExtraida]:
+def extrair_tabela(self, escopo: str, tabela: str) -> Resultado[TabelaExtraida]:
     """Extrai estrutura, amostra e metadados de uma tabela específica.
 
     Args:
-        schema: Nome do schema onde a tabela está.
+        escopo: Escopo (schema, database, etc.) onde a tabela está.
         tabela: Nome da tabela a ser extraída.
 
     Returns:

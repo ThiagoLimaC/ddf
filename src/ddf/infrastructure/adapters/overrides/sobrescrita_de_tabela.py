@@ -39,7 +39,7 @@ def _calcular_hash_estrutural(tabela: TabelaExtraida) -> str:
     Returns:
         Hash hexadecimal determinístico entre execuções.
     """
-    partes: list[str] = [tabela.nome_schema, tabela.nome_tabela]
+    partes: list[str] = [tabela.nome_escopo, tabela.nome_tabela]
     for coluna in tabela.colunas:
         partes.append(coluna.nome)
         partes.append(coluna.tipo_dado.model_dump_json())
@@ -63,7 +63,7 @@ class SobrescritaDeTabela:
 
         Args:
             diretorio_sobrescritas: diretório raiz de
-                `<diretorio_sobrescritas>/<schema>/<tabela>.yaml`.
+                `<diretorio_sobrescritas>/<escopo>/<tabela>.yaml`.
         """
         self._diretorio = diretorio_sobrescritas
 
@@ -79,7 +79,7 @@ class SobrescritaDeTabela:
             Falha se o YAML existente estiver malformado.
         """
         tabela_traduzida = self._traduzir(entrada)
-        caminho = self._diretorio / entrada.nome_schema / f"{entrada.nome_tabela}.yaml"
+        caminho = self._diretorio / entrada.nome_escopo / f"{entrada.nome_tabela}.yaml"
         hash_atual = _calcular_hash_estrutural(entrada)
 
         if not caminho.exists():
@@ -90,7 +90,7 @@ class SobrescritaDeTabela:
             override = _TabelaSobrescritaYAML.model_validate(bruto)
         except (yaml.YAMLError, ValidationError) as erro:
             return Falha(
-                f"Sobrescrita de '{entrada.nome_schema}.{entrada.nome_tabela}' "
+                f"Sobrescrita de '{entrada.nome_escopo}.{entrada.nome_tabela}' "
                 f"está malformada: {erro}"
             )
 
@@ -163,7 +163,7 @@ class SobrescritaDeTabela:
         self._escrever_yaml(entrada, caminho, hash_atual, override=None)
         aviso = Aviso(
             mensagem=(
-                f"Sobrescrita de '{entrada.nome_schema}.{entrada.nome_tabela}' "
+                f"Sobrescrita de '{entrada.nome_escopo}.{entrada.nome_tabela}' "
                 f"criada em '{caminho}' — preencha a curadoria e reexecute."
             ),
             origem=_ORIGEM,
@@ -191,12 +191,12 @@ class SobrescritaDeTabela:
             clausulas.append(f"colunas removidas: {removidas}")
         if clausulas:
             mensagem = (
-                f"Estrutura de '{entrada.nome_schema}.{entrada.nome_tabela}' mudou: "
+                f"Estrutura de '{entrada.nome_escopo}.{entrada.nome_tabela}' mudou: "
                 + "; ".join(clausulas)
             )
         else:
             mensagem = (
-                f"Estrutura de '{entrada.nome_schema}.{entrada.nome_tabela}' mudou "
+                f"Estrutura de '{entrada.nome_escopo}.{entrada.nome_tabela}' mudou "
                 "(nomes de coluna preservados, mas algum campo estrutural foi "
                 "alterado)."
             )

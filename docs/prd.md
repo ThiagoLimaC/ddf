@@ -10,15 +10,15 @@ versionáveis e curados por humanos: um **projeto dbt standalone e rodável** (o
 pitch) — `dbt_project.yml` + `sources.yml` + modelos de staging + `schema.yml`
 já populado com testes de qualidade sugeridos deterministicamente a partir das
 métricas extraídas; **documentação Markdown** legível por humano, navegável e
-versionável; **contexto denso em JSON** pensado para um agente de IA consumir o
-schema sem precisar de acesso ao banco; e **curadoria humana via overrides**, com
+versionável; **contexto denso em JSON** pensado para um agente de IA consumir
+a estrutura sem precisar de acesso ao banco; e **curadoria humana via overrides**, com
 papel de negócio e regras de tabelas/colunas editáveis em YAML e preservados
 entre reexecuções.
 
 ## Requisitos funcionais
 
 1. Como usuário, quero conectar a uma fonte de dados informando suas
-   credenciais de acesso e extrair a estrutura completa (schema) e métricas
+   credenciais de acesso e extrair a estrutura completa e métricas
    reais de uma vez, para documentar a fonte sem inspeção manual.
 2. Quero receber um projeto dbt pronto para rodar, com testes de qualidade já
    sugeridos a partir dos dados reais, para não precisar escrever
@@ -26,13 +26,13 @@ entre reexecuções.
 3. Quero documentação em Markdown legível e navegável gerada da mesma
    extração, sem custo adicional de trabalho manual.
 4. Quero um contexto denso e estruturado, pensado para um agente de IA
-   entender o schema sem precisar acessar o banco diretamente.
+   entender a estrutura sem precisar acessar o banco diretamente.
 5. Quero curar manualmente o significado de negócio e as regras de tabelas e
    colunas, e que essa curadoria não se perca quando eu reextrair a mesma
    fonte depois.
 6. Quero escolher, a cada execução, qual fonte extrair e quais artefatos
    gerar, sem depender de uma versão nova da ferramenta para isso.
-7. Quero que, quando algo der errado (fonte indisponível, schema não
+7. Quero que, quando algo der errado (fonte indisponível, escopo não
    encontrado, arquivo inválido), eu receba uma mensagem de erro clara
    explicando o que aconteceu, nunca um erro técnico incompreensível.
 8. Quero que o tipo de cada coluna extraída preserve a precisão real da fonte
@@ -54,7 +54,7 @@ entre reexecuções.
    qualidade tem uma razão identificável e consistente — a mesma métrica
    sempre gera a mesma sugestão, nunca uma sugestão estatística ou
    imprevisível.
-4. **Clareza em falhas:** falhas esperadas (fonte fora do ar, schema ausente,
+4. **Clareza em falhas:** falhas esperadas (fonte fora do ar, escopo ausente,
    arquivo malformado) são sempre comunicadas ao usuário de forma explícita e
    compreensível, nunca como uma falha técnica não tratada.
 5. **Extensibilidade:** oferecer suporte a uma nova fonte de dados ou a um

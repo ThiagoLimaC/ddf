@@ -89,25 +89,25 @@ class OrquestradorParalelo:
         return sucessos, falhas
 
     def extrair(
-        self, schemas: list[str], extrator: Extrator
+        self, escopos: list[str], extrator: Extrator
     ) -> Resultado[list[TabelaExtraida]]:
-        """Lista e extrai, em paralelo, todas as tabelas dos schemas informados.
+        """Lista e extrai, em paralelo, todas as tabelas dos escopos informados.
 
         Args:
-            schemas: schemas cujas tabelas serão listadas e extraídas.
+            escopos: escopos cujas tabelas serão listadas e extraídas.
             extrator: Extrator concreto usado para listar/extrair cada tabela.
 
         Returns:
-            Sucesso com list[TabelaExtraida] ordenada por (nome_schema,
-            nome_tabela), ou Falha agregada se algum schema/tabela falhou.
+            Sucesso com list[TabelaExtraida] ordenada por (nome_escopo,
+            nome_tabela), ou Falha agregada se algum escopo/tabela falhou.
         """
         pares_a_extrair: list[tuple[str, str]] = []
         falhas_listagem: list[tuple[str, str]] = []
 
-        for schema in schemas:
-            resultado_listagem = extrator.listar_tabelas(schema)
+        for escopo in escopos:
+            resultado_listagem = extrator.listar_tabelas(escopo)
             if isinstance(resultado_listagem, Falha):
-                falhas_listagem.append((schema, resultado_listagem.erro))
+                falhas_listagem.append((escopo, resultado_listagem.erro))
                 continue
             pares_a_extrair.extend(resultado_listagem.valor)
 
@@ -124,7 +124,7 @@ class OrquestradorParalelo:
                 _mensagem_falha_agregada("extrair", len(falhas), total, falhas)
             )
 
-        tabelas.sort(key=lambda tabela: (tabela.nome_schema, tabela.nome_tabela))
+        tabelas.sort(key=lambda tabela: (tabela.nome_escopo, tabela.nome_tabela))
         return Sucesso(tabelas)
 
     def aplicar_sobrescritas(
@@ -139,14 +139,14 @@ class OrquestradorParalelo:
             sobrescrita: Estagio que traduz TabelaExtraida em TabelaCurada.
 
         Returns:
-            Sucesso com BancoCurado (tabelas ordenadas por (nome_schema,
+            Sucesso com BancoCurado (tabelas ordenadas por (nome_escopo,
             nome_tabela)), ou Falha agregada se alguma tabela falhou.
         """
         total = len(tabelas)
         tabelas_curadas, falhas = self._executar_em_paralelo(
             tabelas,
             sobrescrita,
-            lambda tabela: f"{tabela.nome_schema}.{tabela.nome_tabela}",
+            lambda tabela: f"{tabela.nome_escopo}.{tabela.nome_tabela}",
         )
 
         if falhas:
@@ -157,6 +157,6 @@ class OrquestradorParalelo:
             )
 
         tabelas_curadas.sort(
-            key=lambda tabela: (tabela.nome_schema, tabela.nome_tabela)
+            key=lambda tabela: (tabela.nome_escopo, tabela.nome_tabela)
         )
         return Sucesso(BancoCurado(tabelas=tabelas_curadas))

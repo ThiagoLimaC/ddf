@@ -47,7 +47,7 @@ class TabelaExtraida(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     nome_tabela: str
-    nome_schema: str
+    nome_escopo: str
     colunas: list[ColunaExtraida]
     total_linhas: int = Field(ge=0)
     amostra: pl.DataFrame

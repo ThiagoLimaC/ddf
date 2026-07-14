@@ -55,7 +55,7 @@ class TabelaCurada(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     nome_tabela: str
-    nome_schema: str
+    nome_escopo: str
     colunas: list[ColunaCurada]
     total_linhas: int = Field(ge=0)
     papel_de_negocio: str | None = Field(
@@ -88,8 +88,8 @@ class BancoCurado(BaseModel):
 
     @model_validator(mode="after")
     def _valida_tabelas_unicas(self) -> Self:
-        """Garante que não há tabelas duplicadas (mesmo schema + nome) no banco."""
-        chaves = [(t.nome_schema, t.nome_tabela) for t in self.tabelas]
+        """Garante que não há tabelas duplicadas (mesmo escopo + nome) no banco."""
+        chaves = [(t.nome_escopo, t.nome_tabela) for t in self.tabelas]
         duplicadas = {chave for chave in chaves if chaves.count(chave) > 1}
         if duplicadas:
             raise ValueError(f"Tabelas duplicadas no banco: {sorted(duplicadas)}.")

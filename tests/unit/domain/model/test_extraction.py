@@ -33,7 +33,7 @@ def test_cria_tabela_extraida_com_amostra(
     """Caminho feliz: TabelaExtraida guarda colunas, amostra e metadados."""
     tabela = TabelaExtraida(
         nome_tabela="pedidos",
-        nome_schema="public",
+        nome_escopo="public",
         colunas=[
             ColunaExtraida(nome="id", tipo_dado=tipo_integer, chave_primaria=True)
         ],
@@ -79,7 +79,7 @@ def test_tabela_extraida_total_linhas_negativo_levanta_validation_error(
     with pytest.raises(ValidationError, match="total_linhas"):
         TabelaExtraida(
             nome_tabela="pedidos",
-            nome_schema="public",
+            nome_escopo="public",
             colunas=[ColunaExtraida(nome="id", tipo_dado=tipo_integer)],
             total_linhas=-1,
             amostra=amostra_df,
@@ -96,7 +96,7 @@ def test_tabela_extraida_com_colunas_duplicadas_levanta_validation_error(
     with pytest.raises(ValidationError, match="duplicados"):
         TabelaExtraida(
             nome_tabela="pedidos",
-            nome_schema="public",
+            nome_escopo="public",
             colunas=[
                 ColunaExtraida(nome="id", tipo_dado=tipo_integer),
                 ColunaExtraida(nome="id", tipo_dado=tipo_integer),
@@ -114,7 +114,7 @@ def test_tabela_extraida_sem_amostra_levanta_validation_error(
     with pytest.raises(ValidationError):
         TabelaExtraida(
             nome_tabela="pedidos",
-            nome_schema="public",
+            nome_escopo="public",
             colunas=[ColunaExtraida(nome="id", tipo_dado=tipo_integer)],
             total_linhas=10,
             amostra=None,

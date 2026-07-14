@@ -61,7 +61,7 @@ def test_cria_tabela_analisada_com_metricas(
     """Caminho feliz: TabelaAnalisada agrega colunas analisadas e métricas de tabela."""
     tabela = TabelaAnalisada(
         nome_tabela="pedidos",
-        nome_schema="public",
+        nome_escopo="public",
         colunas=[ColunaAnalisada(nome="id", tipo_dado=tipo_integer)],
         total_linhas=10,
         metadados_amostra=metadados_de_amostra,
@@ -78,14 +78,14 @@ def test_cria_banco_analisado_com_multiplas_tabelas(
     colunas = [ColunaAnalisada(nome="id", tipo_dado=tipo_integer)]
     pedidos = TabelaAnalisada(
         nome_tabela="pedidos",
-        nome_schema="public",
+        nome_escopo="public",
         colunas=colunas,
         total_linhas=10,
         metadados_amostra=metadados_de_amostra,
     )
     clientes = TabelaAnalisada(
         nome_tabela="clientes",
-        nome_schema="public",
+        nome_escopo="public",
         colunas=colunas,
         total_linhas=5,
         metadados_amostra=metadados_de_amostra,
@@ -102,7 +102,7 @@ def test_iniciar_contexto_cria_banco_analisado_vazio_a_partir_do_curado(
     """Caminho feliz: iniciar_contexto copia estrutura curada com metricas vazias."""
     tabela_curada = TabelaCurada(
         nome_tabela="pedidos",
-        nome_schema="public",
+        nome_escopo="public",
         colunas=[
             ColunaCurada(
                 nome="id", tipo_dado=tipo_integer, papel_de_negocio="Identificador"
@@ -235,7 +235,7 @@ def test_tabela_analisada_total_linhas_negativo_levanta_validation_error(
     with pytest.raises(ValidationError, match="total_linhas"):
         TabelaAnalisada(
             nome_tabela="pedidos",
-            nome_schema="public",
+            nome_escopo="public",
             colunas=[ColunaAnalisada(nome="id", tipo_dado=tipo_integer)],
             total_linhas=-1,
             metadados_amostra=metadados_de_amostra,
@@ -249,7 +249,7 @@ def test_tabela_analisada_com_colunas_duplicadas_levanta_validation_error(
     with pytest.raises(ValidationError, match="duplicados"):
         TabelaAnalisada(
             nome_tabela="pedidos",
-            nome_schema="public",
+            nome_escopo="public",
             colunas=[
                 ColunaAnalisada(nome="id", tipo_dado=tipo_integer),
                 ColunaAnalisada(nome="id", tipo_dado=tipo_integer),
@@ -262,10 +262,10 @@ def test_tabela_analisada_com_colunas_duplicadas_levanta_validation_error(
 def test_banco_analisado_com_tabelas_duplicadas_levanta_validation_error(
     tipo_integer: TipoDeDado, metadados_de_amostra: MetadadosDeAmostra
 ) -> None:
-    """Erro esperado: mesma (nome_schema, nome_tabela) duplicada no agregado."""
+    """Erro esperado: mesma (nome_escopo, nome_tabela) duplicada no agregado."""
     tabela = TabelaAnalisada(
         nome_tabela="pedidos",
-        nome_schema="public",
+        nome_escopo="public",
         colunas=[ColunaAnalisada(nome="id", tipo_dado=tipo_integer)],
         total_linhas=10,
         metadados_amostra=metadados_de_amostra,

@@ -175,7 +175,7 @@ class TabelaExtraida(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     nome_tabela: str
-    nome_schema: str
+    nome_escopo: str
     colunas: list[ColunaExtraida]
     total_linhas: int                  # total real (information_schema)
     amostra: pl.DataFrame              # sempre preenchida pelo Extrator
@@ -216,7 +216,7 @@ class TabelaCurada(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     nome_tabela: str
-    nome_schema: str
+    nome_escopo: str
     colunas: list[ColunaCurada]
     total_linhas: int
     papel_de_negocio: str | None = None
@@ -319,7 +319,7 @@ sem conflito. Um Gerador que quer `MetricasBaseColuna` filtra com
 ```python
 class TabelaAnalisada(BaseModel):
     nome_tabela: str
-    nome_schema: str
+    nome_escopo: str
     colunas: list[ColunaAnalisada]
     total_linhas: int
     papel_de_negocio: str | None
@@ -429,18 +429,32 @@ Todos os Ports abaixo (além de `EstrategiaDeAmostragem`, já existente) são
 ```python
 @runtime_checkable
 class Extrator(Protocol):
+    def listar_escopos(self) -> Resultado[list[str]]: ...
+    # lista os escopos disponíveis na fonte, ordenados por nome — schemas no
+    # Postgres/SQL Server, databases no MySQL/MariaDB, etc.
+
     def listar_tabelas(
         self,
-        schema: str,
+        escopo: str,
+        /,
     ) -> Resultado[list[tuple[str, str]]]: ...
-    # retorna list[(schema, nome_tabela)] ordenada por nome_tabela
+    # retorna list[(escopo, nome_tabela)] ordenada por nome_tabela
+    # parâmetro positional-only (`/`) — adapters concretos podem usar outro
+    # nome internamente (ex.: ExtratorPostgres usa "schema") sem quebrar em
+    # runtime uma chamada por keyword feita contra o tipo Extrator
 
     def extrair_tabela(
         self,
-        schema: str,
+        escopo: str,
         tabela: str,
+        /,
     ) -> Resultado[TabelaExtraida]: ...
 ```
+
+**Comportamento esperado de `listar_escopos`:**
+- Lista os escopos (schemas, databases, ou o que a fonte concreta usar como
+  nível de agrupamento acima de tabela) disponíveis na conexão atual.
+- `Falha("Não foi possível conectar: <detalhe>")` se conexão recusada.
 
 **Comportamento esperado de `extrair_tabela`:**
 - Lê estrutura de `information_schema` (colunas, tipos, PKs, FKs).
@@ -451,7 +465,11 @@ class Extrator(Protocol):
   gera SQL (ver `EstrategiaDeAmostragem` abaixo).
 - Constrói `TabelaExtraida` com `ColunaExtraida`s, `pl.DataFrame` e
   `MetadadosDeAmostra`.
-- `Falha("Schema 'x' ou tabela 'y' não encontrada.")` se inexistente.
+- `Falha` legível nomeando o escopo/tabela não encontrados se inexistente —
+  a redação exata é decisão de cada `Extrator` concreto, no vocabulário da
+  própria fonte (`ExtratorPostgres` usa "Schema 'x' ou tabela 'y' não
+  encontrada.", já que é assim que o Postgres chama a coisa; a Port não
+  manda mais essa string específica como contrato).
 - `Falha("Não foi possível conectar: <detalhe>")` se conexão recusada.
 
 ---
@@ -512,8 +530,9 @@ class Gerador(Protocol):
 class OrquestradorDeTabelas(Protocol):
     def extrair(
         self,
-        schemas: list[str],
+        escopos: list[str],
         extrator: Extrator,
+        /,
     ) -> Resultado[list[TabelaExtraida]]: ...
 
     def aplicar_sobrescritas(
@@ -524,7 +543,7 @@ class OrquestradorDeTabelas(Protocol):
 ```
 
 **Comportamento esperado de `extrair`:**
-- Lista tabelas via `extrator.listar_tabelas()` para cada schema.
+- Lista tabelas via `extrator.listar_tabelas()` para cada escopo.
 - Distribui `extrair_tabela()` em workers paralelos.
 - Erros de tabelas individuais são acumulados — não interrompem as demais.
 - Se qualquer tabela falhou: `Falha` com resumo de todas as falhas.
@@ -593,6 +612,10 @@ de `max_conexoes` simultaneamente — se o `OrquestradorParalelo` disparar mais
 chamadas concorrentes do que o pool aguenta, o excesso **espera** no
 semáforo em vez de estourar `PoolError` (que `ThreadedConnectionPool.getconn()`
 levantaria imediatamente, sem bloquear, caso o pool estivesse esgotado).
+
+**`listar_escopos`:** query em `information_schema.schemata`, excluindo os
+schemas de sistema do Postgres (`information_schema`, `pg_catalog`,
+`pg_toast`, `pg_temp_%`, `pg_toast_temp_%`).
 
 **`listar_tabelas`:** query em `information_schema.tables` filtrando
 `table_type = 'BASE TABLE'`.
@@ -708,14 +731,14 @@ class SobrescritaDeTabela:
 ```
 
 **Comportamento:**
-1. Calcula hash SHA-256 sobre `(nome_schema, nome_tabela, [(col.nome,
+1. Calcula hash SHA-256 sobre `(nome_escopo, nome_tabela, [(col.nome,
    col.tipo_dado.model_dump_json(), col.chave_primaria, col.chave_estrangeira,
    col.tabela_referenciada, col.coluna_referenciada) for col in colunas])` —
    `model_dump_json()` porque `TipoDeDado` é um `BaseModel`, não um
    primitivo hasheável diretamente; inclui o destino da FK (issue #10, reabre
    o hash original da #7/#8) pra detectar mudança de tabela/coluna
    referenciada mesmo quando `chave_estrangeira` continua `True`.
-2. Lê `diretorio_sobrescritas/<schema>/<tabela>.yaml` se existir.
+2. Lê `diretorio_sobrescritas/<escopo>/<tabela>.yaml` se existir.
 3. **Hash bate:** aplica `papel_de_negocio`/`regras_de_negocio` do YAML.
 4. **Hash não bate (estrutura mudou):** atualiza skeleton preservando curadoria
    de colunas que ainda existem (por nome); emite um único `Aviso` por tabela,
@@ -740,7 +763,7 @@ colunas:
 ```
 
 **Erro esperado:** YAML malformado →
-`Falha("Sobrescrita de '<schema>.<tabela>' está malformada: <detalhe>")`.
+`Falha("Sobrescrita de '<escopo>.<tabela>' está malformada: <detalhe>")`.
 
 **Possível melhoria futura (não implementada):** um hash por coluna (além do
 hash da tabela) permitiria apontar exatamente qual coluna teve a estrutura
@@ -760,7 +783,7 @@ class OrquestradorParalelo:
 
     def extrair(
         self,
-        schemas: list[str],
+        escopos: list[str],
         extrator: Extrator,
     ) -> Resultado[list[TabelaExtraida]]: ...
 
@@ -780,23 +803,23 @@ a fonte. Cada `Extrator` concreto já garante isso internamente (ver
 métodos do Port.
 
 **Comportamento de `extrair`:**
-1. Lista tabelas por schema — sequencial (operação leve). Falha de listagem
-   de um schema acumula (mesma política do item 3), não aborta os demais.
-2. Distribui `extrair_tabela(schema, tabela)` em `ThreadPoolExecutor(max_trabalhadores)`
-   para todos os pares `(schema, tabela)` listados com sucesso.
+1. Lista tabelas por escopo — sequencial (operação leve). Falha de listagem
+   de um escopo acumula (mesma política do item 3), não aborta os demais.
+2. Distribui `extrair_tabela(escopo, tabela)` em `ThreadPoolExecutor(max_trabalhadores)`
+   para todos os pares `(escopo, tabela)` listados com sucesso.
 3. Acumula erros — de listagem e de extração — sem interromper outros workers.
-4. `Falha("Falha ao extrair N de M tabelas: <schema.tabela ou schema>: <erro>; ...")`
-   se qualquer schema/tabela falhou — sem dado parcial dos que tiveram
+4. `Falha("Falha ao extrair N de M tabelas: <escopo.tabela ou escopo>: <erro>; ...")`
+   se qualquer escopo/tabela falhou — sem dado parcial dos que tiveram
    sucesso na mesma execução. Senão, `Sucesso` com `list[TabelaExtraida]`
-   ordenada por `(nome_schema, nome_tabela)` (`ThreadPoolExecutor` não
+   ordenada por `(nome_escopo, nome_tabela)` (`ThreadPoolExecutor` não
    garante ordem de conclusão).
 
 **Comportamento de `aplicar_sobrescritas`:**
 1. Distribui `sobrescrita(tabela)` em `ThreadPoolExecutor(max_trabalhadores)`.
 2. Acumula erros sem interromper outros workers.
-3. `Falha("Falha ao aplicar sobrescritas em N de M tabelas: <schema.tabela>: <erro>; ...")`
+3. `Falha("Falha ao aplicar sobrescritas em N de M tabelas: <escopo.tabela>: <erro>; ...")`
    se qualquer tabela falhou; senão `Sucesso` com `BancoCurado` cujas
-   `tabelas` estão ordenadas por `(nome_schema, nome_tabela)`.
+   `tabelas` estão ordenadas por `(nome_escopo, nome_tabela)`.
 
 ---
 
@@ -867,9 +890,9 @@ class GeradorMarkdown:
     def __call__(self, entrada: BancoAnalisado, destino: Path) -> Resultado[None]: ...
 ```
 
-**Saída:** `<destino>/<schema>/<tabela>.md` por tabela + `<destino>/index.md`.
+**Saída:** `<destino>/<escopo>/<tabela>.md` por tabela + `<destino>/index.md`.
 
-**Conteúdo por arquivo:** nome, schema, `total_linhas`, `completude`,
+**Conteúdo por arquivo:** nome, escopo, `total_linhas`, `completude`,
 `papel_de_negocio`, `regras_de_negocio`, tabela de colunas com métricas, nota
 de rodapé com `MetadadosDeAmostra` (estratégia, N amostrado, M total).
 
@@ -939,7 +962,7 @@ def executar(config: Path | None) -> None:
 1. Escolher fonte (`questionary.select` com `FONTES_REGISTRADAS`).
 2. Informar credenciais (DSN ou campos separados).
 3. Testar conexão — retry até 3 tentativas em falha.
-4. Escolher schema(s) (`questionary.checkbox`).
+4. Escolher escopo(s) (`questionary.checkbox`).
 5. Extrair em paralelo via `OrquestradorParalelo` — exibe spinner + avisos.
 6. Gerar skeletons de sobrescrita — exibe caminhos gerados.
 7. **Pausa:** `questionary.confirm("Preencheu as sobrescritas? Pressione Enter para continuar.")`.

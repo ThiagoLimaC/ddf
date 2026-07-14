@@ -13,7 +13,7 @@ def tabela_extraida() -> TabelaExtraida:
     """Retorna uma TabelaExtraida simples (id + nome) para os testes de Sobrescrita."""
     return TabelaExtraida(
         nome_tabela="clientes",
-        nome_schema="public",
+        nome_escopo="public",
         colunas=[
             ColunaExtraida(
                 nome="id",

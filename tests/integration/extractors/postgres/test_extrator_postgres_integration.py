@@ -32,7 +32,7 @@ def test_extrair_tabela_retorna_estrutura_completa(
     assert isinstance(resultado, Sucesso)
     tabela = resultado.valor
     assert tabela.nome_tabela == "pedidos"
-    assert tabela.nome_schema == "public"
+    assert tabela.nome_escopo == "public"
     assert tabela.total_linhas == 3
     assert [coluna.nome for coluna in tabela.colunas] == ["id", "cliente_id", "valor"]
 
@@ -65,6 +65,17 @@ def test_extrair_tabela_mapeia_coluna_com_timezone(
     assert coluna_criado_em.nome == "criado_em"
     assert coluna_criado_em.tipo_dado.categoria == CategoriaDeDado.TIMESTAMP
     assert coluna_criado_em.tipo_dado.com_timezone is True
+
+
+def test_listar_escopos_retorna_escopos_semeados(
+    dsn: str, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Caminho feliz: listar_escopos retorna os schemas semeados, ordenados."""
+    extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+
+    resultado = extrator.listar_escopos()
+
+    assert resultado == Sucesso(["public", "vazio"])
 
 
 # Erro esperado

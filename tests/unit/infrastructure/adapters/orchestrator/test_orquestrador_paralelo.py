@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 def test_extrair_lista_e_extrai_tabelas_ordenadas(
     construir_extrator_fake: Callable[..., ExtratorFake],
 ) -> None:
-    """Caminho feliz: extrai tabelas de múltiplos schemas, resultado ordenado."""
+    """Caminho feliz: extrai tabelas de múltiplos escopos, resultado ordenado."""
     extrator = construir_extrator_fake(
         {
             "vendas": Sucesso([("vendas", "pedidos"), ("vendas", "clientes")]),
@@ -35,7 +35,7 @@ def test_extrair_lista_e_extrai_tabelas_ordenadas(
     resultado = orquestrador.extrair(["vendas", "estoque"], extrator)
 
     assert isinstance(resultado, Sucesso)
-    identificadores = [(t.nome_schema, t.nome_tabela) for t in resultado.valor]
+    identificadores = [(t.nome_escopo, t.nome_tabela) for t in resultado.valor]
     assert identificadores == [
         ("estoque", "produtos"),
         ("vendas", "clientes"),
@@ -59,7 +59,7 @@ def test_aplicar_sobrescritas_agrega_banco_curado_ordenado(
 
     assert isinstance(resultado, Sucesso)
     assert isinstance(resultado.valor, BancoCurado)
-    identificadores = [(t.nome_schema, t.nome_tabela) for t in resultado.valor.tabelas]
+    identificadores = [(t.nome_escopo, t.nome_tabela) for t in resultado.valor.tabelas]
     assert identificadores == [
         ("estoque", "produtos"),
         ("vendas", "clientes"),
@@ -93,14 +93,14 @@ def test_extrair_com_tabela_com_falha_retorna_falha_agregada(
     assert "vendas.clientes: conexão perdida" in resultado.erro
 
 
-def test_extrair_com_falha_de_listagem_de_schema_acumula(
+def test_extrair_com_falha_de_listagem_de_escopo_acumula(
     construir_extrator_fake: Callable[..., ExtratorFake],
 ) -> None:
-    """Erro esperado: schema com erro de listagem acumula, não aborta os demais."""
+    """Erro esperado: escopo com erro de listagem acumula, não aborta os demais."""
     extrator = construir_extrator_fake(
         {
             "vendas": Sucesso([("vendas", "pedidos")]),
-            "financeiro_typo": Falha("Schema 'financeiro_typo' não encontrado."),
+            "financeiro_typo": Falha("Escopo 'financeiro_typo' não encontrado."),
         }
     )
     orquestrador = OrquestradorParalelo(max_trabalhadores=4)
@@ -109,7 +109,7 @@ def test_extrair_com_falha_de_listagem_de_schema_acumula(
 
     assert isinstance(resultado, Falha)
     assert "Falha ao extrair 1 de 2 tabelas" in resultado.erro
-    assert "financeiro_typo: Schema 'financeiro_typo' não encontrado." in resultado.erro
+    assert "financeiro_typo: Escopo 'financeiro_typo' não encontrado." in resultado.erro
 
 
 def test_aplicar_sobrescritas_com_falha_retorna_falha_agregada(
@@ -136,10 +136,10 @@ def test_aplicar_sobrescritas_com_falha_retorna_falha_agregada(
 # Borda
 
 
-def test_extrair_lista_de_schemas_vazia_retorna_sucesso_vazio(
+def test_extrair_lista_de_escopos_vazia_retorna_sucesso_vazio(
     construir_extrator_fake: Callable[..., ExtratorFake],
 ) -> None:
-    """Borda: lista de schemas vazia retorna Sucesso com lista vazia."""
+    """Borda: lista de escopos vazia retorna Sucesso com lista vazia."""
     extrator = construir_extrator_fake({})
     orquestrador = OrquestradorParalelo(max_trabalhadores=4)
 

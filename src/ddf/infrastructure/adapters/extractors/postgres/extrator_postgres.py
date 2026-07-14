@@ -15,6 +15,15 @@ from ddf.infrastructure.adapters.extractors.postgres.mapeamento_de_tipos import 
     mapear_tipo_postgres,
 )
 
+_LISTAR_ESCOPOS_SQL = """
+    SELECT schema_name
+    FROM information_schema.schemata
+    WHERE schema_name NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+      AND schema_name NOT LIKE 'pg_temp_%'
+      AND schema_name NOT LIKE 'pg_toast_temp_%'
+    ORDER BY schema_name
+"""
+
 _LISTAR_TABELAS_SQL = """
     SELECT table_schema, table_name
     FROM information_schema.tables
@@ -141,6 +150,31 @@ class ExtratorPostgres:
                         return Falha(f"Não foi possível conectar: {erro}")
         return Sucesso(self._pool)
 
+    def listar_escopos(self) -> Resultado[list[str]]:
+        """Lista os escopos (schemas) disponíveis, ordenados por nome."""
+        resultado_pool = self._obter_pool()
+        if isinstance(resultado_pool, Falha):
+            return resultado_pool
+        pool = resultado_pool.valor
+        self._semaforo.acquire()
+        try:
+            conexao = pool.getconn()
+        except OperationalError as erro:
+            self._semaforo.release()
+            return Falha(f"Não foi possível conectar: {erro}")
+        try:
+            conexao.autocommit = True
+            with conexao.cursor() as cursor:
+                cursor.execute(_LISTAR_ESCOPOS_SQL)
+                escopos: list[str] = []
+                for linha_escopo in cursor.fetchall():
+                    nome_schema = linha_escopo[0]
+                    escopos.append(nome_schema)
+            return Sucesso(escopos)
+        finally:
+            pool.putconn(conexao)
+            self._semaforo.release()
+
     def listar_tabelas(self, schema: str) -> Resultado[list[tuple[str, str]]]:
         """Lista (schema, nome_tabela) do schema informado, ordenado por nome_tabela."""
         resultado_pool = self._obter_pool()
@@ -240,7 +274,7 @@ class ExtratorPostgres:
             return Sucesso(
                 TabelaExtraida(
                     nome_tabela=tabela,
-                    nome_schema=schema,
+                    nome_escopo=schema,
                     colunas=colunas,
                     total_linhas=total_linhas,
                     amostra=amostra,

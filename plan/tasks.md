@@ -40,7 +40,7 @@
 
 - [ ] `ColunaExtraida` — `nome`, `tipo_dado`, `chave_primaria`,
       `chave_estrangeira`, `tabela_referenciada`, `coluna_referenciada`
-- [ ] `TabelaExtraida` — `nome_tabela`, `nome_schema`,
+- [ ] `TabelaExtraida` — `nome_tabela`, `nome_escopo`,
       `colunas: list[ColunaExtraida]`, `total_linhas`,
       `amostra: pl.DataFrame | None`, `metadados_amostra`;
       `arbitrary_types_allowed=True`
@@ -81,13 +81,15 @@
 
 ### Ports (`domain/ports/`)
 
-- [ ] `Extrator` (Protocol) — `listar_tabelas(schema) -> Resultado[list[tuple]]`,
-      `extrair_tabela(schema, tabela) -> Resultado[TabelaExtraida]`
+- [x] `Extrator` (Protocol) — `listar_escopos() -> Resultado[list[str]]`,
+      `listar_tabelas(escopo) -> Resultado[list[tuple]]`,
+      `extrair_tabela(escopo, tabela) -> Resultado[TabelaExtraida]`
+      (issue #34: `listar_escopos` adicionado, vocabulário generalizado de `schema` para `escopo`)
 - [ ] `Analisador` (Protocol) — `produz`, `requer`,
       `__call__(ContextoDeAnalise) -> Resultado[ContextoDeAnalise]`
 - [ ] `Gerador` (Protocol) — `requer`,
       `__call__(BancoAnalisado, destino) -> Resultado[None]`
-- [ ] `OrquestradorDeTabelas` (Protocol) — `extrair(schemas, extrator) ->
+- [ ] `OrquestradorDeTabelas` (Protocol) — `extrair(escopos, extrator) ->
       Resultado[list[TabelaExtraida]]` + `aplicar_sobrescritas(tabelas, sobrescrita)
       -> Resultado[BancoCurado]`
 - [ ] `EstrategiaDeAmostragem` (Protocol) — `nome: str`, `percentual: float`
@@ -141,7 +143,7 @@
 - [x] Teste de integração em `tests/integration/extractors/postgres/` via
       `testcontainers` (Postgres 16 real, descartável por sessão de teste):
       `listar_tabelas` (feliz/borda) e `extrair_tabela` (feliz completo incl.
-      `TIMESTAMP com_timezone`, erro schema/tabela inexistente, erro DSN
+      `TIMESTAMP com_timezone`, erro escopo/tabela inexistente, erro DSN
       inválido)
 - [x] `testcontainers[postgres]` adicionado ao grupo dev do `pyproject.toml`
       (junto de `types-psycopg2`, necessário pra `mypy --strict` reconhecer
@@ -151,7 +153,7 @@
 
 - [ ] `SobrescritaDeTabela(Estagio[TabelaExtraida, TabelaCurada])`:
   - Hash SHA-256 de campos estruturais
-  - Leitura de `overrides/<schema>/<tabela>.yaml`
+  - Leitura de `overrides/<escopo>/<tabela>.yaml`
   - Geração de skeleton na primeira execução
   - Atualização idempotente (preserva curadoria, emite `Aviso` por mudança)
   - YAML malformado → `Falha` com mensagem clara
@@ -200,7 +202,7 @@
 - [ ] `validar_dependencias(analisadores, geradores) -> Resultado[None]` em
       `cli/validacao.py` — verifica `produz`/`requer` antes de qualquer execução
 - [ ] Fluxo completo do wizard:
-      escolher fonte → conectar (retry 3x) → escolher schemas →
+      escolher fonte → conectar (retry 3x) → escolher escopos →
       extrair (paralelo) → gerar skeletons → **pausa para curadoria** →
       aplicar sobrescritas → validar dependências → analisar → escolher
       geradores → escolher destino → confirmar → executar
