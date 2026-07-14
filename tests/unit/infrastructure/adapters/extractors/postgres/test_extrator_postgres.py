@@ -8,6 +8,7 @@ import pytest
 from psycopg2 import OperationalError
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
+from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado
 from ddf.domain.ports.extrator import Extrator
 from ddf.domain.shared.resultado import Falha, Sucesso
@@ -136,7 +137,7 @@ def test_extrair_tabela_retorna_estrutura_completa(
             ("cliente_id", "integer", None, None, None),
         ],  # colunas
         [("id",)],  # PK
-        [("cliente_id", "clientes", "id")],  # FK
+        [("cliente_id", "vendas", "clientes", "id")],  # FK (schema cross-referenciado)
         [(1, "ana", 10), (2, "bia", 20)],  # amostra
     ]
     cursor_fake.fetchone.return_value = (1000.0,)
@@ -160,8 +161,9 @@ def test_extrair_tabela_retorna_estrutura_completa(
     assert tabela.colunas[1].tipo_dado.categoria == CategoriaDeDado.VARCHAR
     assert tabela.colunas[1].tipo_dado.tamanho_maximo == 100
     assert tabela.colunas[2].chave_estrangeira is True
-    assert tabela.colunas[2].tabela_referenciada == "clientes"
-    assert tabela.colunas[2].coluna_referenciada == "id"
+    assert tabela.colunas[2].referencia == ReferenciaDeColuna(
+        nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
+    )
     assert tabela.metadados_amostra.estrategia == "percentual_de_linhas"
     assert tabela.metadados_amostra.tamanho_amostra == 2
     pool_classe_fake.return_value.putconn.assert_called_once_with(conexao_fake)

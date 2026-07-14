@@ -1,6 +1,7 @@
 """Testes de integração de ExtratorPostgres contra Postgres real (testcontainers)."""
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
+from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado
 from ddf.domain.shared.resultado import Falha, Sucesso
 from ddf.infrastructure.adapters.extractors.postgres.extrator_postgres import (
@@ -40,8 +41,9 @@ def test_extrair_tabela_retorna_estrutura_completa(
     assert coluna_id.chave_primaria is True
 
     assert coluna_fk.chave_estrangeira is True
-    assert coluna_fk.tabela_referenciada == "clientes"
-    assert coluna_fk.coluna_referenciada == "id"
+    assert coluna_fk.referencia == ReferenciaDeColuna(
+        nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
+    )
 
     assert coluna_valor.tipo_dado.categoria == CategoriaDeDado.NUMERIC
     assert coluna_valor.tipo_dado.precisao == 10
@@ -75,7 +77,7 @@ def test_listar_escopos_retorna_escopos_semeados(
 
     resultado = extrator.listar_escopos()
 
-    assert resultado == Sucesso(["public", "vazio"])
+    assert resultado == Sucesso(["pessoa", "public", "rh", "vazio"])
 
 
 # Erro esperado
@@ -108,6 +110,28 @@ def test_extrair_tabela_com_dsn_invalido_retorna_falha(
 
 
 # Borda
+
+
+def test_extrair_tabela_com_fk_cross_schema_captura_escopo_de_destino(
+    dsn: str, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: FK apontando pra tabela em outro schema preserva o escopo de destino.
+
+    Reproduz o cenário que motivou esta correção (ex.: humanresources.employee
+    referenciando person.person no AdventureWorks): rh.funcionario referencia
+    pessoa.pessoa, escopo diferente do escopo de origem (rh).
+    """
+    extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+
+    resultado = extrator.extrair_tabela("rh", "funcionario")
+
+    assert isinstance(resultado, Sucesso)
+    coluna_fk = resultado.valor.colunas[1]
+    assert coluna_fk.nome == "pessoa_id"
+    assert coluna_fk.chave_estrangeira is True
+    assert coluna_fk.referencia == ReferenciaDeColuna(
+        nome_escopo="pessoa", nome_tabela="pessoa", nome_coluna="id"
+    )
 
 
 def test_listar_tabelas_schema_vazio_retorna_lista_vazia(

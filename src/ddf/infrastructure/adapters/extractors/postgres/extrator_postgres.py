@@ -9,6 +9,7 @@ from psycopg2.pool import ThreadedConnectionPool
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
+from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.extractors.postgres.mapeamento_de_tipos import (
@@ -50,14 +51,14 @@ _CHAVES_PRIMARIAS_SQL = """
 """
 
 _CHAVES_ESTRANGEIRAS_SQL = """
-    SELECT kcu.column_name, ccu.table_name, ccu.column_name
+    SELECT kcu.column_name, ccu.table_schema, ccu.table_name, ccu.column_name
     FROM information_schema.table_constraints tc
     JOIN information_schema.key_column_usage kcu
         ON tc.constraint_name = kcu.constraint_name
         AND tc.table_schema = kcu.table_schema
     JOIN information_schema.constraint_column_usage ccu
         ON tc.constraint_name = ccu.constraint_name
-        AND tc.table_schema = ccu.table_schema
+        AND tc.constraint_schema = ccu.constraint_schema
     WHERE tc.constraint_type = 'FOREIGN KEY'
         AND tc.table_schema = %s AND tc.table_name = %s
 """
@@ -89,7 +90,7 @@ class _LinhaColuna(NamedTuple):
 def _construir_coluna(
     linha: _LinhaColuna,
     colunas_pk: set[str],
-    colunas_fk: dict[str, tuple[str, str]],
+    colunas_fk: dict[str, ReferenciaDeColuna],
 ) -> ColunaExtraida:
     """Combina uma linha de information_schema.columns com PK/FK já lidas."""
     referencia = colunas_fk.get(linha.nome)
@@ -100,8 +101,7 @@ def _construir_coluna(
         ),
         chave_primaria=linha.nome in colunas_pk,
         chave_estrangeira=referencia is not None,
-        tabela_referenciada=referencia[0] if referencia else None,
-        coluna_referenciada=referencia[1] if referencia else None,
+        referencia=referencia,
     )
 
 
@@ -231,12 +231,18 @@ class ExtratorPostgres:
                     colunas_pk.add(nome_coluna_pk)
 
                 cursor.execute(_CHAVES_ESTRANGEIRAS_SQL, (schema, tabela))
-                colunas_fk: dict[str, tuple[str, str]] = {}
+                colunas_fk: dict[str, ReferenciaDeColuna] = {}
                 for linha_fk in cursor.fetchall():
-                    nome_coluna_fk, tabela_referenciada, coluna_referenciada = linha_fk
-                    colunas_fk[nome_coluna_fk] = (
+                    (
+                        nome_coluna_fk,
+                        escopo_referenciado,
                         tabela_referenciada,
                         coluna_referenciada,
+                    ) = linha_fk
+                    colunas_fk[nome_coluna_fk] = ReferenciaDeColuna(
+                        nome_escopo=escopo_referenciado,
+                        nome_tabela=tabela_referenciada,
+                        nome_coluna=coluna_referenciada,
                     )
 
                 colunas: list[ColunaExtraida] = []
