@@ -39,7 +39,7 @@
 ### Extraction Context (`domain/model/extraction.py`)
 
 - [ ] `ColunaExtraida` — `nome`, `tipo_dado`, `chave_primaria`,
-      `chave_estrangeira`, `tabela_referenciada`, `coluna_referenciada`
+      `chave_estrangeira`, `referencia: ReferenciaDeColuna | None`
 - [ ] `TabelaExtraida` — `nome_tabela`, `nome_escopo`,
       `colunas: list[ColunaExtraida]`, `total_linhas`,
       `amostra: pl.DataFrame | None`, `metadados_amostra`;

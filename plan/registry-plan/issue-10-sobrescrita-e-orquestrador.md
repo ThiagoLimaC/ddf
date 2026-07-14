@@ -143,6 +143,58 @@
 > `listar_tabelas` já usa (`ORDER BY table_name`). O paralelismo real da
 > execução não muda, só a agregação final vira determinística.
 
+> **`ReferenciaDeColuna` — bug de FK cross-escopo encontrado testando contra
+> AdventureWorks real (múltiplos schemas), corrigido dentro do escopo desta
+> mesma issue.** `ColunaExtraida`/`ColunaCurada`/`ColunaAnalisada` guardavam
+> `tabela_referenciada: str | None` + `coluna_referenciada: str | None` —
+> nunca o escopo de destino da FK. Diagnóstico inicial: a query de FK em
+> `ExtratorPostgres` (`_CHAVES_ESTRANGEIRAS_SQL`) só selecionava
+> `ccu.table_name`/`ccu.column_name`, nunca `ccu.table_schema` — pareceria só
+> faltar uma coluna no `SELECT`.
+>
+> **Diagnóstico revisado (banca de revisão, achado do engenheiro-de-dados):**
+> o problema real era mais grave e estava no `JOIN`, não no `SELECT`. A
+> condição `AND tc.table_schema = ccu.table_schema` exigia que a tabela
+> referenciada estivesse no mesmo schema da tabela de origem —
+> `constraint_column_usage.table_schema` identifica a tabela *referenciada*
+> pela FK, não a tabela onde o constraint foi declarado (`table_schema` em
+> `table_constraints` é sempre o schema da tabela filha). Validado
+> empiricamente contra Postgres 15 real com o cenário
+> `humanresources.employee → person.person`: a query retornava **0 linhas**,
+> tanto antes quanto na primeira versão desta correção — a FK cross-schema
+> não ficava ambígua, ela desaparecia por completo (`chave_estrangeira`
+> virava `False` silenciosamente). Corrigido trocando a condição de join por
+> `tc.constraint_schema = ccu.constraint_schema` (chave que identifica o
+> constraint em si, sempre igual entre `tc`/`ccu` independente de onde a
+> tabela referenciada mora).
+>
+> **Correção de modelo: `ReferenciaDeColuna`, Value Object novo em
+> `domain/model/common/`.** Carrega `nome_escopo`/`nome_tabela`/`nome_coluna`
+> juntos, plenamente qualificando o destino de uma FK. Substitui os dois
+> campos soltos em `ColunaExtraida`/`ColunaCurada`/`ColunaAnalisada` por um
+> único `referencia: ReferenciaDeColuna | None`. Vive em `domain/model/common/`
+> (não em `extraction.py`) porque é compartilhado pelos três Bounded
+> Contexts — mesma categoria de `TipoDeDado`/`MetadadosDeAmostra`.
+>
+> **Não virou um Value Object de identidade de tabela** (`nome_escopo`+
+> `nome_tabela` continuam soltos em `TabelaExtraida`/`TabelaCurada`/etc.).
+> Cogitado (e descartado) generalizar também `nome_escopo`/`nome_tabela` num
+> `IdentificadorDeTabela` único — descartado porque tocaria todo lugar que já
+> usa os dois campos soltos (`OrquestradorParalelo`, `SobrescritaDeTabela`,
+> validadores de `BancoCurado`/`BancoAnalisado`, todos os testes) sem
+> resolver nenhum bug real hoje — só reorganização estética.
+>
+> **`_traduzir`/`iniciar_contexto` não precisaram de nenhuma mudança.** Como
+> `ColunaExtraida`/`ColunaCurada`/`ColunaAnalisada` usam o mesmo nome de
+> campo (`referencia`) com o mesmo tipo (`ReferenciaDeColuna | None`), o
+> padrão `model_dump()`/`model_validate()` já em uso (`SobrescritaDeTabela._traduzir`,
+> `iniciar_contexto`) propaga o campo automaticamente.
+>
+> **Reproduzido em teste de integração contra Postgres real**
+> (`tests/integration/.../conftest.py`, schemas `pessoa`/`rh` — espelha
+> `humanresources`/`person` do AdventureWorks), provando a correção do
+> `JOIN` de fato, não só o mapeamento linha→`ReferenciaDeColuna`.
+
 ## Escopo desta issue
 
 - [x] `domain/model/common/configuracao_de_extracao.py` — remove
@@ -184,6 +236,19 @@
       (só `estrategia`), `ExtratorPostgres` (semáforo interno, `max_conexoes`
       no construtor), hash da `SobrescritaDeTabela` (6 campos) e
       `OrquestradorParalelo` (mensagem agregada, ordenação)
+- [x] `domain/model/common/referencia_de_coluna.py` — `ReferenciaDeColuna`
+      (`nome_escopo`, `nome_tabela`, `nome_coluna`, frozen)
+- [x] `domain/model/extraction.py`/`curation.py`/`analysis.py` —
+      `ColunaExtraida`/`ColunaCurada`/`ColunaAnalisada.referencia`,
+      validador simplificado
+- [x] `infrastructure/adapters/extractors/postgres/extrator_postgres.py` —
+      `_CHAVES_ESTRANGEIRAS_SQL` ganha `ccu.table_schema`; `JOIN` entre
+      `table_constraints`/`constraint_column_usage` corrigido pra casar por
+      `constraint_schema` (não `table_schema`); `_construir_coluna` e o loop
+      de `colunas_fk` em `extrair_tabela` constroem `ReferenciaDeColuna`
+- [x] `infrastructure/adapters/overrides/sobrescrita_de_tabela.py` —
+      `_calcular_hash_estrutural` usa `coluna.referencia.model_dump_json()`
+- [x] `docs/engineer_guidelines.md` — atualizado
 
 ## Testes
 
@@ -219,6 +284,28 @@
       parcial retornado, demais chamadas não interrompidas
 - [x] Borda: lista de schemas/tabelas vazia → `Sucesso` com lista/`BancoCurado`
       vazios
+
+### `tests/unit/domain/model/{test_extraction,test_curation,test_analysis}.py` (extensão)
+
+- [x] Testes de FK atualizados pra `ReferenciaDeColuna`
+
+### `tests/unit/infrastructure/adapters/extractors/postgres/test_extrator_postgres.py` (extensão)
+
+- [x] Caso de FK cross-escopo (`nome_escopo="vendas"` diferente do escopo da
+      tabela, `"public"`), provando o mapeamento linha→`ReferenciaDeColuna`
+      (cursor fake — não exercita o `JOIN` real, por isso não pegou o bug do
+      diagnóstico revisado acima)
+
+### `tests/integration/extractors/postgres/test_extrator_postgres_integration.py` (extensão)
+
+- [x] Novo teste de borda
+      `test_extrair_tabela_com_fk_cross_schema_captura_escopo_de_destino`
+      contra Postgres real (schemas `pessoa`/`rh` no fixture), prova a
+      correção do `JOIN` de fato — não só o mapeamento
+
+### `tests/unit/infrastructure/adapters/orchestrator/conftest.py` (extensão)
+
+- [x] `SobrescritaFake` atualizado pra `ReferenciaDeColuna`
 
 ## Pendências para próximas issues (não resolvidas aqui)
 
