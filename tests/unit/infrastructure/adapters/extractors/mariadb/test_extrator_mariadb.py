@@ -1,0 +1,417 @@
+"""Testes de ExtratorMariaDB."""
+
+from unittest.mock import MagicMock
+
+import pymysql
+import pytest
+
+from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
+from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado
+from ddf.domain.ports.extrator import Extrator
+from ddf.domain.shared.resultado import Falha, Sucesso
+from ddf.infrastructure.adapters.extractors.mariadb.extrator_mariadb import (
+    ExtratorMariaDB,
+)
+
+# Caminho feliz
+
+
+def test_extrator_mariadb_satisfaz_extrator(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Caminho feliz: ExtratorMariaDB conforma ao Port Extrator (Open/Closed)."""
+    extrator = ExtratorMariaDB(
+        host="fake", user="root", password="senha", configuracao=configuracao
+    )
+
+    assert isinstance(extrator, Extrator)
+
+
+def test_construcao_nao_cria_pool_imediatamente(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Caminho feliz: __init__ não abre conexão — pool é preguiçoso."""
+    ExtratorMariaDB(
+        host="fake", user="root", password="senha", configuracao=configuracao
+    )
+
+    pool_classe_fake.assert_not_called()
+
+
+def test_primeiro_uso_cria_pool_com_parametros_corretos(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Caminho feliz: pool criado com os parâmetros de conexão corretos no 1º uso."""
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.return_value = []
+    pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+    extrator = ExtratorMariaDB(
+        host="fake",
+        user="root",
+        password="senha",
+        configuracao=configuracao,
+        port=3307,
+        max_conexoes=5,
+    )
+    extrator.listar_tabelas("vendas")
+
+    pool_classe_fake.assert_called_once_with(
+        creator=pymysql,
+        mincached=1,
+        maxcached=5,
+        maxconnections=5,
+        blocking=True,
+        host="fake",
+        port=3307,
+        user="root",
+        password="senha",
+        autocommit=True,
+    )
+
+
+def test_pool_e_reutilizado_entre_chamadas(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Caminho feliz: chamadas seguintes reaproveitam o pool já criado."""
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.return_value = []
+    pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+    extrator = ExtratorMariaDB(
+        host="fake", user="root", password="senha", configuracao=configuracao
+    )
+    extrator.listar_tabelas("vendas")
+    extrator.listar_tabelas("vendas")
+
+    pool_classe_fake.assert_called_once()
+
+
+def test_listar_escopos_retorna_escopos_ordenados(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Caminho feliz: listar_escopos devolve os databases retornados pelo cursor."""
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.return_value = [("vendas",), ("rh",)]
+    pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+    extrator = ExtratorMariaDB(
+        host="fake", user="root", password="senha", configuracao=configuracao
+    )
+    resultado = extrator.listar_escopos()
+
+    assert resultado == Sucesso(["vendas", "rh"])
+    conexao_fake.close.assert_called_once()
+
+
+def test_listar_tabelas_retorna_tabelas_ordenadas(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Caminho feliz: listar_tabelas devolve as linhas retornadas pelo cursor."""
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.return_value = [
+        ("vendas", "clientes"),
+        ("vendas", "pedidos"),
+    ]
+    pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+    extrator = ExtratorMariaDB(
+        host="fake", user="root", password="senha", configuracao=configuracao
+    )
+    resultado = extrator.listar_tabelas("vendas")
+
+    assert resultado == Sucesso([("vendas", "clientes"), ("vendas", "pedidos")])
+    conexao_fake.close.assert_called_once()
+
+
+def test_extrair_tabela_retorna_estrutura_completa(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Caminho feliz: colunas, PK, FK, total_linhas, amostra e promoção de BOOLEAN."""
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.side_effect = [
+        [
+            ("id", "int", "int(11)", None, None, None),
+            ("nome", "varchar", "varchar(100)", 100, None, None),
+            ("ativo", "tinyint", "tinyint(1)", None, None, None),
+            ("cliente_id", "int", "int(11)", None, None, None),
+        ],  # colunas
+        [("id",)],  # PK
+        [("cliente_id", "vendas", "clientes", "id")],  # FK
+        [(1, "ana", 1, 10), (2, "bia", 0, 20)],  # amostra
+    ]
+    cursor_fake.fetchone.return_value = (1000,)
+    cursor_fake.description = [("id",), ("nome",), ("ativo",), ("cliente_id",)]
+    pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+    extrator = ExtratorMariaDB(
+        host="fake", user="root", password="senha", configuracao=configuracao
+    )
+    resultado = extrator.extrair_tabela("vendas", "pedidos")
+
+    assert isinstance(resultado, Sucesso)
+    tabela = resultado.valor
+    assert tabela.nome_tabela == "pedidos"
+    assert tabela.nome_escopo == "vendas"
+    assert tabela.total_linhas == 1000
+    assert [coluna.nome for coluna in tabela.colunas] == [
+        "id",
+        "nome",
+        "ativo",
+        "cliente_id",
+    ]
+    assert tabela.colunas[0].chave_primaria is True
+    assert tabela.colunas[1].tipo_dado.categoria == CategoriaDeDado.VARCHAR
+    assert tabela.colunas[1].tipo_dado.tamanho_maximo == 100
+    assert tabela.colunas[2].tipo_dado.categoria == CategoriaDeDado.BOOLEAN
+    assert tabela.colunas[3].chave_estrangeira is True
+    assert tabela.colunas[3].referencia == ReferenciaDeColuna(
+        nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
+    )
+    assert tabela.metadados_amostra.estrategia == "percentual_de_linhas"
+    assert tabela.metadados_amostra.tamanho_amostra == 2
+    conexao_fake.close.assert_called_once()
+
+
+def test_tinyint_um_unsigned_tambem_e_candidato_a_boolean(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Caminho feliz: tinyint(1) unsigned com amostra só 0/1 também é promovido."""
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.side_effect = [
+        [("ativo", "tinyint", "tinyint(1) unsigned", None, None, None)],  # colunas
+        [],  # PK
+        [],  # FK
+        [(1,), (0,), (1,)],  # amostra
+    ]
+    cursor_fake.fetchone.return_value = (3,)
+    cursor_fake.description = [("ativo",)]
+    pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+    extrator = ExtratorMariaDB(
+        host="fake", user="root", password="senha", configuracao=configuracao
+    )
+    resultado = extrator.extrair_tabela("vendas", "flags")
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor.colunas[0].tipo_dado.categoria == CategoriaDeDado.BOOLEAN
+
+
+# Erro esperado
+
+
+def test_max_conexoes_zero_levanta_value_error(
+    configuracao: ConfiguracaoDeExtracao,
+) -> None:
+    """Erro esperado: max_conexoes=0 é rejeitado cedo, antes de qualquer conexão."""
+    with pytest.raises(ValueError, match="max_conexoes"):
+        ExtratorMariaDB(
+            host="fake",
+            user="root",
+            password="senha",
+            configuracao=configuracao,
+            max_conexoes=0,
+        )
+
+
+def test_listar_escopos_com_pool_indisponivel_retorna_falha(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Erro esperado: falha ao criar o pool (host inválido) vira Falha."""
+    pool_classe_fake.side_effect = pymysql.err.OperationalError("connection refused")
+
+    extrator = ExtratorMariaDB(
+        host="invalido", user="root", password="senha", configuracao=configuracao
+    )
+    resultado = extrator.listar_escopos()
+
+    assert isinstance(resultado, Falha)
+    assert "Não foi possível conectar" in resultado.erro
+
+
+def test_listar_tabelas_com_conexao_recusada_retorna_falha(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Erro esperado: falha ao obter conexão do pool (já criado) vira Falha."""
+    pool_classe_fake.return_value.connection.side_effect = pymysql.err.OperationalError(
+        "connection refused"
+    )
+
+    extrator = ExtratorMariaDB(
+        host="fake", user="root", password="senha", configuracao=configuracao
+    )
+    resultado = extrator.listar_tabelas("vendas")
+
+    assert isinstance(resultado, Falha)
+    assert "Não foi possível conectar" in resultado.erro
+
+
+def test_extrair_tabela_inexistente_retorna_falha(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Erro esperado: escopo/tabela sem colunas em information_schema vira Falha."""
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.return_value = []
+    pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+    extrator = ExtratorMariaDB(
+        host="fake", user="root", password="senha", configuracao=configuracao
+    )
+    resultado = extrator.extrair_tabela("vendas", "inexistente")
+
+    assert isinstance(resultado, Falha)
+    assert "não encontrada" in resultado.erro
+    conexao_fake.close.assert_called_once()
+
+
+# Borda
+
+
+def test_extrair_tabela_com_duas_fks_na_mesma_coluna_emite_aviso(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: coluna com 2 FKs mantém só a última e emite Aviso não-fatal."""
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.side_effect = [
+        [("entidade_id", "int", "int(11)", None, None, None)],  # colunas
+        [],  # PK
+        [
+            ("entidade_id", "vendas", "clientes", "id"),
+            ("entidade_id", "vendas", "fornecedores", "id"),
+        ],  # FK duplicada na mesma coluna
+        [],  # amostra
+    ]
+    cursor_fake.fetchone.return_value = (0,)
+    cursor_fake.description = [("entidade_id",)]
+    pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+    extrator = ExtratorMariaDB(
+        host="fake", user="root", password="senha", configuracao=configuracao
+    )
+    resultado = extrator.extrair_tabela("vendas", "movimentos")
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor.colunas[0].referencia == ReferenciaDeColuna(
+        nome_escopo="vendas", nome_tabela="fornecedores", nome_coluna="id"
+    )
+    assert len(resultado.avisos) == 1
+    assert resultado.avisos[0].origem == "ExtratorMariaDB"
+
+
+def test_listar_escopos_sem_databases_de_usuario_retorna_lista_vazia(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: só databases de sistema (já filtrados na query) retorna lista vazia."""
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.return_value = []
+    pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+    extrator = ExtratorMariaDB(
+        host="fake", user="root", password="senha", configuracao=configuracao
+    )
+    resultado = extrator.listar_escopos()
+
+    assert resultado == Sucesso([])
+
+
+def test_extrair_tabela_com_table_rows_nulo_usa_total_linhas_zero(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: TABLE_ROWS NULL (engine sem estatística) vira total_linhas=0."""
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.side_effect = [
+        [("id", "int", "int(11)", None, None, None)],  # colunas
+        [("id",)],  # PK
+        [],  # FK
+        [],  # amostra
+    ]
+    cursor_fake.fetchone.return_value = (None,)
+    cursor_fake.description = [("id",)]
+    pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+    extrator = ExtratorMariaDB(
+        host="fake", user="root", password="senha", configuracao=configuracao
+    )
+    resultado = extrator.extrair_tabela("vendas", "tabela_nova")
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor.total_linhas == 0
+    assert resultado.valor.metadados_amostra.tamanho_amostra == 0
+
+
+def test_tinyint_um_com_valor_atipico_na_amostra_mantem_integer(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: tinyint(1) com valor fora de {0,1} na amostra não é promovido."""
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.side_effect = [
+        [("contador", "tinyint", "tinyint(1)", None, None, None)],  # colunas
+        [],  # PK
+        [],  # FK
+        [(0,), (1,), (2,)],  # amostra com valor atípico
+    ]
+    cursor_fake.fetchone.return_value = (3,)
+    cursor_fake.description = [("contador",)]
+    pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+    extrator = ExtratorMariaDB(
+        host="fake", user="root", password="senha", configuracao=configuracao
+    )
+    resultado = extrator.extrair_tabela("vendas", "contadores")
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor.colunas[0].tipo_dado.categoria == CategoriaDeDado.INTEGER
+
+
+def test_tinyint_um_com_amostra_vazia_mantem_integer(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: tinyint(1) sem nenhum valor amostrado não é promovido (sem evidência)."""
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.side_effect = [
+        [("ativo", "tinyint", "tinyint(1)", None, None, None)],  # colunas
+        [],  # PK
+        [],  # FK
+        [],  # amostra vazia
+    ]
+    cursor_fake.fetchone.return_value = (0,)
+    cursor_fake.description = [("ativo",)]
+    pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+    extrator = ExtratorMariaDB(
+        host="fake", user="root", password="senha", configuracao=configuracao
+    )
+    resultado = extrator.extrair_tabela("vendas", "flags")
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor.colunas[0].tipo_dado.categoria == CategoriaDeDado.INTEGER
+
+
+def test_listar_tabelas_sem_tabelas_retorna_lista_vazia(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: escopo sem tabelas retorna Sucesso com lista vazia."""
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.return_value = []
+    pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+    extrator = ExtratorMariaDB(
+        host="fake", user="root", password="senha", configuracao=configuracao
+    )
+    resultado = extrator.listar_tabelas("vendas")
+
+    assert resultado == Sucesso([])
