@@ -205,9 +205,12 @@
 
 - [ ] `AnalisadorDeMetricasDeColuna(Analisador)`:
   - `produz = [MetricasBaseColuna]`, `requer = []`
-  - Calcula métricas via Polars: `percentual_nulo`, `percentual_unico`,
-    `minimo`, `maximo`, `valores_frequentes`, `formato_detectado` (regex:
-    email/cpf/cnpj/phone/cep, threshold 80%)
+  - Calcula métricas via Polars: `percentual_nulo`, `percentual_unico`
+    (nulos excluídos do numerador), `minimo`, `maximo`, `valores_frequentes`
+    (`list[tuple[str, int]]`, nulos excluídos, desempate `count desc, valor
+    asc`), `formato_detectado` (regex email/cpf/cnpj/phone/cep, threshold
+    80% **e** mínimo absoluto de 20 valores não-nulos)
+  - Guarda `tamanho_amostra == 0` antes de qualquer divisão
   - Normaliza com `MetadadosDeAmostra.tamanho_amostra`
   - Seta `tabela.amostra = None` após processar cada tabela (libera memória)
   - `Aviso` se `tamanho_amostra < 100`
