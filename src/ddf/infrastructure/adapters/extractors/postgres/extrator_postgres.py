@@ -12,6 +12,9 @@ from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
+from ddf.infrastructure.adapters.extractors.construir_colunas_fk import (
+    construir_colunas_fk,
+)
 from ddf.infrastructure.adapters.extractors.postgres.mapeamento_de_tipos import (
     mapear_tipo_postgres,
 )
@@ -56,9 +59,13 @@ _CHAVES_ESTRANGEIRAS_SQL = """
     JOIN information_schema.key_column_usage kcu
         ON tc.constraint_name = kcu.constraint_name
         AND tc.table_schema = kcu.table_schema
-    JOIN information_schema.constraint_column_usage ccu
-        ON tc.constraint_name = ccu.constraint_name
-        AND tc.constraint_schema = ccu.constraint_schema
+    JOIN information_schema.referential_constraints rc
+        ON tc.constraint_name = rc.constraint_name
+        AND tc.constraint_schema = rc.constraint_schema
+    JOIN information_schema.key_column_usage ccu
+        ON rc.unique_constraint_name = ccu.constraint_name
+        AND rc.unique_constraint_schema = ccu.constraint_schema
+        AND kcu.position_in_unique_constraint = ccu.ordinal_position
     WHERE tc.constraint_type = 'FOREIGN KEY'
         AND tc.table_schema = %s AND tc.table_name = %s
 """
@@ -231,19 +238,9 @@ class ExtratorPostgres:
                     colunas_pk.add(nome_coluna_pk)
 
                 cursor.execute(_CHAVES_ESTRANGEIRAS_SQL, (schema, tabela))
-                colunas_fk: dict[str, ReferenciaDeColuna] = {}
-                for linha_fk in cursor.fetchall():
-                    (
-                        nome_coluna_fk,
-                        escopo_referenciado,
-                        tabela_referenciada,
-                        coluna_referenciada,
-                    ) = linha_fk
-                    colunas_fk[nome_coluna_fk] = ReferenciaDeColuna(
-                        nome_escopo=escopo_referenciado,
-                        nome_tabela=tabela_referenciada,
-                        nome_coluna=coluna_referenciada,
-                    )
+                colunas_fk, avisos = construir_colunas_fk(
+                    cursor.fetchall(), origem="ExtratorPostgres"
+                )
 
                 colunas: list[ColunaExtraida] = []
                 for linha_coluna in linhas_colunas:
@@ -285,7 +282,8 @@ class ExtratorPostgres:
                     total_linhas=total_linhas,
                     amostra=amostra,
                     metadados_amostra=metadados_amostra,
-                )
+                ),
+                avisos=avisos,
             )
         finally:
             pool.putconn(conexao)

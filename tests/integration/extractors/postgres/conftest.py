@@ -15,6 +15,7 @@ _SETUP_SQL = """
     CREATE SCHEMA vazio;
     CREATE SCHEMA pessoa;
     CREATE SCHEMA rh;
+    CREATE SCHEMA geografia;
 
     CREATE TABLE public.clientes (
         id SERIAL PRIMARY KEY,
@@ -53,6 +54,31 @@ _SETUP_SQL = """
 
     ANALYZE pessoa.pessoa;
     ANALYZE rh.funcionario;
+
+    -- FK composta (2 colunas): prova que o pareamento coluna-local <->
+    -- coluna-referenciada não vira produto cartesiano (bug encontrado na
+    -- revisão da #35, pré-existente desde a #9). Schema próprio (não
+    -- public/pessoa/rh) pra não afetar os testes que já fixam a lista de
+    -- tabelas/escopos existentes.
+    CREATE TABLE geografia.pais (
+        codigo CHAR(2) NOT NULL,
+        estado CHAR(2) NOT NULL,
+        PRIMARY KEY (codigo, estado)
+    );
+
+    CREATE TABLE geografia.filial (
+        id SERIAL PRIMARY KEY,
+        pais_codigo CHAR(2) NOT NULL,
+        pais_estado CHAR(2) NOT NULL,
+        FOREIGN KEY (pais_codigo, pais_estado)
+            REFERENCES geografia.pais(codigo, estado)
+    );
+
+    INSERT INTO geografia.pais (codigo, estado) VALUES ('BR', 'SP'), ('BR', 'RJ');
+    INSERT INTO geografia.filial (pais_codigo, pais_estado) VALUES ('BR', 'SP');
+
+    ANALYZE geografia.pais;
+    ANALYZE geografia.filial;
 """
 
 

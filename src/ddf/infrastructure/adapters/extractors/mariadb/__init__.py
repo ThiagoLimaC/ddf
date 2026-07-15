@@ -1,0 +1,1 @@
+"""Adapters específicos do MariaDB."""

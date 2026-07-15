@@ -1,0 +1,153 @@
+"""Testes de mapear_tipo_mariadb."""
+
+from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado
+from ddf.infrastructure.adapters.extractors.mariadb.mapeamento_de_tipos import (
+    mapear_tipo_mariadb,
+)
+
+# Caminho feliz
+
+
+def test_mapeia_varchar_com_tamanho_maximo() -> None:
+    """Caminho feliz: varchar(n) vira VARCHAR com tamanho_maximo."""
+    tipo = mapear_tipo_mariadb("varchar", "varchar(255)", tamanho_maximo=255)
+
+    assert tipo.categoria == CategoriaDeDado.VARCHAR
+    assert tipo.tamanho_maximo == 255
+
+
+def test_mapeia_char_com_tamanho_fixo() -> None:
+    """Caminho feliz: char(n) vira CHAR com tamanho_fixo."""
+    tipo = mapear_tipo_mariadb("char", "char(10)", tamanho_maximo=10)
+
+    assert tipo.categoria == CategoriaDeDado.CHAR
+    assert tipo.tamanho_fixo == 10
+
+
+def test_mapeia_variantes_de_text_para_text() -> None:
+    """Caminho feliz: tinytext/text/mediumtext/longtext compartilham TEXT."""
+    for data_type in ("tinytext", "text", "mediumtext", "longtext"):
+        assert (
+            mapear_tipo_mariadb(data_type, data_type).categoria
+            == CategoriaDeDado.TEXT
+        )
+
+
+def test_mapeia_decimal_para_numeric_com_precisao_e_escala() -> None:
+    """Caminho feliz: decimal(p,s) vira NUMERIC com precisao e escala."""
+    tipo = mapear_tipo_mariadb("decimal", "decimal(10,2)", precisao=10, escala=2)
+
+    assert tipo.categoria == CategoriaDeDado.NUMERIC
+    assert tipo.precisao == 10
+    assert tipo.escala == 2
+
+
+def test_mapeia_variantes_de_int_para_integer() -> None:
+    """Caminho feliz: tinyint/smallint/mediumint/int compartilham INTEGER."""
+    for data_type, column_type in (
+        ("tinyint", "tinyint(1)"),
+        ("tinyint", "tinyint(4)"),
+        ("smallint", "smallint(6)"),
+        ("mediumint", "mediumint(9)"),
+        ("int", "int(11)"),
+    ):
+        assert (
+            mapear_tipo_mariadb(data_type, column_type).categoria
+            == CategoriaDeDado.INTEGER
+        )
+
+
+def test_mapeia_bigint_para_bigint() -> None:
+    """Caminho feliz: bigint vira BIGINT."""
+    assert (
+        mapear_tipo_mariadb("bigint", "bigint(20)").categoria
+        == CategoriaDeDado.BIGINT
+    )
+
+
+def test_mapeia_float_e_double_com_precisao_dupla() -> None:
+    """Caminho feliz: float/double compartilham FLOAT, variam em largura."""
+    float_ = mapear_tipo_mariadb("float", "float")
+    double = mapear_tipo_mariadb("double", "double")
+
+    assert float_.categoria == CategoriaDeDado.FLOAT
+    assert float_.com_precisao_dupla is False
+    assert double.categoria == CategoriaDeDado.FLOAT
+    assert double.com_precisao_dupla is True
+
+
+def test_mapeia_datetime_e_timestamp_com_timezone() -> None:
+    """Caminho feliz: datetime/timestamp viram TIMESTAMP com com_timezone distinto."""
+    datetime_ = mapear_tipo_mariadb("datetime", "datetime")
+    timestamp = mapear_tipo_mariadb("timestamp", "timestamp")
+
+    assert datetime_.categoria == CategoriaDeDado.TIMESTAMP
+    assert datetime_.com_timezone is False
+    assert timestamp.categoria == CategoriaDeDado.TIMESTAMP
+    assert timestamp.com_timezone is True
+
+
+def test_mapeia_date_para_date() -> None:
+    """Caminho feliz: date vira DATE."""
+    assert mapear_tipo_mariadb("date", "date").categoria == CategoriaDeDado.DATE
+
+
+def test_mapeia_time_para_time() -> None:
+    """Caminho feliz: time vira TIME."""
+    assert mapear_tipo_mariadb("time", "time").categoria == CategoriaDeDado.TIME
+
+
+def test_mapeia_json_para_json() -> None:
+    """Caminho feliz: json vira JSON, mesmo sendo alias de longtext no MariaDB."""
+    assert mapear_tipo_mariadb("json", "longtext").categoria == CategoriaDeDado.JSON
+
+
+def test_mapeia_uuid_para_uuid() -> None:
+    """Caminho feliz: uuid (MariaDB 10.7+) vira UUID."""
+    assert mapear_tipo_mariadb("uuid", "uuid").categoria == CategoriaDeDado.UUID
+
+
+def test_mapeia_enum_com_valores_permitidos() -> None:
+    """Caminho feliz: enum(...) vira ENUM com valores_permitidos extraídos."""
+    tipo = mapear_tipo_mariadb("enum", "enum('ativo','inativo')")
+
+    assert tipo.categoria == CategoriaDeDado.ENUM
+    assert tipo.valores_permitidos == ("ativo", "inativo")
+
+
+def test_mapeia_set_com_valores_permitidos() -> None:
+    """Caminho feliz: set(...) vira SET com valores_permitidos extraídos."""
+    tipo = mapear_tipo_mariadb("set", "set('leitura','escrita')")
+
+    assert tipo.categoria == CategoriaDeDado.SET
+    assert tipo.valores_permitidos == ("leitura", "escrita")
+
+
+def test_tinyint_um_nunca_vira_boolean() -> None:
+    """Caminho feliz: tinyint(1) vira INTEGER nesta função — nunca BOOLEAN.
+
+    A promoção pra BOOLEAN depende da amostra real, feita por
+    ExtratorMariaDB — mapear_tipo_mariadb é função pura só de metadado.
+    """
+    assert (
+        mapear_tipo_mariadb("tinyint", "tinyint(1)").categoria
+        == CategoriaDeDado.INTEGER
+    )
+
+
+# Borda
+
+
+def test_valor_de_enum_com_aspa_escapada() -> None:
+    """Borda: valor de enum contendo aspa literal escapada (`''`) é desescapado."""
+    tipo = mapear_tipo_mariadb("enum", "enum('a''b','c')")
+
+    assert tipo.valores_permitidos == ("a'b", "c")
+
+
+def test_tipo_desconhecido_vira_unknown() -> None:
+    """Borda: tipo fora da tabela de mapeamento vira UNKNOWN, sem exceção."""
+    assert (
+        mapear_tipo_mariadb("blob", "blob").categoria == CategoriaDeDado.UNKNOWN
+    )
+    assert mapear_tipo_mariadb("bit", "bit(1)").categoria == CategoriaDeDado.UNKNOWN

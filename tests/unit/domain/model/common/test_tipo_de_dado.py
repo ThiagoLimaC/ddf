@@ -51,6 +51,26 @@ def test_cria_tipo_timestamp_com_timezone() -> None:
     assert sem_tz.com_timezone is False
 
 
+def test_cria_tipo_enum_com_valores_permitidos() -> None:
+    """Caminho feliz: ENUM guarda a lista de valores aceitos."""
+    tipo = TipoDeDado(
+        categoria=CategoriaDeDado.ENUM, valores_permitidos=("ativo", "inativo")
+    )
+
+    assert tipo.categoria == CategoriaDeDado.ENUM
+    assert tipo.valores_permitidos == ("ativo", "inativo")
+
+
+def test_cria_tipo_set_com_valores_permitidos() -> None:
+    """Caminho feliz: SET compartilha o mesmo atributo valores_permitidos do ENUM."""
+    tipo = TipoDeDado(
+        categoria=CategoriaDeDado.SET, valores_permitidos=("leitura", "escrita")
+    )
+
+    assert tipo.categoria == CategoriaDeDado.SET
+    assert tipo.valores_permitidos == ("leitura", "escrita")
+
+
 # Erro esperado
 
 
@@ -112,6 +132,12 @@ def test_numeric_com_precisao_dupla_levanta_validation_error() -> None:
     """Erro esperado: com_precisao_dupla é exclusivo de FLOAT, não de NUMERIC."""
     with pytest.raises(ValidationError, match="NUMERIC"):
         TipoDeDado(categoria=CategoriaDeDado.NUMERIC, com_precisao_dupla=True)
+
+
+def test_varchar_com_valores_permitidos_levanta_validation_error() -> None:
+    """Erro esperado: valores_permitidos é exclusivo de ENUM/SET, não de VARCHAR."""
+    with pytest.raises(ValidationError, match="VARCHAR"):
+        TipoDeDado(categoria=CategoriaDeDado.VARCHAR, valores_permitidos=("a",))
 
 
 # Borda
