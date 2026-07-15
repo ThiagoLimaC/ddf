@@ -143,9 +143,13 @@ fonte relacional — só confirma que basta para fontes flat.**
 
 ## Pendências para próximas issues (não resolvidas aqui)
 
-- **#35 — `ExtratorMariaDB`**: valida se `nome_escopo: str` (flat) basta pra uma segunda fonte flat real —
+- ~~**#35 — `ExtratorMariaDB`**: valida se `nome_escopo: str` (flat) basta pra uma segunda fonte flat real —
   ver ressalva acima sobre o que esse resultado cobre e o que não cobre. Ao final da #35, revisitar este
-  arquivo com a resposta.
+  arquivo com a resposta.~~ **Resolvido pela #35** (ver
+  `plan/registry-plan/issue-35-extrator-mariadb.md`): `nome_escopo: str` flat se provou suficiente —
+  `ExtratorMariaDB` implementa o `Extrator` Port sem tocar em Extraction/Curation/Analysis, nas outras
+  Ports, no `OrquestradorParalelo` ou na `SobrescritaDeTabela`. Confirma só a hipótese **flat** (Postgres e
+  MariaDB, cada um a seu jeito), não a hierárquica (SQL Server-like) — essa continua em aberto.
 - **CLI wizard**: a banca levantou três pontos que não são lacuna desta issue (que só habilita descoberta
   no Port/Adapter, sem UI), mas precisam virar critério de aceite explícito na issue do wizard, pra não se
   perderem: (1) rótulo do prompt — "Escolher escopo(s)" hoje fixo em `low_level_design.md`, mas o usuário v1

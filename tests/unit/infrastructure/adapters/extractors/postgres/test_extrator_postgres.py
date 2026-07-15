@@ -265,6 +265,36 @@ def test_extrair_tabela_com_conexao_recusada_retorna_falha(
 # Borda
 
 
+def test_extrair_tabela_com_duas_fks_na_mesma_coluna_emite_aviso(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: coluna com 2 FKs mantém só a última e emite Aviso não-fatal."""
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.side_effect = [
+        [("entidade_id", "integer", None, None, None)],  # colunas
+        [],  # PK
+        [
+            ("entidade_id", "vendas", "clientes", "id"),
+            ("entidade_id", "vendas", "fornecedores", "id"),
+        ],  # FK duplicada na mesma coluna
+        [],  # amostra
+    ]
+    cursor_fake.fetchone.return_value = (0.0,)
+    cursor_fake.description = [SimpleNamespace(name="entidade_id")]
+    pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+    extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
+    resultado = extrator.extrair_tabela("public", "movimentos")
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor.colunas[0].referencia == ReferenciaDeColuna(
+        nome_escopo="vendas", nome_tabela="fornecedores", nome_coluna="id"
+    )
+    assert len(resultado.avisos) == 1
+    assert resultado.avisos[0].origem == "ExtratorPostgres"
+
+
 def test_listar_escopos_sem_escopos_de_usuario_retorna_lista_vazia(
     pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
 ) -> None:

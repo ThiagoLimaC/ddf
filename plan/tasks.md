@@ -148,6 +148,42 @@
 - [x] `testcontainers[postgres]` adicionado ao grupo dev do `pyproject.toml`
       (junto de `types-psycopg2`, necessário pra `mypy --strict` reconhecer
       os tipos do `psycopg2`)
+- [x] `domain/model/common/tipo_de_dado.py` — reabertura de escopo da #35:
+      novas categorias `ENUM`/`SET`, atributo `valores_permitidos` (partilhado
+      entre as duas); testes novos em `test_tipo_de_dado.py`
+- [x] `ExtratorMariaDB(Extrator)` — segunda fonte relacional real (issue #35),
+      prova de Open/Closed e de que `nome_escopo: str` flat (generalização da
+      #34) aguenta o colapso schema/database do MariaDB sem precisar virar
+      Value Object hierárquico:
+  - Pool preguiçoso via `dbutils.pooled_db.PooledDB` (mesmo padrão do
+    Postgres), sem semáforo manual (`PooledDB(blocking=True)` já serializa
+    chamadas concorrentes quando o pool está esgotado)
+  - `listar_escopos`/`listar_tabelas` via `information_schema.schemata`/
+    `.tables`; PK/FK num único ponto de leitura
+    (`information_schema.key_column_usage`, que já traz schema/tabela/coluna
+    referenciados direto, sem JOIN extra como o Postgres precisa)
+  - `total_linhas` via `information_schema.tables.TABLE_ROWS`; amostra via
+    `WHERE RAND() <= percentual/100` (MariaDB não tem `TABLESAMPLE`)
+  - `tinyint` sempre mapeia INTEGER em `mapear_tipo_mariadb` (função pura);
+    promoção INTEGER→BOOLEAN é feita à parte por `ExtratorMariaDB`, com base
+    nos valores reais da amostra já buscada (nunca por convenção de nome de
+    coluna) — MariaDB não guarda em lugar nenhum a distinção BOOLEAN vs
+    TINYINT(1)
+  - `ENUM`/`SET` mapeados com `valores_permitidos` parseado de `COLUMN_TYPE`
+- [x] `conftest.py`/testes de
+      `tests/unit/infrastructure/adapters/extractors/mariadb/` — mapeamento,
+      construção preguiçosa, `listar_escopos`/`listar_tabelas`/`extrair_tabela`
+      e o refinamento de BOOLEAN pela amostra, cobertos feliz/erro/borda
+- [x] Teste de integração em `tests/integration/extractors/mariadb/` via
+      `testcontainers` (`mariadb:11` real): inclui FK cross-database e
+      promoção real de `tinyint(1)`→BOOLEAN
+- [x] `pymysql`/`dbutils` adicionados às dependências, `testcontainers[mysql]`/
+      `types-pymysql` ao grupo dev; override de mypy pra `dbutils.*`
+      (sem stub oficial no PyPI, ao contrário do `types-psycopg2`)
+- [x] `--import-mode=importlib` no `[tool.pytest.ini_options]` — necessário
+      assim que uma segunda fonte trouxe um `test_mapeamento_de_tipos.py`
+      com o mesmo nome de arquivo do Postgres, sem `__init__.py` nos
+      diretórios de teste
 
 ## 4. Sobrescrita (ACL Extraction → Curation) e OrquestradorParalelo
 

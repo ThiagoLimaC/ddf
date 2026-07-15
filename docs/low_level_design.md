@@ -629,14 +629,22 @@ schemas de sistema do Postgres (`information_schema`, `pg_catalog`,
 
 **`extrair_tabela`:**
 1. Lê estrutura de `information_schema.columns` e constraints (`table_constraints`
-   + `key_column_usage` para PK; + `constraint_column_usage` para o destino de
-   cada FK — inclui `ccu.table_schema` além de `ccu.table_name`/`ccu.column_name`,
-   pra `ReferenciaDeColuna` capturar FK que aponta pra outro escopo). O `JOIN`
-   entre `table_constraints` e `constraint_column_usage` casa por
-   `constraint_schema` (não `table_schema`) — `constraint_column_usage.table_schema`
-   identifica a tabela *referenciada* pela FK, não a tabela onde ela foi
-   declarada, então casar por `table_schema` excluiria toda FK cross-escopo
-   do resultado (issue #10).
+   + `key_column_usage` para PK; para o destino de cada FK, `key_column_usage`
+   (colunas locais) + `referential_constraints` + uma segunda leitura de
+   `key_column_usage` (colunas referenciadas), casando
+   `kcu.position_in_unique_constraint = ccu.ordinal_position` — inclui
+   `ccu.table_schema` além de `ccu.table_name`/`ccu.column_name`, pra
+   `ReferenciaDeColuna` capturar FK que aponta pra outro escopo). **Reabertura
+   de escopo da #9 (achada na revisão da #35):** a versão original casava
+   `table_constraints`/`constraint_column_usage` só por `constraint_name`, sem
+   usar posição — pra FK composta (2+ colunas), isso gera produto cartesiano
+   das colunas locais × colunas referenciadas (ex.: FK de 2 colunas retornava
+   4 linhas em vez de 2, com pareamento coluna-local↔coluna-referenciada
+   potencialmente trocado). Validado empiricamente contra Postgres 16 real
+   antes e depois do fix. `MariaDB` nunca teve esse problema —
+   `key_column_usage` já traz `REFERENCED_COLUMN_NAME` pareado corretamente
+   por linha via `ORDINAL_POSITION`/`POSITION_IN_UNIQUE_CONSTRAINT`, sem
+   precisar de um segundo JOIN.
 2. Mapeia tipos Postgres → `TipoDeDado` (tabela abaixo).
 3. Lê `total_linhas` via `pg_catalog.pg_class.reltuples` — **estimativa**, não
    `COUNT(*)` exato. `information_schema.tables` não expõe contagem de linhas
