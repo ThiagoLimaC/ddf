@@ -23,7 +23,7 @@ class MetricasBaseColuna(MetricaDeColuna):
     origem: str = "AnalisadorDeMetricasDeColuna"
     percentual_nulo: float = Field(ge=0, le=100)
     percentual_unico: float = Field(ge=0, le=100)
-    valores_frequentes: list[str] = Field(max_length=10)
+    valores_frequentes: list[tuple[str, int]] = Field(max_length=10)
     minimo: str | None = None
     maximo: str | None = None
     formato_detectado: str | None = None
