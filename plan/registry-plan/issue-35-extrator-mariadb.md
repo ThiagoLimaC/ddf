@@ -216,8 +216,10 @@ aberta pra quando (e se) uma fonte desse tipo entrar no roadmap.
 ## Achados da banca de revisão (Arquiteto de Software + PO + Engenheiro de
 Dados) e correções aplicadas
 
-Banca rodada em paralelo sobre o diff completo desta issue. Veredito unânime:
-**Aprovado**, nenhum bloqueante. Achados "nice-to-have" incorporados:
+### Primeira rodada — sobre o diff completo da issue
+
+Veredito unânime: **Aprovado**, nenhum bloqueante. Achados "nice-to-have"
+incorporados:
 
 > **`tinyint(1) unsigned` não era candidato à promoção de BOOLEAN —
 > corrigido.** O Engenheiro de Dados testou empiricamente contra
@@ -267,6 +269,45 @@ Banca rodada em paralelo sobre o diff completo desta issue. Veredito unânime:
 > acidental do critério de Open/Closed (que é sobre o *Extraction Context/
 > Ports/Orquestrador* não precisarem mudar pra MariaDB plugar, não sobre
 > nunca mais tocar em `ExtratorPostgres` por qualquer motivo).
+
+### Segunda rodada — sobre as 3 correções acima, já commitadas
+
+Banca re-acionada especificamente sobre os 3 itens da primeira rodada.
+Arquiteto de Software e PO: **Aprovado**, sem ressalvas novas. Engenheiro de
+Dados: **Aprovado com ressalvas — 1 achado bloqueante**, corrigido antes de
+fechar esta issue:
+
+> **FK composta no `ExtratorPostgres` gerava produto cartesiano —
+> encontrado ao validar o helper `construir_colunas_fk` contra Postgres real,
+> bug pré-existente desde a #9.** O Engenheiro de Dados subiu um Postgres 16
+> real e testou `_CHAVES_ESTRANGEIRAS_SQL` contra uma FK de 2 colunas: a
+> query retornava 4 linhas em vez de 2 (produto cartesiano das colunas
+> locais × colunas referenciadas), porque o `JOIN` entre `table_constraints`
+> e `constraint_column_usage` casava só por `constraint_name`, sem usar
+> posição. Isso já existia desde a #9 (nenhum teste, unit ou integração,
+> exercitava FK composta), mas ficava mascarado pela sobrescrita silenciosa
+> no dict `colunas_fk` — a correção desta issue (`construir_colunas_fk`
+> emitindo `Aviso` em colisão) tornou o sintoma visível e enganoso ("mais de
+> uma FK" quando na verdade era 1 FK composta mal lida, com pareamento
+> coluna-local↔coluna-referenciada potencialmente trocado). **Corrigido**:
+> `_CHAVES_ESTRANGEIRAS_SQL` ganhou um segundo `JOIN` em
+> `key_column_usage`, via `information_schema.referential_constraints`,
+> casando `kcu.position_in_unique_constraint = ccu.ordinal_position` — o
+> padrão correto e documentado pra esse tipo de leitura, substituindo o
+> `JOIN` direto com `constraint_column_usage`. Validado empiricamente antes
+> e depois do fix contra Postgres 16 real (4 linhas → 2 linhas, pareamento
+> correto). `MariaDB` nunca teve esse problema: `key_column_usage` já traz
+> `REFERENCED_COLUMN_NAME` pareado corretamente por linha via
+> `ORDINAL_POSITION`/`POSITION_IN_UNIQUE_CONSTRAINT`, sem precisar de um
+> segundo JOIN — mais uma vantagem real de dialeto do MariaDB sobre o
+> Postgres nesse ponto específico (mesma categoria da vantagem já registrada
+> pra PK/FK simples, na seção de decisões acima). Teste de integração novo:
+> `tests/integration/extractors/postgres/test_extrator_postgres_integration.py::test_extrair_tabela_com_fk_composta_pareia_colunas_corretamente`
+> (schema `geografia`, tabelas `pais`/`filial`, FK composta de 2 colunas),
+> confirmando pareamento correto e `avisos == []` (não é uma FK duplicada de
+> verdade, é 1 FK composta lida certo). Documentado retroativamente em
+> `plan/registry-plan/issue-9-extrator-postgres.md` e
+> `docs/low_level_design.md`.
 
 ## Pendências para próximas issues (não resolvidas aqui)
 

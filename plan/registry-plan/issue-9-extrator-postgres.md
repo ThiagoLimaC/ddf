@@ -237,3 +237,20 @@
 - `GeradorDbt` (issue futura) é o consumidor real da distinção
   `FLOAT`/`NUMERIC`/`CHAR`/`VARCHAR`/`com_timezone` no cast SQL — não
   implementado nesta issue, só o modelo que a suporta.
+
+## Correção retroativa (achada na revisão da #35)
+
+`_CHAVES_ESTRANGEIRAS_SQL` (linha 184 acima: `table_constraints` +
+`key_column_usage` + `constraint_column_usage`) casava `constraint_name`/
+`constraint_schema` sem usar posição — pra FK **composta** (2+ colunas),
+isso gera produto cartesiano das colunas locais × colunas referenciadas
+(validado empiricamente contra Postgres 16 real: uma FK de 2 colunas
+retornava 4 linhas em vez de 2, com pareamento coluna-local↔coluna-
+referenciada não garantido). Passou despercebido nesta issue porque nenhum
+teste (unit ou integração) exercitava FK composta. Corrigido na #35 —
+substituído por um segundo `JOIN` em `key_column_usage` via
+`referential_constraints`, casando
+`kcu.position_in_unique_constraint = ccu.ordinal_position`. Ver
+`plan/registry-plan/issue-35-extrator-mariadb.md` e
+`docs/low_level_design.md` (seção `extrair_tabela` do Postgres) pra detalhes
+e teste de integração novo (`test_extrair_tabela_com_fk_composta_pareia_colunas_corretamente`).

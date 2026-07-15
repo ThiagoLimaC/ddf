@@ -77,7 +77,7 @@ def test_listar_escopos_retorna_escopos_semeados(
 
     resultado = extrator.listar_escopos()
 
-    assert resultado == Sucesso(["pessoa", "public", "rh", "vazio"])
+    assert resultado == Sucesso(["geografia", "pessoa", "public", "rh", "vazio"])
 
 
 # Erro esperado
@@ -143,3 +143,32 @@ def test_listar_tabelas_schema_vazio_retorna_lista_vazia(
     resultado = extrator.listar_tabelas("vazio")
 
     assert resultado == Sucesso([])
+
+
+def test_extrair_tabela_com_fk_composta_pareia_colunas_corretamente(
+    dsn: str, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: FK composta (2 colunas) não gera produto cartesiano nem Aviso espúrio.
+
+    Reproduz o bug encontrado na revisão da #35 (pré-existente desde a #9):
+    o JOIN entre table_constraints/constraint_column_usage casava só por
+    constraint_name, sem usar posição — pra FK composta isso gerava produto
+    cartesiano (2 colunas locais x 2 colunas referenciadas = 4 linhas em vez
+    de 2), com pareamento coluna-local<->coluna-referenciada não garantido.
+    """
+    extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+
+    resultado = extrator.extrair_tabela("geografia", "filial")
+
+    assert isinstance(resultado, Sucesso)
+    coluna_codigo = resultado.valor.colunas[1]
+    coluna_estado = resultado.valor.colunas[2]
+    assert coluna_codigo.nome == "pais_codigo"
+    assert coluna_codigo.referencia == ReferenciaDeColuna(
+        nome_escopo="geografia", nome_tabela="pais", nome_coluna="codigo"
+    )
+    assert coluna_estado.nome == "pais_estado"
+    assert coluna_estado.referencia == ReferenciaDeColuna(
+        nome_escopo="geografia", nome_tabela="pais", nome_coluna="estado"
+    )
+    assert resultado.avisos == []
