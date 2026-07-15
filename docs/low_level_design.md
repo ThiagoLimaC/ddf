@@ -279,12 +279,12 @@ class MetricaDeColuna(BaseModel):
 ```python
 class MetricasBaseColuna(MetricaDeColuna):
     origem: str = "AnalisadorDeMetricasDeColuna"
-    percentual_nulo: float           # 0.0–100.0
-    percentual_unico: float         # 0.0–100.0
-    valores_frequentes: list[str]   # até 10 valores mais frequentes
-    minimo: str | None               # representação string do mínimo
-    maximo: str | None               # representação string do máximo
-    formato_detectado: str | None   # "email", "cpf", "cnpj", "phone", "cep"
+    percentual_nulo: float                       # 0.0–100.0
+    percentual_unico: float                      # 0.0–100.0, nulos excluídos do numerador
+    valores_frequentes: list[tuple[str, int]]     # até 10 pares (valor, contagem), nulos excluídos
+    minimo: str | None                            # representação string do mínimo
+    maximo: str | None                            # representação string do máximo
+    formato_detectado: str | None                # "email", "cpf", "cnpj", "phone", "cep"
 ```
 
 ### `MetricaDeTabela` (Value Object base)
@@ -864,17 +864,26 @@ class AnalisadorDeMetricasDeColuna:
 | Campo | Cálculo |
 |---|---|
 | `percentual_nulo` | `col.null_count() / tamanho_amostra * 100` |
-| `percentual_unico` | `col.n_unique() / tamanho_amostra * 100` |
+| `percentual_unico` | `col.drop_nulls().n_unique() / tamanho_amostra * 100` — nulos excluídos do numerador, `tamanho_amostra` (total, com nulos) no denominador, pra não inflar unicidade de colunas majoritariamente nulas |
 | `minimo` | `str(col.min())` — `None` se coluna inteiramente nula |
 | `maximo` | `str(col.max())` — `None` se coluna inteiramente nula |
-| `valores_frequentes` | top 10 valores por frequência, convertidos para `str` |
+| `valores_frequentes` | `col.drop_nulls().value_counts()`, top 10 por `(count desc, valor asc)` — desempate determinístico —, devolvidos como `(str, int)` |
 | `formato_detectado` | regex sobre valores não-nulos (ver abaixo) |
 
-**Detecção de formato** (só em `VARCHAR`/`TEXT`, threshold ≥ 80% dos não-nulos):
+`tamanho_amostra == 0`: todas as métricas acima retornam `0.0`/`None`/`[]` sem
+tentar dividir — guarda explícita antes de qualquer cálculo, não decisão do
+implementador.
+
+**Detecção de formato** (só em `VARCHAR`/`TEXT`; threshold ≥ 80% dos
+não-nulos **e** mínimo absoluto de 20 valores não-nulos — evita "falsa
+confiança" em colunas com poucos valores presentes, ex. 3 de 3 batendo
+100%). Regexes assumem contexto Brasil (CPF/CNPJ/CEP/DDD nacional) — decisão
+de produto intencional para o caso de uso principal do ddf, não cobertura
+internacional:
 
 | Formato | Regex |
 |---|---|
-| `email` | `r'^[\w.+-]+@[\w-]+\.[a-z]{2,}$'` |
+| `email` | `r'^[\w.+-]+@[\w.-]+\.[a-z]{2,}$'` (flags `re.IGNORECASE`) — aceita subdomínio/TLD composto (`user@mail.empresa.com.br`) |
 | `cpf` | `r'^\d{3}\.?\d{3}\.?\d{3}-?\d{2}$'` |
 | `cnpj` | `r'^\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}$'` |
 | `phone` | `r'^(\+55\s?)?\(?\d{2}\)?\s?\d{4,5}-?\d{4}$'` |

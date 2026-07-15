@@ -23,7 +23,7 @@ def test_cria_metricas_base_coluna_com_origem_padrao() -> None:
     metricas = MetricasBaseColuna(
         percentual_nulo=10.0,
         percentual_unico=90.0,
-        valores_frequentes=["a", "b"],
+        valores_frequentes=[("a", 3), ("b", 1)],
         minimo="a",
         maximo="z",
         formato_detectado=None,
@@ -170,7 +170,7 @@ def test_metricas_base_coluna_valores_frequentes_acima_do_limite() -> None:
         MetricasBaseColuna(
             percentual_nulo=0.0,
             percentual_unico=100.0,
-            valores_frequentes=[str(i) for i in range(11)],
+            valores_frequentes=[(str(i), 1) for i in range(11)],
             minimo=None,
             maximo=None,
             formato_detectado=None,
