@@ -265,7 +265,12 @@ class ExtratorPostgres:
                     nomes_colunas.append(coluna_amostra.name)
                 linhas_amostra = cursor.fetchall()
                 amostra = (
-                    pl.DataFrame(linhas_amostra, schema=nomes_colunas, orient="row")
+                    pl.DataFrame(
+                        linhas_amostra,
+                        schema=nomes_colunas,
+                        orient="row",
+                        infer_schema_length=None,
+                    )
                     if linhas_amostra
                     else pl.DataFrame(schema=nomes_colunas)
                 )
