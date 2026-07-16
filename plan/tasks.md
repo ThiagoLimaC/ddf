@@ -217,8 +217,12 @@
 - [ ] `AnalisadorDeMetricasDeTabela(Analisador)`:
   - `produz = [MetricasBaseTabela]`, `requer = [MetricasBaseColuna]`
   - Calcula `completude` a partir de `MetricasBaseColuna` já presentes no
-    `ContextoDeAnalise.analisado`
-  - `Falha` defensiva se `MetricasBaseColuna` ausente em qualquer coluna
+    `ContextoDeAnalise.analisado`, como média de `(100 - percentual_nulo)`
+    das colunas; tabela sem colunas → `completude = 0.0`, sem dividir por
+    zero
+  - `Falha` defensiva se `MetricasBaseColuna` estiver ausente **ou
+    duplicada** em qualquer coluna — interrompe no primeiro problema, sem
+    processar as demais tabelas
 
 ## 6. Geradores concretos
 
