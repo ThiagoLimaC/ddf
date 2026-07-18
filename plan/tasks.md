@@ -226,7 +226,7 @@
 
 ## 6. Geradores concretos
 
-- [ ] `GeradorMarkdown(Gerador)`:
+- [x] `GeradorMarkdown(Gerador)`:
   - `requer = [MetricasBaseColuna, MetricasBaseTabela]`
   - Um `.md` por tabela + `index.md`
   - Nota de rodapé com `MetadadosDeAmostra` (estratégia, N amostrado, M total)
