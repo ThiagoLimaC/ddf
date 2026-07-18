@@ -1,0 +1,62 @@
+# {{ tabela.nome_escopo }}.{{ tabela.nome_tabela }}
+
+> **Papel de negócio:** {{ (tabela.papel_de_negocio or "N/D") | escapar }}
+{% if tabela.regras_de_negocio %}
+>
+> **Regras de negócio:**
+{% for regra in tabela.regras_de_negocio %}
+> - {{ regra | escapar }}
+{% endfor %}
+{% endif %}
+
+## Fatos extraídos
+
+- **Escopo:** {{ tabela.nome_escopo }}
+- **Total de linhas:** {{ tabela.total_linhas }}
+- **Completude:** {{ tabela | completude }}
+- **Amostra analisada:** {{ tabela.metadados_amostra.tamanho_amostra }} de {{ tabela.total_linhas }} linhas
+
+## Colunas
+
+| Nome | Tipo | Chave | Papel de negócio |
+|---|---|---|---|
+{% for coluna in tabela.colunas %}
+| {{ coluna.nome | escapar }} | {{ coluna.tipo_dado | formatar_tipo | escapar }} | {{ coluna | marcadores_de_chave | escapar }} | {{ (coluna.papel_de_negocio or "N/D") | escapar }} |
+{% endfor %}
+
+## Qualidade dos dados
+
+| Nome | % Nulo | % Único | Mínimo | Máximo | Formato |
+|---|---|---|---|---|---|
+{% for coluna in tabela.colunas %}
+{% set q = coluna | linha_qualidade %}
+| {{ q.nome }} | {{ q.percentual_nulo }} | {{ q.percentual_unico }} | {{ q.minimo }} | {{ q.maximo }} | {{ q.formato }} |
+{% endfor %}
+
+{% set secoes = tabela.colunas | secoes_valores_frequentes(tabela.metadados_amostra.tamanho_amostra) %}
+{% if secoes %}
+## Valores frequentes por coluna
+
+{% for secao in secoes %}
+#### {{ secao.nome_coluna }}
+
+{% if secao.chave_primaria %}
+*Coluna é chave primária — valores tendem a ser únicos, então esta lista costuma trazer só entradas com contagem 1, sem sinal analítico.*
+
+{% endif %}
+{% if secao.totalmente_nulo %}
+*Coluna 100% nula na amostra — sem valores frequentes para listar.*
+
+{% else %}
+| Valor | Contagem | % da amostra |
+|---|---|---|
+{% for item in secao.itens %}
+| {{ item.valor }} | {{ item.contagem }} | {{ item.percentual }} |
+{% endfor %}
+
+{% endif %}
+{% endfor %}
+{% endif %}
+---
+
+*Amostragem: estratégia `{{ tabela.metadados_amostra.estrategia }}`, {{ tabela.metadados_amostra.tamanho_amostra }} linhas amostradas de {{ tabela.total_linhas }} no total — métricas de coluna são estimativas sobre a amostra, não o dado completo.*
