@@ -1,8 +1,10 @@
 """Testes de AnalisadorDeMetricasDeColuna."""
 
+import uuid
 from collections.abc import Callable
 
 import polars as pl
+import pytest
 
 from ddf.domain.model.analysis import (
     BancoAnalisado,
@@ -10,7 +12,7 @@ from ddf.domain.model.analysis import (
     MetricasBaseColuna,
 )
 from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
-from ddf.domain.model.common.tipo_de_dado import TipoDeDado
+from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.model.curation import BancoCurado, ColunaCurada, TabelaCurada
 from ddf.domain.ports.analisador import Analisador
 from ddf.domain.shared.resultado import Falha, Sucesso
@@ -320,6 +322,64 @@ def test_coluna_float_trata_nan_como_nulo(
     assert metrica.valores_frequentes == [("20.0", 2), ("10.5", 1)]
     assert metrica.minimo == "10.5"
     assert metrica.maximo == "20.0"
+
+
+def test_coluna_dtype_object_nao_derruba_analisador(
+    construir_contexto: Callable[[list[TabelaCurada]], ContextoDeAnalise],
+) -> None:
+    """Borda: coluna de dtype Object (ex.: uuid.UUID vindo do driver) não quebra.
+
+    Regressão do achado da banca de revisão: `pl.Series.min()`/`.max()`/
+    `.n_unique()` levantam InvalidOperationError em dtype `object` — dtype
+    que o Polars usa como fallback pra tipos Python que não mapeia
+    nativamente, como `uuid.UUID` retornado por drivers pra colunas UUID.
+    Isso derrubava o Analisador inteiro por causa de uma única coluna.
+    """
+    tipo_uuid = TipoDeDado(categoria=CategoriaDeDado.UUID)
+    ids = [uuid.UUID(int=1), uuid.UUID(int=2), uuid.UUID(int=1)]
+    tabela = _tabela_curada(
+        colunas=[ColunaCurada(nome="rowguid", tipo_dado=tipo_uuid)],
+        amostra=pl.DataFrame({"rowguid": ids}),
+        tamanho_amostra=3,
+    )
+    contexto = construir_contexto([tabela])
+
+    resultado = AnalisadorDeMetricasDeColuna()(contexto)
+
+    assert isinstance(resultado, Sucesso)
+    metrica = _metrica_de(resultado.valor.analisado.tabelas[0].colunas[0].metricas)
+    assert metrica.percentual_nulo == 0.0
+    assert metrica.percentual_unico == pytest.approx(200 / 3)
+    assert metrica.minimo == str(min(ids))
+    assert metrica.maximo == str(max(ids))
+
+
+def test_coluna_binaria_nao_vira_endereco_de_memoria(
+    construir_contexto: Callable[[list[TabelaCurada]], ContextoDeAnalise],
+) -> None:
+    """Borda: coluna binária (ex.: bytea/memoryview) não vira '<memory at 0x...>'.
+
+    Regressão: `psycopg2` devolve `memoryview` pra colunas `bytea`, também
+    dtype Object no Polars. `str()` puro sobre `memoryview` produz um
+    endereço de memória (`<memory at 0x7f...>`), que não comunica nada sobre
+    o dado e muda a cada execução — inútil num artefato versionado em Git.
+    """
+    tipo_desconhecido = TipoDeDado(categoria=CategoriaDeDado.UNKNOWN)
+    valores = [memoryview(b"\x01\x02\x03"), memoryview(b"\x04\x05"), None]
+    tabela = _tabela_curada(
+        colunas=[ColunaCurada(nome="spatiallocation", tipo_dado=tipo_desconhecido)],
+        amostra=pl.DataFrame({"spatiallocation": valores}),
+        tamanho_amostra=3,
+    )
+    contexto = construir_contexto([tabela])
+
+    resultado = AnalisadorDeMetricasDeColuna()(contexto)
+
+    assert isinstance(resultado, Sucesso)
+    metrica = _metrica_de(resultado.valor.analisado.tabelas[0].colunas[0].metricas)
+    assert metrica.minimo is not None
+    assert "memory at" not in metrica.minimo
+    assert "bytes" in metrica.minimo
 
 
 def test_coluna_integer_nunca_tenta_detectar_formato(
