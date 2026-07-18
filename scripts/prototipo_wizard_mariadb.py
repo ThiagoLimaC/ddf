@@ -20,11 +20,18 @@ from pathlib import Path
 
 import questionary
 
+from ddf.domain.model.analysis import ContextoDeAnalise, iniciar_contexto
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.model.curation import BancoCurado, TabelaCurada
 from ddf.domain.model.extraction import TabelaExtraida
 from ddf.domain.ports.extrator import Extrator
-from ddf.domain.shared.resultado import Falha
+from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
+from ddf.infrastructure.adapters.analyzers.analisador_de_metricas_de_coluna import (
+    AnalisadorDeMetricasDeColuna,
+)
+from ddf.infrastructure.adapters.analyzers.analisador_de_metricas_de_tabela import (
+    AnalisadorDeMetricasDeTabela,
+)
 from ddf.infrastructure.adapters.extractors.mariadb.extrator_mariadb import (
     ExtratorMariaDB,
 )
@@ -34,11 +41,13 @@ from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
 from ddf.infrastructure.adapters.extractors.postgres.extrator_postgres import (
     ExtratorPostgres,
 )
+from ddf.infrastructure.adapters.generators.gerador_markdown import GeradorMarkdown
 from ddf.infrastructure.adapters.overrides.sobrescrita_de_tabela import (
     SobrescritaDeTabela,
 )
 
-_GERADORES_FAKE = ["Markdown", "dbt", "ContextoDeIA"]
+_GERADORES_DISPONIVEIS = ["Markdown", "dbt", "ContextoDeIA"]
+_GERADORES_FAKE = ["dbt", "ContextoDeIA"]
 _QUADROS_AMPULHETA = ("⏳", "⌛")
 
 
@@ -175,7 +184,7 @@ def main() -> None:
         print("\nNenhuma tabela curada com sucesso.")
         sys.exit(1)
 
-    _executar_geradores_fake(banco_curado)
+    _executar_geradores(banco_curado)
 
 
 def _extrair_tabelas(
@@ -242,21 +251,80 @@ def _aplicar_sobrescritas(
     return tabelas_curadas
 
 
-def _executar_geradores_fake(banco_curado: BancoCurado) -> None:
-    """Pergunta quais geradores (fake) rodar e simula a execução de cada um.
+def _executar_geradores(banco_curado: BancoCurado) -> None:
+    """Pergunta quais geradores rodar; Markdown roda de verdade, o resto é fake.
 
     Args:
-        banco_curado: banco curado que os geradores fake "consumiriam".
+        banco_curado: banco curado a analisar/documentar.
     """
     geradores_escolhidos = _escolher_multiplos(
-        "Escolha um ou mais geradores (fake):", _GERADORES_FAKE
+        "Escolha um ou mais geradores:", _GERADORES_DISPONIVEIS
     )
     print()
+
+    if "Markdown" in geradores_escolhidos:
+        _executar_gerador_markdown(banco_curado)
+
     for gerador in geradores_escolhidos:
-        print(
-            f"[fake] Gerador{gerador} executado sobre "
-            f"{len(banco_curado.tabelas)} tabela(s) curada(s)."
-        )
+        if gerador in _GERADORES_FAKE:
+            print(
+                f"[fake] Gerador{gerador} executado sobre "
+                f"{len(banco_curado.tabelas)} tabela(s) curada(s)."
+            )
+
+
+def _executar_gerador_markdown(banco_curado: BancoCurado) -> None:
+    """Roda o pipeline real de Analisadores + GeradorMarkdown sobre o banco curado.
+
+    Args:
+        banco_curado: banco curado a analisar/documentar.
+    """
+    contexto = iniciar_contexto(banco_curado)
+
+    resultado_contexto = _rodar_analisadores(contexto)
+    if isinstance(resultado_contexto, Falha):
+        print(f"Falha ao calcular métricas: {resultado_contexto.erro}")
+        return
+    contexto = resultado_contexto.valor
+    for aviso in resultado_contexto.avisos:
+        print(f"  [{aviso.origem}] {aviso.mensagem}")
+
+    destino = Path(
+        questionary.text(
+            "Diretório de destino do Markdown:", default="docs_gerados"
+        ).ask()
+    )
+    resultado_geracao = GeradorMarkdown()(contexto.analisado, destino)
+    if isinstance(resultado_geracao, Falha):
+        print(f"Falha ao gerar Markdown: {resultado_geracao.erro}")
+        return
+    for aviso in resultado_geracao.avisos:
+        print(f"  [{aviso.origem}] {aviso.mensagem}")
+    print(f"GeradorMarkdown: documentação escrita em '{destino}'.")
+
+
+def _rodar_analisadores(contexto: ContextoDeAnalise) -> Resultado[ContextoDeAnalise]:
+    """Roda os dois Analisadores mergeados, na ordem exigida por produz/requer.
+
+    Args:
+        contexto: contexto recém-criado a partir do BancoCurado.
+
+    Returns:
+        Sucesso com o ContextoDeAnalise enriquecido por ambos os
+        Analisadores, ou a primeira Falha encontrada.
+    """
+    resultado_coluna = AnalisadorDeMetricasDeColuna()(contexto)
+    if isinstance(resultado_coluna, Falha):
+        return resultado_coluna
+
+    resultado_tabela = AnalisadorDeMetricasDeTabela()(resultado_coluna.valor)
+    if isinstance(resultado_tabela, Falha):
+        return resultado_tabela
+
+    return Sucesso(
+        resultado_tabela.valor,
+        avisos=resultado_coluna.avisos + resultado_tabela.avisos,
+    )
 
 
 if __name__ == "__main__":
