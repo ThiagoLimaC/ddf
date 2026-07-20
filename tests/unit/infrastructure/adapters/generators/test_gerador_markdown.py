@@ -10,6 +10,7 @@ from ddf.domain.model.analysis import (
     MetricasBaseTabela,
     TabelaAnalisada,
 )
+from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.shared.resultado import Falha, Sucesso
 from ddf.infrastructure.adapters.generators.gerador_markdown import GeradorMarkdown
@@ -258,6 +259,184 @@ def test_chave_primaria_recebe_aviso_na_secao_de_valores_frequentes(
     assert "chave primária" not in secao_status
 
 
+def test_coluna_nao_nulavel_mostra_garantido_pelo_schema(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    metrica_coluna_completa: MetricasBaseColuna,
+) -> None:
+    """NOT NULL real do schema aparece anotado, distinto do percentual amostral.
+
+    A mesma garantia também aparece como marcador "NOT NULL" na seção
+    Colunas (coluna "Restrição") — não fica visível só dentro do texto da
+    Qualidade dos dados.
+    """
+    coluna_not_null = construir_coluna(
+        nome="cpf", nao_nulavel=True, metricas=[metrica_coluna_completa]
+    )
+    coluna_comum = construir_coluna(nome="apelido", metricas=[metrica_coluna_completa])
+    tabela = construir_tabela(colunas=[coluna_not_null, coluna_comum])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorMarkdown()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    conteudo = (tmp_path / "escopo" / "tabela.md").read_text()
+
+    secao_colunas = conteudo.split("## Colunas")[1].split("## Qualidade")[0]
+    linha_restricao_cpf = next(
+        linha for linha in secao_colunas.splitlines() if "cpf" in linha
+    )
+    linha_restricao_apelido = next(
+        linha for linha in secao_colunas.splitlines() if "apelido" in linha
+    )
+    assert "NOT NULL" in linha_restricao_cpf
+    assert "NOT NULL" not in linha_restricao_apelido
+
+    secao_qualidade = conteudo.split("## Qualidade dos dados")[1]
+    linha_cpf = next(
+        linha
+        for linha in secao_qualidade.splitlines()
+        if linha.startswith("| cpf ")
+    )
+    linha_apelido = next(
+        linha
+        for linha in secao_qualidade.splitlines()
+        if linha.startswith("| apelido ")
+    )
+    assert "garantido pelo schema" in linha_cpf
+    assert "garantido pelo schema" not in linha_apelido
+    assert "10.00%" in linha_apelido  # percentual_nulo amostral, sem anotação
+
+
+def test_coluna_unica_recebe_marcador_e_aviso_de_baixo_sinal(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    metrica_coluna_completa: MetricasBaseColuna,
+) -> None:
+    """UNIQUE real do schema ganha marcador na tabela e nota nos frequentes."""
+    coluna_unica = construir_coluna(
+        nome="email", unica=True, metricas=[metrica_coluna_completa]
+    )
+    tabela = construir_tabela(colunas=[coluna_unica])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorMarkdown()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    conteudo = (tmp_path / "escopo" / "tabela.md").read_text()
+    secao_colunas = conteudo.split("## Colunas")[1].split("## Qualidade")[0]
+    linha_email = next(
+        linha for linha in secao_colunas.splitlines() if "email" in linha
+    )
+    assert "UNIQUE" in linha_email
+    secao_frequentes = conteudo.split("#### email")[1]
+    assert "restrição UNIQUE" in secao_frequentes
+
+
+def test_coluna_pk_e_unica_nao_duplica_marcador_nem_aviso(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    metrica_coluna_completa: MetricasBaseColuna,
+) -> None:
+    """PK também unica/nao_nulavel (redundância do schema) não duplica sinal."""
+    coluna_pk = construir_coluna(
+        nome="id",
+        chave_primaria=True,
+        unica=True,
+        nao_nulavel=True,
+        metricas=[metrica_coluna_completa],
+    )
+    tabela = construir_tabela(colunas=[coluna_pk])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorMarkdown()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    conteudo = (tmp_path / "escopo" / "tabela.md").read_text()
+    secao_colunas = conteudo.split("## Colunas")[1].split("## Qualidade")[0]
+    linha_id = next(linha for linha in secao_colunas.splitlines() if "id" in linha)
+    assert "PK" in linha_id
+    assert "UNIQUE" not in linha_id
+    assert "NOT NULL" not in linha_id
+    secao_frequentes = conteudo.split("#### id")[1]
+    assert "chave primária" in secao_frequentes
+    assert "restrição UNIQUE" not in secao_frequentes
+
+
+def test_coluna_fk_e_unica_combina_os_dois_marcadores(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    metrica_coluna_completa: MetricasBaseColuna,
+) -> None:
+    """FK 1:1 (também unica=True) mostra FK e UNIQUE combinados."""
+    coluna_fk_unica = construir_coluna(
+        nome="perfil_id",
+        chave_estrangeira=True,
+        referencia=ReferenciaDeColuna(
+            nome_escopo="rh", nome_tabela="perfis", nome_coluna="id"
+        ),
+        unica=True,
+        metricas=[metrica_coluna_completa],
+    )
+    tabela = construir_tabela(colunas=[coluna_fk_unica])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorMarkdown()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    conteudo = (tmp_path / "escopo" / "tabela.md").read_text()
+    secao_colunas = conteudo.split("## Colunas")[1].split("## Qualidade")[0]
+    linha_perfil = next(
+        linha for linha in secao_colunas.splitlines() if "perfil_id" in linha
+    )
+    assert "FK → rh.perfis.id" in linha_perfil
+    assert "UNIQUE" in linha_perfil
+
+
+def test_minimo_e_maximo_suprimidos_para_categoria_json(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """JSON/JSONB também suprime mínimo/máximo (mesmo bug já corrigido nas outras)."""
+    metrica_json = MetricasBaseColuna(
+        percentual_nulo=0.0,
+        percentual_unico=100.0,
+        valores_frequentes=[('{"a": 1}', 1)],
+        minimo='{"a": 1, "z": 9}',
+        maximo='{"b": 0}',
+    )
+    coluna = construir_coluna(
+        nome="metadados",
+        tipo_dado=TipoDeDado(categoria=CategoriaDeDado.JSON),
+        metricas=[metrica_json],
+    )
+    tabela = construir_tabela(colunas=[coluna])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorMarkdown()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    conteudo = (tmp_path / "escopo" / "tabela.md").read_text()
+    secao_qualidade = conteudo.split("## Qualidade dos dados")[1]
+    linha = next(
+        linha
+        for linha in secao_qualidade.splitlines()
+        if linha.startswith("| metadados ")
+    )
+    assert "—" in linha
+    assert '{"a": 1' not in linha
+
+
 def test_coluna_totalmente_nula_recebe_nota_em_vez_de_ser_omitida(
     tmp_path: Path,
     construir_coluna: Callable[..., ColunaAnalisada],
@@ -279,3 +458,28 @@ def test_coluna_totalmente_nula_recebe_nota_em_vez_de_ser_omitida(
     assert "#### observacao" in conteudo
     secao = conteudo.split("#### observacao")[1]
     assert "100% nula" in secao
+
+
+def test_secao_de_valores_frequentes_vazia_explica_o_motivo(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Tabela sem nenhuma coluna elegível ainda mostra o cabeçalho + uma nota.
+
+    Cenário real: amostra vazia (tabela sem linhas extraídas) faz toda
+    coluna cair fora de _secoes_valores_frequentes — sem a nota, a seção
+    inteira desaparecia em silêncio, parecendo um bug de geração.
+    """
+    coluna_sem_metrica = construir_coluna(nome="id", metricas=[])
+    tabela = construir_tabela(colunas=[coluna_sem_metrica], tamanho_amostra=0)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorMarkdown()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    conteudo = (tmp_path / "escopo" / "tabela.md").read_text()
+    assert "## Valores frequentes por coluna" in conteudo
+    secao = conteudo.split("## Valores frequentes por coluna")[1]
+    assert "Nenhuma coluna desta tabela tem valores frequentes elegíveis" in secao

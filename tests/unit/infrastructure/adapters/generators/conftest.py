@@ -12,6 +12,7 @@ from ddf.domain.model.analysis import (
     TabelaAnalisada,
 )
 from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
+from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 
 
@@ -23,6 +24,10 @@ def construir_coluna() -> Callable[..., ColunaAnalisada]:
         nome: str = "coluna",
         tipo_dado: TipoDeDado | None = None,
         chave_primaria: bool = False,
+        chave_estrangeira: bool = False,
+        referencia: ReferenciaDeColuna | None = None,
+        nao_nulavel: bool = False,
+        unica: bool = False,
         metricas: list[MetricasBaseColuna] | None = None,
         papel_de_negocio: str | None = None,
     ) -> ColunaAnalisada:
@@ -30,6 +35,10 @@ def construir_coluna() -> Callable[..., ColunaAnalisada]:
             nome=nome,
             tipo_dado=tipo_dado or TipoDeDado(categoria=CategoriaDeDado.INTEGER),
             chave_primaria=chave_primaria,
+            chave_estrangeira=chave_estrangeira,
+            referencia=referencia,
+            nao_nulavel=nao_nulavel,
+            unica=unica,
             papel_de_negocio=papel_de_negocio,
             metricas=list(metricas) if metricas is not None else [],
         )
