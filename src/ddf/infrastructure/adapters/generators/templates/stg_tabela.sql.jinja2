@@ -1,0 +1,5 @@
+select
+{% for coluna in colunas %}
+    {{ coluna.expressao }} as {{ coluna.nome }}{{ coluna.sufixo }}
+{% endfor %}
+from {{ origem }}

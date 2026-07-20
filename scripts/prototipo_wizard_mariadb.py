@@ -20,7 +20,11 @@ from pathlib import Path
 
 import questionary
 
-from ddf.domain.model.analysis import ContextoDeAnalise, iniciar_contexto
+from ddf.domain.model.analysis import (
+    BancoAnalisado,
+    ContextoDeAnalise,
+    iniciar_contexto,
+)
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.model.curation import BancoCurado, TabelaCurada
 from ddf.domain.model.extraction import TabelaExtraida
@@ -41,13 +45,14 @@ from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
 from ddf.infrastructure.adapters.extractors.postgres.extrator_postgres import (
     ExtratorPostgres,
 )
+from ddf.infrastructure.adapters.generators.gerador_dbt import GeradorDbt
 from ddf.infrastructure.adapters.generators.gerador_markdown import GeradorMarkdown
 from ddf.infrastructure.adapters.overrides.sobrescrita_de_tabela import (
     SobrescritaDeTabela,
 )
 
 _GERADORES_DISPONIVEIS = ["Markdown", "dbt", "ContextoDeIA"]
-_GERADORES_FAKE = ["dbt", "ContextoDeIA"]
+_GERADORES_FAKE = ["ContextoDeIA"]
 _QUADROS_AMPULHETA = ("⏳", "⌛")
 
 
@@ -252,7 +257,7 @@ def _aplicar_sobrescritas(
 
 
 def _executar_geradores(banco_curado: BancoCurado) -> None:
-    """Pergunta quais geradores rodar; Markdown roda de verdade, o resto é fake.
+    """Pergunta quais geradores rodar; Markdown e dbt rodam de verdade.
 
     Args:
         banco_curado: banco curado a analisar/documentar.
@@ -262,8 +267,21 @@ def _executar_geradores(banco_curado: BancoCurado) -> None:
     )
     print()
 
-    if "Markdown" in geradores_escolhidos:
-        _executar_gerador_markdown(banco_curado)
+    geradores_reais = [g for g in geradores_escolhidos if g not in _GERADORES_FAKE]
+    if geradores_reais:
+        contexto = iniciar_contexto(banco_curado)
+        resultado_contexto = _rodar_analisadores(contexto)
+        if isinstance(resultado_contexto, Falha):
+            print(f"Falha ao calcular métricas: {resultado_contexto.erro}")
+            return
+        contexto = resultado_contexto.valor
+        for aviso in resultado_contexto.avisos:
+            print(f"  [{aviso.origem}] {aviso.mensagem}")
+
+        if "Markdown" in geradores_escolhidos:
+            _executar_gerador_markdown(contexto.analisado)
+        if "dbt" in geradores_escolhidos:
+            _executar_gerador_dbt(contexto.analisado)
 
     for gerador in geradores_escolhidos:
         if gerador in _GERADORES_FAKE:
@@ -273,34 +291,44 @@ def _executar_geradores(banco_curado: BancoCurado) -> None:
             )
 
 
-def _executar_gerador_markdown(banco_curado: BancoCurado) -> None:
-    """Roda o pipeline real de Analisadores + GeradorMarkdown sobre o banco curado.
+def _executar_gerador_markdown(banco_analisado: BancoAnalisado) -> None:
+    """Roda o GeradorMarkdown sobre o banco já analisado.
 
     Args:
-        banco_curado: banco curado a analisar/documentar.
+        banco_analisado: banco curado com as métricas já calculadas.
     """
-    contexto = iniciar_contexto(banco_curado)
-
-    resultado_contexto = _rodar_analisadores(contexto)
-    if isinstance(resultado_contexto, Falha):
-        print(f"Falha ao calcular métricas: {resultado_contexto.erro}")
-        return
-    contexto = resultado_contexto.valor
-    for aviso in resultado_contexto.avisos:
-        print(f"  [{aviso.origem}] {aviso.mensagem}")
-
     destino = Path(
         questionary.text(
             "Diretório de destino do Markdown:", default="docs_gerados"
         ).ask()
     )
-    resultado_geracao = GeradorMarkdown()(contexto.analisado, destino)
+    resultado_geracao = GeradorMarkdown()(banco_analisado, destino)
     if isinstance(resultado_geracao, Falha):
         print(f"Falha ao gerar Markdown: {resultado_geracao.erro}")
         return
     for aviso in resultado_geracao.avisos:
         print(f"  [{aviso.origem}] {aviso.mensagem}")
     print(f"GeradorMarkdown: documentação escrita em '{destino}'.")
+
+
+def _executar_gerador_dbt(banco_analisado: BancoAnalisado) -> None:
+    """Roda o GeradorDbt sobre o banco já analisado.
+
+    Args:
+        banco_analisado: banco curado com as métricas já calculadas.
+    """
+    destino = Path(
+        questionary.text(
+            "Diretório de destino do projeto dbt:", default="dbt_gerado"
+        ).ask()
+    )
+    resultado_geracao = GeradorDbt()(banco_analisado, destino)
+    if isinstance(resultado_geracao, Falha):
+        print(f"Falha ao gerar projeto dbt: {resultado_geracao.erro}")
+        return
+    for aviso in resultado_geracao.avisos:
+        print(f"  [{aviso.origem}] {aviso.mensagem}")
+    print(f"GeradorDbt: projeto dbt escrito em '{destino}'.")
 
 
 def _rodar_analisadores(contexto: ContextoDeAnalise) -> Resultado[ContextoDeAnalise]:
