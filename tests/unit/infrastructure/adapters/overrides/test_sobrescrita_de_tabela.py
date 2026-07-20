@@ -137,3 +137,32 @@ def test_hash_nao_bate_sem_mudanca_de_nomes_usa_mensagem_generica(
 
     assert isinstance(resultado, Sucesso)
     assert "algum campo estrutural foi" in resultado.avisos[0].mensagem
+
+
+def test_hash_muda_quando_coluna_vira_not_null_ou_unique(
+    tmp_path: Path, tabela_extraida: TabelaExtraida
+) -> None:
+    """Borda: nao_nulavel/unica reais do schema entram no hash estrutural.
+
+    Sem isso, uma coluna que virar NOT NULL/UNIQUE no banco não dispararia
+    aviso de mudança estrutural nem regeneração do skeleton.
+    """
+    sobrescrita = SobrescritaDeTabela(tmp_path)
+    sobrescrita(tabela_extraida)
+
+    caminho = tmp_path / "public" / "clientes.yaml"
+    hash_original = yaml.safe_load(caminho.read_text(encoding="utf-8"))["hash"]
+
+    coluna_nome_agora_unica = tabela_extraida.colunas[1].model_copy(
+        update={"nao_nulavel": True, "unica": True}
+    )
+    tabela_com_restricao_nova = tabela_extraida.model_copy(
+        update={"colunas": [tabela_extraida.colunas[0], coluna_nome_agora_unica]}
+    )
+
+    resultado = sobrescrita(tabela_com_restricao_nova)
+
+    assert isinstance(resultado, Sucesso)
+    assert "algum campo estrutural foi" in resultado.avisos[0].mensagem
+    hash_novo = yaml.safe_load(caminho.read_text(encoding="utf-8"))["hash"]
+    assert hash_novo != hash_original
