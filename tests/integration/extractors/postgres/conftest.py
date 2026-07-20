@@ -79,6 +79,32 @@ _SETUP_SQL = """
 
     ANALYZE geografia.pais;
     ANALYZE geografia.filial;
+
+    -- Restrições reais do schema (issue #44: NOT NULL/UNIQUE além de PK/FK).
+    -- "apelido" fica sem UNIQUE constraint nomeada — só um CREATE UNIQUE
+    -- INDEX solto, pra provar que a captura via pg_index cobre esse caso,
+    -- que information_schema.table_constraints (usado pra PK/FK) não pega.
+    CREATE SCHEMA restricoes;
+
+    CREATE TABLE restricoes.contas (
+        id SERIAL PRIMARY KEY,
+        email VARCHAR(150) NOT NULL UNIQUE,
+        apelido VARCHAR(50)
+    );
+    CREATE UNIQUE INDEX idx_contas_apelido_unico ON restricoes.contas (apelido);
+
+    CREATE TABLE restricoes.enderecos (
+        id SERIAL PRIMARY KEY,
+        pais CHAR(2) NOT NULL,
+        cep CHAR(9) NOT NULL,
+        UNIQUE (pais, cep)
+    );
+
+    INSERT INTO restricoes.contas (email, apelido) VALUES ('ana@x.com', 'aninha');
+    INSERT INTO restricoes.enderecos (pais, cep) VALUES ('BR', '01000-000');
+
+    ANALYZE restricoes.contas;
+    ANALYZE restricoes.enderecos;
 """
 
 

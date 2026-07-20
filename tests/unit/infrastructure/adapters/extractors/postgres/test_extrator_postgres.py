@@ -132,12 +132,13 @@ def test_extrair_tabela_retorna_estrutura_completa(
     cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
     cursor_fake.fetchall.side_effect = [
         [
-            ("id", "integer", None, None, None),
-            ("nome", "character varying", 100, None, None),
-            ("cliente_id", "integer", None, None, None),
+            ("id", "integer", None, None, None, "NO"),
+            ("nome", "character varying", 100, None, None, "YES"),
+            ("cliente_id", "integer", None, None, None, "NO"),
         ],  # colunas
         [("id",)],  # PK
         [("cliente_id", "vendas", "clientes", "id")],  # FK (schema cross-referenciado)
+        [("nome",)],  # UNIQUE (single-column)
         [(1, "ana", 10), (2, "bia", 20)],  # amostra
     ]
     cursor_fake.fetchone.return_value = (1000.0,)
@@ -158,9 +159,13 @@ def test_extrair_tabela_retorna_estrutura_completa(
     assert tabela.total_linhas == 1000
     assert [coluna.nome for coluna in tabela.colunas] == ["id", "nome", "cliente_id"]
     assert tabela.colunas[0].chave_primaria is True
+    assert tabela.colunas[0].nao_nulavel is True
     assert tabela.colunas[1].tipo_dado.categoria == CategoriaDeDado.VARCHAR
     assert tabela.colunas[1].tipo_dado.tamanho_maximo == 100
+    assert tabela.colunas[1].nao_nulavel is False
+    assert tabela.colunas[1].unica is True
     assert tabela.colunas[2].chave_estrangeira is True
+    assert tabela.colunas[2].unica is False
     assert tabela.colunas[2].referencia == ReferenciaDeColuna(
         nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
     )
@@ -272,12 +277,13 @@ def test_extrair_tabela_com_duas_fks_na_mesma_coluna_emite_aviso(
     conexao_fake = MagicMock()
     cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
     cursor_fake.fetchall.side_effect = [
-        [("entidade_id", "integer", None, None, None)],  # colunas
+        [("entidade_id", "integer", None, None, None, "YES")],  # colunas
         [],  # PK
         [
             ("entidade_id", "vendas", "clientes", "id"),
             ("entidade_id", "vendas", "fornecedores", "id"),
         ],  # FK duplicada na mesma coluna
+        [],  # UNIQUE
         [],  # amostra
     ]
     cursor_fake.fetchone.return_value = (0.0,)
@@ -368,9 +374,10 @@ def test_extrair_tabela_com_reltuples_negativo_usa_total_linhas_zero(
     conexao_fake = MagicMock()
     cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
     cursor_fake.fetchall.side_effect = [
-        [("id", "integer", None, None, None)],  # colunas
+        [("id", "integer", None, None, None, "NO")],  # colunas
         [("id",)],  # PK
         [],  # FK
+        [],  # UNIQUE
         [],  # amostra
     ]
     cursor_fake.fetchone.return_value = (-1.0,)
