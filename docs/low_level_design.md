@@ -1003,26 +1003,64 @@ class GeradorDbt:
 ```
 
 **Saída:** `dbt_project.yml`, `models/staging/sources.yml`,
-`models/staging/stg_<tabela>.sql` por tabela, `models/staging/schema.yml`.
+`models/staging/stg_<escopo>__<tabela>.sql` por tabela,
+`models/staging/schema.yml`.
+
+**Nome do staging model (issue #14, desvio deliberado do `stg_<tabela>`
+originalmente cogitado):** `stg_<nome_escopo>__<nome_tabela>` (duplo
+underscore, convenção dbt-labs pra múltiplas fontes) — nomes de model são
+globalmente únicos no grafo dbt, e `stg_<tabela>` sozinho colidiria se dois
+escopos tiverem tabela de mesmo nome (ex.: `vendas.clientes` e
+`rh.clientes`).
 
 **Nota de idioma:** esta é a única saída do sistema cujo destino consome os
 nomes diretamente (o próprio dbt e o warehouse). Por isso, e só aqui, os
 identificadores gerados no artefato (nomes de coluna/tabela em `schema.yml`,
-`sources.yml` e no SQL) permanecem em **inglês**, refletindo o contrato real
-consumido pelo dbt — não o código Python do `GeradorDbt`, que segue a mesma
-convenção de nomenclatura em português dos demais componentes.
+`sources.yml` e no SQL, além do vocabulário de teste `unique`/`not_null`/
+`relationships`/`accepted_values`) permanecem em **inglês**, refletindo o
+contrato real consumido pelo dbt — não o código Python do `GeradorDbt`, que
+segue a mesma convenção de nomenclatura em português dos demais
+componentes.
 
-**Testes sugeridos deterministicamente** (lidos de `MetricasBaseColuna`):
+**Testes sugeridos deterministicamente:**
 
 | Condição | Teste |
 |---|---|
-| `percentual_unico == 100.0` | `unique` |
-| `percentual_nulo == 0.0` | `not_null` |
-| `chave_estrangeira == True` | `relationships` |
-| `valores_frequentes` não vazio e `percentual_unico < 10.0` | `accepted_values` |
+| `percentual_unico == 100.0` **ou** `coluna.unica` | `unique` |
+| `percentual_nulo == 0.0` **ou** `coluna.nao_nulavel` | `not_null` |
+| `chave_estrangeira == True` **e** tabela referenciada presente no lote analisado | `relationships` → `ref()` do staging model referenciado |
+| `chave_estrangeira == True` **e** tabela referenciada ausente do lote | sem teste + `Aviso` |
+| `valores_frequentes` não vazio, `percentual_unico < 10.0` **e** cobertura da amostra ≥ 90% | `accepted_values`, com `config: {severity: warn}` |
+
+`unique`/`not_null` são suprimidos quando a coluna já é `chave_primaria`
+(PK implica os dois). Combinar o fato estrutural do schema
+(`unica`/`nao_nulavel`) com a métrica amostral — em vez de só a métrica,
+como a issue original cogitava — resolve a pendência registrada pela #44:
+sugerir teste só a partir de amostra tem o mesmo viés estatístico que
+motivou aquela issue. `accepted_values` usa `severity: warn` porque é
+enumeração exaustiva calculada sobre `valores_frequentes` (top-10
+**amostral**, não a população completa) — um valor de cauda longa fora da
+amostra não deve quebrar CI silenciosamente. Além disso, só é sugerido
+quando a soma das contagens dos top-10 (`_cobertura_dos_valores_frequentes`)
+cobre pelo menos 90% dos valores **não-nulos** de
+`MetadadosDeAmostra.tamanho_amostra` — o denominador exclui os nulos porque
+`valores_frequentes` também é calculado só sobre não-nulos
+(`AnalisadorDeMetricasDeColuna`); dividir pelo total penalizaria
+injustamente uma coluna categórica com muitos nulos cujos valores presentes
+já são exaustivos. Cobertura baixa é sinal de que a lista está longe de ser
+exaustiva mesmo dentro do universo não-nulo amostrado, então nem o `warn`
+compensa sugerir o teste. `relationships` aponta para
+`ref()` (não `source()`) porque testa o dado já castado pelo staging, não o
+bruto; só é gerado quando a tabela referenciada também foi analisada nesta
+execução — apontar `ref()` para um model que este Gerador não produziu
+quebraria `dbt run` do usuário.
 
 **Cast SQL:** usa `TipoDeDado.categoria` + atributos de precisão para gerar
-`CAST(col AS NUMERIC(10,2))` etc.
+`CAST(col AS NUMERIC(10,2))`, `CAST(col AS VARCHAR(255))`,
+`CAST(col AS TIMESTAMP WITH TIME ZONE)` etc. `ENUM`/`SET` (MariaDB, issue
+#35) não têm equivalente ANSI portável e caem para `VARCHAR`. `UNKNOWN` não
+recebe `CAST` — a coluna é projetada raw, sem tipo mapeado não há cast
+seguro a fazer.
 
 ---
 

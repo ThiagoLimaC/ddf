@@ -267,11 +267,22 @@
     revisão pós-merge da #13): `CategoriaDeDado.JSON` estava faltando em
     `_CATEGORIAS_SEM_MINIMO_E_MAXIMO` — mesmo bug de comparação
     lexicográfica já corrigido pras demais categorias textuais/estruturadas
-- [ ] `GeradorDbt(Gerador)`:
+- [x] `GeradorDbt(Gerador)`:
   - `requer = [MetricasBaseColuna]`
-  - `dbt_project.yml` + `sources.yml` + `stg_*.sql` (cast com `TipoDeDado` rico)
-    + `schema.yml` com testes sugeridos deterministicamente
+  - `dbt_project.yml` + `sources.yml` + `stg_<escopo>__<tabela>.sql` (cast com
+    `TipoDeDado` rico; duplo underscore no nome do model, desvio deliberado
+    do `stg_<tabela>` original — evita colisão entre escopos com tabela de
+    mesmo nome) + `schema.yml` com testes sugeridos deterministicamente
+  - `unique`/`not_null` combinam métrica amostral com o fato estrutural do
+    schema (`unica`/`nao_nulavel`) — resolve a pendência da #44;
+    `relationships` só quando a tabela referenciada está no lote analisado
+    (senão `Aviso` + omissão); `accepted_values` com `severity: warn` e só
+    quando os top-10 `valores_frequentes` cobrem ≥90% da amostra (é
+    enumeração sobre amostra, não população — cobertura baixa dentro da
+    própria amostra é sinal de lista longe de exaustiva)
   - Única saída cujos identificadores no artefato ficam em inglês (contrato do dbt)
+  - Refactor embutido: `_escrever_arquivo` extraído para
+    `generators/_escrita.py`, compartilhado com `GeradorMarkdown`
 - [ ] `GeradorContextoDeIA(Gerador)`:
   - `requer = [MetricasBaseColuna]`
   - `ai_context.json` com serialização compacta do `BancoAnalisado`
