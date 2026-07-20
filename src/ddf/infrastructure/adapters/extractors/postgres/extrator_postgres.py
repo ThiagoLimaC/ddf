@@ -37,7 +37,7 @@ _LISTAR_TABELAS_SQL = """
 
 _COLUNAS_SQL = """
     SELECT column_name, data_type, character_maximum_length,
-           numeric_precision, numeric_scale
+           numeric_precision, numeric_scale, is_nullable
     FROM information_schema.columns
     WHERE table_schema = %s AND table_name = %s
     ORDER BY ordinal_position
@@ -77,6 +77,25 @@ _TOTAL_LINHAS_SQL = """
     WHERE n.nspname = %s AND c.relname = %s
 """
 
+# Via pg_index (catálogo), não information_schema.table_constraints como
+# PK/FK acima: todo UNIQUE constraint no Postgres é backed por um índice em
+# pg_index, então esta única query cobre tanto constraint UNIQUE nomeada
+# quanto CREATE UNIQUE INDEX solto (sem ADD CONSTRAINT) — o segundo caso não
+# aparece em information_schema.table_constraints de jeito nenhum.
+# NOT i.indisprimary exclui PK sem lógica extra: o índice de suporte de uma
+# PK nunca aparece como uma segunda entrada indisunique "solta".
+_COLUNAS_UNICAS_SQL = """
+    SELECT a.attname
+    FROM pg_catalog.pg_index i
+    JOIN pg_catalog.pg_class t ON t.oid = i.indrelid
+    JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
+    JOIN pg_catalog.pg_attribute a
+        ON a.attrelid = t.oid AND a.attnum = i.indkey[0]
+    WHERE i.indisunique AND NOT i.indisprimary
+        AND array_length(i.indkey, 1) = 1
+        AND n.nspname = %s AND t.relname = %s
+"""
+
 
 class _LinhaColuna(NamedTuple):
     """Uma linha de information_schema.columns, nomeada por campo.
@@ -92,14 +111,16 @@ class _LinhaColuna(NamedTuple):
     tamanho_maximo: int | None
     precisao: int | None
     escala: int | None
+    is_nullable: str
 
 
 def _construir_coluna(
     linha: _LinhaColuna,
     colunas_pk: set[str],
     colunas_fk: dict[str, ReferenciaDeColuna],
+    colunas_unicas: set[str],
 ) -> ColunaExtraida:
-    """Combina uma linha de information_schema.columns com PK/FK já lidas."""
+    """Combina uma linha de information_schema.columns com PK/FK/UNIQUE já lidas."""
     referencia = colunas_fk.get(linha.nome)
     return ColunaExtraida(
         nome=linha.nome,
@@ -109,6 +130,8 @@ def _construir_coluna(
         chave_primaria=linha.nome in colunas_pk,
         chave_estrangeira=referencia is not None,
         referencia=referencia,
+        nao_nulavel=linha.is_nullable == "NO",
+        unica=linha.nome in colunas_unicas,
     )
 
 
@@ -242,10 +265,17 @@ class ExtratorPostgres:
                     cursor.fetchall(), origem="ExtratorPostgres"
                 )
 
+                cursor.execute(_COLUNAS_UNICAS_SQL, (schema, tabela))
+                colunas_unicas: set[str] = set()
+                for linha_unica in cursor.fetchall():
+                    colunas_unicas.add(linha_unica[0])
+
                 colunas: list[ColunaExtraida] = []
                 for linha_coluna in linhas_colunas:
                     colunas.append(
-                        _construir_coluna(linha_coluna, colunas_pk, colunas_fk)
+                        _construir_coluna(
+                            linha_coluna, colunas_pk, colunas_fk, colunas_unicas
+                        )
                     )
 
                 cursor.execute(_TOTAL_LINHAS_SQL, (schema, tabela))
