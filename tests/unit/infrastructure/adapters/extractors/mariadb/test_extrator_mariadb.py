@@ -137,13 +137,14 @@ def test_extrair_tabela_retorna_estrutura_completa(
     cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
     cursor_fake.fetchall.side_effect = [
         [
-            ("id", "int", "int(11)", None, None, None),
-            ("nome", "varchar", "varchar(100)", 100, None, None),
-            ("ativo", "tinyint", "tinyint(1)", None, None, None),
-            ("cliente_id", "int", "int(11)", None, None, None),
+            ("id", "int", "int(11)", None, None, None, "NO"),
+            ("nome", "varchar", "varchar(100)", 100, None, None, "YES"),
+            ("ativo", "tinyint", "tinyint(1)", None, None, None, "NO"),
+            ("cliente_id", "int", "int(11)", None, None, None, "NO"),
         ],  # colunas
         [("id",)],  # PK
         [("cliente_id", "vendas", "clientes", "id")],  # FK
+        [("nome", "nome")],  # UNIQUE (single-column)
         [(1, "ana", 1, 10), (2, "bia", 0, 20)],  # amostra
     ]
     cursor_fake.fetchone.return_value = (1000,)
@@ -167,10 +168,14 @@ def test_extrair_tabela_retorna_estrutura_completa(
         "cliente_id",
     ]
     assert tabela.colunas[0].chave_primaria is True
+    assert tabela.colunas[0].nao_nulavel is True
     assert tabela.colunas[1].tipo_dado.categoria == CategoriaDeDado.VARCHAR
     assert tabela.colunas[1].tipo_dado.tamanho_maximo == 100
+    assert tabela.colunas[1].nao_nulavel is False
+    assert tabela.colunas[1].unica is True
     assert tabela.colunas[2].tipo_dado.categoria == CategoriaDeDado.BOOLEAN
     assert tabela.colunas[3].chave_estrangeira is True
+    assert tabela.colunas[3].unica is False
     assert tabela.colunas[3].referencia == ReferenciaDeColuna(
         nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
     )
@@ -186,9 +191,12 @@ def test_tinyint_um_unsigned_tambem_e_candidato_a_boolean(
     conexao_fake = MagicMock()
     cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
     cursor_fake.fetchall.side_effect = [
-        [("ativo", "tinyint", "tinyint(1) unsigned", None, None, None)],  # colunas
+        [
+            ("ativo", "tinyint", "tinyint(1) unsigned", None, None, None, "YES"),
+        ],  # colunas
         [],  # PK
         [],  # FK
+        [],  # UNIQUE
         [(1,), (0,), (1,)],  # amostra
     ]
     cursor_fake.fetchone.return_value = (3,)
@@ -282,12 +290,13 @@ def test_extrair_tabela_com_duas_fks_na_mesma_coluna_emite_aviso(
     conexao_fake = MagicMock()
     cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
     cursor_fake.fetchall.side_effect = [
-        [("entidade_id", "int", "int(11)", None, None, None)],  # colunas
+        [("entidade_id", "int", "int(11)", None, None, None, "YES")],  # colunas
         [],  # PK
         [
             ("entidade_id", "vendas", "clientes", "id"),
             ("entidade_id", "vendas", "fornecedores", "id"),
         ],  # FK duplicada na mesma coluna
+        [],  # UNIQUE
         [],  # amostra
     ]
     cursor_fake.fetchone.return_value = (0,)
@@ -331,9 +340,10 @@ def test_extrair_tabela_com_table_rows_nulo_usa_total_linhas_zero(
     conexao_fake = MagicMock()
     cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
     cursor_fake.fetchall.side_effect = [
-        [("id", "int", "int(11)", None, None, None)],  # colunas
+        [("id", "int", "int(11)", None, None, None, "NO")],  # colunas
         [("id",)],  # PK
         [],  # FK
+        [],  # UNIQUE
         [],  # amostra
     ]
     cursor_fake.fetchone.return_value = (None,)
@@ -357,9 +367,10 @@ def test_tinyint_um_com_valor_atipico_na_amostra_mantem_integer(
     conexao_fake = MagicMock()
     cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
     cursor_fake.fetchall.side_effect = [
-        [("contador", "tinyint", "tinyint(1)", None, None, None)],  # colunas
+        [("contador", "tinyint", "tinyint(1)", None, None, None, "YES")],  # colunas
         [],  # PK
         [],  # FK
+        [],  # UNIQUE
         [(0,), (1,), (2,)],  # amostra com valor atípico
     ]
     cursor_fake.fetchone.return_value = (3,)
@@ -382,9 +393,10 @@ def test_tinyint_um_com_amostra_vazia_mantem_integer(
     conexao_fake = MagicMock()
     cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
     cursor_fake.fetchall.side_effect = [
-        [("ativo", "tinyint", "tinyint(1)", None, None, None)],  # colunas
+        [("ativo", "tinyint", "tinyint(1)", None, None, None, "YES")],  # colunas
         [],  # PK
         [],  # FK
+        [],  # UNIQUE
         [],  # amostra vazia
     ]
     cursor_fake.fetchone.return_value = (0,)
@@ -398,6 +410,39 @@ def test_tinyint_um_com_amostra_vazia_mantem_integer(
 
     assert isinstance(resultado, Sucesso)
     assert resultado.valor.colunas[0].tipo_dado.categoria == CategoriaDeDado.INTEGER
+
+
+def test_unique_composta_nao_marca_nenhuma_coluna_como_unica(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: UNIQUE(a, b) não torna 'a' nem 'b' únicas individualmente."""
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.side_effect = [
+        [
+            ("codigo_pais", "varchar", "varchar(2)", 2, None, None, "NO"),
+            ("codigo_local", "varchar", "varchar(10)", 10, None, None, "NO"),
+        ],  # colunas
+        [],  # PK
+        [],  # FK
+        [
+            ("uk_pais_local", "codigo_pais"),
+            ("uk_pais_local", "codigo_local"),
+        ],  # UNIQUE composta — mesmo constraint_name, 2 colunas
+        [],  # amostra
+    ]
+    cursor_fake.fetchone.return_value = (0,)
+    cursor_fake.description = [("codigo_pais",), ("codigo_local",)]
+    pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+    extrator = ExtratorMariaDB(
+        host="fake", user="root", password="senha", configuracao=configuracao
+    )
+    resultado = extrator.extrair_tabela("vendas", "enderecos")
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor.colunas[0].unica is False
+    assert resultado.valor.colunas[1].unica is False
 
 
 def test_listar_tabelas_sem_tabelas_retorna_lista_vazia(
