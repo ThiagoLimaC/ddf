@@ -15,6 +15,7 @@ from ddf.domain.model.analysis import (
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
+from ddf.infrastructure.adapters.generators._escrita import escrever_arquivo
 
 _NAO_DISPONIVEL = "N/D"
 _NAO_APLICAVEL = "—"
@@ -295,7 +296,7 @@ class GeradorMarkdown:
         for tabela in entrada.tabelas:
             caminho_tabela = destino / tabela.nome_escopo / f"{tabela.nome_tabela}.md"
             conteudo = _TEMPLATE_TABELA.render(tabela=tabela)
-            resultado = _escrever_arquivo(caminho_tabela, conteudo)
+            resultado = escrever_arquivo(caminho_tabela, conteudo)
             if isinstance(resultado, Falha):
                 return resultado
             if tabela.papel_de_negocio is None:
@@ -313,26 +314,8 @@ class GeradorMarkdown:
             entrada.tabelas, key=lambda t: (t.nome_escopo, t.nome_tabela)
         )
         conteudo_index = _TEMPLATE_INDEX.render(tabelas=ordenadas)
-        resultado_index = _escrever_arquivo(destino / "index.md", conteudo_index)
+        resultado_index = escrever_arquivo(destino / "index.md", conteudo_index)
         if isinstance(resultado_index, Falha):
             return resultado_index
 
         return Sucesso(None, avisos=avisos)
-
-
-def _escrever_arquivo(caminho: Path, conteudo: str) -> Resultado[None]:
-    """Cria os diretórios pais se necessário e escreve o conteúdo em disco.
-
-    Args:
-        caminho: arquivo de destino.
-        conteudo: texto a ser escrito.
-
-    Returns:
-        Sucesso(None), ou Falha com o path e o detalhe do OSError.
-    """
-    try:
-        caminho.parent.mkdir(parents=True, exist_ok=True)
-        caminho.write_text(conteudo, encoding="utf-8")
-    except OSError as erro:
-        return Falha(f"Não foi possível escrever em '{caminho}': {erro}")
-    return Sucesso(None)
