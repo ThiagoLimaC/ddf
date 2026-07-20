@@ -39,8 +39,10 @@ def test_extrair_tabela_retorna_estrutura_completa(
 
     coluna_id, coluna_fk, coluna_valor = tabela.colunas
     assert coluna_id.chave_primaria is True
+    assert coluna_id.unica is False  # PK não é marcada via UNIQUE
 
     assert coluna_fk.chave_estrangeira is True
+    assert coluna_fk.nao_nulavel is True
     assert coluna_fk.referencia == ReferenciaDeColuna(
         nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
     )
@@ -48,6 +50,7 @@ def test_extrair_tabela_retorna_estrutura_completa(
     assert coluna_valor.tipo_dado.categoria == CategoriaDeDado.NUMERIC
     assert coluna_valor.tipo_dado.precisao == 10
     assert coluna_valor.tipo_dado.escala == 2
+    assert coluna_valor.nao_nulavel is True
 
     assert tabela.amostra.height == 3  # percentual=100 -> amostra completa
     assert tabela.metadados_amostra.tamanho_amostra == 3
@@ -77,7 +80,9 @@ def test_listar_escopos_retorna_escopos_semeados(
 
     resultado = extrator.listar_escopos()
 
-    assert resultado == Sucesso(["geografia", "pessoa", "public", "rh", "vazio"])
+    assert resultado == Sucesso(
+        ["geografia", "pessoa", "public", "restricoes", "rh", "vazio"]
+    )
 
 
 # Erro esperado
@@ -143,6 +148,57 @@ def test_listar_tabelas_schema_vazio_retorna_lista_vazia(
     resultado = extrator.listar_tabelas("vazio")
 
     assert resultado == Sucesso([])
+
+
+def test_extrair_tabela_com_unique_nomeada_marca_coluna_unica(
+    dsn: str, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: UNIQUE constraint nomeada (single-column) marca unica=True."""
+    extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+
+    resultado = extrator.extrair_tabela("restricoes", "contas")
+
+    assert isinstance(resultado, Sucesso)
+    coluna_email = next(c for c in resultado.valor.colunas if c.nome == "email")
+    assert coluna_email.unica is True
+    assert coluna_email.nao_nulavel is True
+
+
+def test_extrair_tabela_com_indice_unico_solto_marca_coluna_unica(
+    dsn: str, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: CREATE UNIQUE INDEX sem ADD CONSTRAINT também marca unica=True.
+
+    information_schema.table_constraints (usado pra PK/FK) não lista esse
+    índice — só captura via pg_index fecha essa lacuna (achado da banca
+    nesta issue: sem isso, 'unica' teria cobertura assimétrica entre
+    Postgres e MariaDB para o mesmo padrão real de schema).
+    """
+    extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+
+    resultado = extrator.extrair_tabela("restricoes", "contas")
+
+    assert isinstance(resultado, Sucesso)
+    coluna_apelido = next(c for c in resultado.valor.colunas if c.nome == "apelido")
+    assert coluna_apelido.unica is True
+    assert coluna_apelido.nao_nulavel is False  # nullable, sem NOT NULL
+
+
+def test_extrair_tabela_com_unique_composta_nao_marca_colunas_individuais(
+    dsn: str, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: UNIQUE(pais, cep) não torna nenhuma das duas colunas unica=True."""
+    extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+
+    resultado = extrator.extrair_tabela("restricoes", "enderecos")
+
+    assert isinstance(resultado, Sucesso)
+    coluna_pais = next(c for c in resultado.valor.colunas if c.nome == "pais")
+    coluna_cep = next(c for c in resultado.valor.colunas if c.nome == "cep")
+    assert coluna_pais.unica is False
+    assert coluna_cep.unica is False
+    assert coluna_pais.nao_nulavel is True
+    assert coluna_cep.nao_nulavel is True
 
 
 def test_extrair_tabela_com_fk_composta_pareia_colunas_corretamente(
