@@ -37,7 +37,7 @@ _LISTAR_TABELAS_SQL = """
 
 _COLUNAS_SQL = """
     SELECT column_name, data_type, column_type, character_maximum_length,
-           numeric_precision, numeric_scale
+           numeric_precision, numeric_scale, is_nullable
     FROM information_schema.columns
     WHERE table_schema = %s AND table_name = %s
     ORDER BY ordinal_position
@@ -64,6 +64,24 @@ _TOTAL_LINHAS_SQL = """
     WHERE table_schema = %s AND table_name = %s
 """
 
+# AND kcu.table_name = %s nos dois lados do JOIN: nomes de constraint no
+# MariaDB são escopados por TABELA, não por schema — duas tabelas do mesmo
+# schema podem ter uma UNIQUE KEY com nome idêntico (ex.: "email" gerado por
+# UNIQUE(email) em tabelas diferentes). Sem esse filtro, o JOIN por
+# constraint_name+table_schema cruza linhas de tabelas diferentes e classifica
+# colunas UNIQUE reais como não-únicas por acidente (validado empiricamente
+# contra MariaDB 11 real durante a revisão desta issue).
+_COLUNAS_UNICAS_SQL = """
+    SELECT kcu.constraint_name, kcu.column_name
+    FROM information_schema.table_constraints tc
+    JOIN information_schema.key_column_usage kcu
+        ON tc.constraint_name = kcu.constraint_name
+        AND tc.table_schema = kcu.table_schema
+        AND tc.table_name = kcu.table_name
+    WHERE tc.constraint_type = 'UNIQUE'
+        AND tc.table_schema = %s AND tc.table_name = %s
+"""
+
 
 class _LinhaColuna(NamedTuple):
     """Uma linha de information_schema.columns, nomeada por campo.
@@ -80,6 +98,7 @@ class _LinhaColuna(NamedTuple):
     tamanho_maximo: int | None
     precisao: int | None
     escala: int | None
+    is_nullable: str
 
 
 def _quotar_identificador(nome: str) -> str:
@@ -96,8 +115,9 @@ def _construir_coluna(
     linha: _LinhaColuna,
     colunas_pk: set[str],
     colunas_fk: dict[str, ReferenciaDeColuna],
+    colunas_unicas: set[str],
 ) -> ColunaExtraida:
-    """Combina uma linha de information_schema.columns com PK/FK já lidas."""
+    """Combina uma linha de information_schema.columns com PK/FK/UNIQUE já lidas."""
     referencia = colunas_fk.get(linha.nome)
     return ColunaExtraida(
         nome=linha.nome,
@@ -111,7 +131,34 @@ def _construir_coluna(
         chave_primaria=linha.nome in colunas_pk,
         chave_estrangeira=referencia is not None,
         referencia=referencia,
+        nao_nulavel=linha.is_nullable == "NO",
+        unica=linha.nome in colunas_unicas,
     )
+
+
+def _colunas_unicas_de_coluna_unica(
+    linhas: list[tuple[str, str]],
+) -> set[str]:
+    """Agrupa (constraint_name, column_name) e mantém só constraints de 1 coluna.
+
+    Uma constraint UNIQUE composta (2+ colunas) não torna nenhuma coluna
+    individual única sozinha — só constraints com exatamente 1 linha no grupo
+    (uma única coluna membro) contam.
+
+    Args:
+        linhas: pares (constraint_name, column_name) de _COLUNAS_UNICAS_SQL.
+
+    Returns:
+        Nomes de coluna que são a única membro de sua constraint UNIQUE.
+    """
+    colunas_por_constraint: dict[str, list[str]] = {}
+    for nome_constraint, nome_coluna in linhas:
+        colunas_por_constraint.setdefault(nome_constraint, []).append(nome_coluna)
+    return {
+        colunas[0]
+        for colunas in colunas_por_constraint.values()
+        if len(colunas) == 1
+    }
 
 
 def _promover_booleanos_pela_amostra(
@@ -276,6 +323,9 @@ class ExtratorMariaDB:
                     cursor.fetchall(), origem="ExtratorMariaDB"
                 )
 
+                cursor.execute(_COLUNAS_UNICAS_SQL, (escopo, tabela))
+                colunas_unicas = _colunas_unicas_de_coluna_unica(cursor.fetchall())
+
                 # Colunas só são finalizadas depois da amostra (abaixo) — ao
                 # contrário do ExtratorPostgres, aqui a promoção de BOOLEAN
                 # depende de dado real já carregado. Ver docstring de
@@ -290,7 +340,9 @@ class ExtratorMariaDB:
                     if linha_coluna.column_type.startswith("tinyint(1)"):
                         candidatos_booleanos.add(linha_coluna.nome)
                     colunas.append(
-                        _construir_coluna(linha_coluna, colunas_pk, colunas_fk)
+                        _construir_coluna(
+                            linha_coluna, colunas_pk, colunas_fk, colunas_unicas
+                        )
                     )
 
                 cursor.execute(_TOTAL_LINHAS_SQL, (escopo, tabela))

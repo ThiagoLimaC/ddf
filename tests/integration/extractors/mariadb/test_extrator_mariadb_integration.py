@@ -45,8 +45,10 @@ def test_extrair_tabela_retorna_estrutura_completa(
 
     coluna_id, coluna_fk, coluna_valor = tabela.colunas
     assert coluna_id.chave_primaria is True
+    assert coluna_id.unica is False  # PK não é marcada via UNIQUE
 
     assert coluna_fk.chave_estrangeira is True
+    assert coluna_fk.nao_nulavel is True
     assert coluna_fk.referencia == ReferenciaDeColuna(
         nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
     )
@@ -54,6 +56,7 @@ def test_extrair_tabela_retorna_estrutura_completa(
     assert coluna_valor.tipo_dado.categoria == CategoriaDeDado.NUMERIC
     assert coluna_valor.tipo_dado.precisao == 10
     assert coluna_valor.tipo_dado.escala == 2
+    assert coluna_valor.nao_nulavel is True
 
     assert tabela.amostra.height == 3  # percentual=100 -> amostra completa
     assert tabela.metadados_amostra.tamanho_amostra == 3
@@ -127,7 +130,7 @@ def test_listar_escopos_retorna_escopos_semeados(
 
     resultado = extrator.listar_escopos()
 
-    assert resultado == Sucesso(["pessoa", "rh", "vazio", "vendas"])
+    assert resultado == Sucesso(["pessoa", "restricoes", "rh", "vazio", "vendas"])
 
 
 # Erro esperado
@@ -188,6 +191,68 @@ def test_extrair_tabela_com_fk_cross_database_captura_escopo_de_destino(
     assert coluna_fk.referencia == ReferenciaDeColuna(
         nome_escopo="pessoa", nome_tabela="pessoa", nome_coluna="id"
     )
+
+
+def test_extrair_tabela_com_constraint_de_mesmo_nome_em_outra_tabela_nao_confunde(
+    conexao: tuple[str, int, str, str], configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: regressão da colisão de nome de UNIQUE constraint entre tabelas.
+
+    "restricoes.pedidos" e "restricoes.clientes" têm UNIQUE KEY "email" com o
+    MESMO NOME no MESMO database — nomes de constraint no MySQL/MariaDB são
+    escopados por tabela, não por schema. Sem o filtro
+    AND kcu.table_name = %s na query de UNIQUE, o JOIN cruzaria as duas
+    tabelas e classificaria "email" como não-única por acidente (bug real
+    encontrado e reproduzido pela banca durante a revisão desta issue).
+    """
+    host, port, user, password = conexao
+    extrator = ExtratorMariaDB(
+        host=host, port=port, user=user, password=password, configuracao=configuracao
+    )
+
+    resultado = extrator.extrair_tabela("restricoes", "pedidos")
+
+    assert isinstance(resultado, Sucesso)
+    coluna_email = next(c for c in resultado.valor.colunas if c.nome == "email")
+    assert coluna_email.unica is True
+    assert coluna_email.nao_nulavel is True
+
+
+def test_extrair_tabela_com_indice_unico_solto_marca_coluna_unica(
+    conexao: tuple[str, int, str, str], configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: CREATE UNIQUE INDEX sem ADD CONSTRAINT também marca unica=True."""
+    host, port, user, password = conexao
+    extrator = ExtratorMariaDB(
+        host=host, port=port, user=user, password=password, configuracao=configuracao
+    )
+
+    resultado = extrator.extrair_tabela("restricoes", "pedidos")
+
+    assert isinstance(resultado, Sucesso)
+    coluna_apelido = next(c for c in resultado.valor.colunas if c.nome == "apelido")
+    assert coluna_apelido.unica is True
+    assert coluna_apelido.nao_nulavel is False
+
+
+def test_extrair_tabela_com_unique_composta_nao_marca_colunas_individuais(
+    conexao: tuple[str, int, str, str], configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: UNIQUE KEY(pais, cep) não torna nenhuma das duas colunas unica=True."""
+    host, port, user, password = conexao
+    extrator = ExtratorMariaDB(
+        host=host, port=port, user=user, password=password, configuracao=configuracao
+    )
+
+    resultado = extrator.extrair_tabela("restricoes", "enderecos")
+
+    assert isinstance(resultado, Sucesso)
+    coluna_pais = next(c for c in resultado.valor.colunas if c.nome == "pais")
+    coluna_cep = next(c for c in resultado.valor.colunas if c.nome == "cep")
+    assert coluna_pais.unica is False
+    assert coluna_cep.unica is False
+    assert coluna_pais.nao_nulavel is True
+    assert coluna_cep.nao_nulavel is True
 
 
 def test_listar_tabelas_escopo_vazio_retorna_lista_vazia(

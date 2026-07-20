@@ -184,6 +184,29 @@
       assim que uma segunda fonte trouxe um `test_mapeamento_de_tipos.py`
       com o mesmo nome de arquivo do Postgres, sem `__init__.py` nos
       diretórios de teste
+- [x] `domain/model/{extraction,curation,analysis}.py` — reabertura de escopo
+      da #44: `nao_nulavel`/`unica` em `ColunaExtraida`/`ColunaCurada`/
+      `ColunaAnalisada`, campos estruturais (não métricas) no mesmo padrão de
+      `chave_primaria`/`chave_estrangeira`
+- [x] `ExtratorPostgres`/`ExtratorMariaDB` — captura de NOT NULL real do
+      schema (`is_nullable`/`IS_NULLABLE`, mesma query já existente de
+      colunas) e UNIQUE single-column (issue #44):
+  - Postgres via catálogo `pg_index` (não `information_schema.
+    table_constraints` como PK/FK — desvio deliberado pra cobrir num único
+    passo tanto UNIQUE constraint nomeada quanto `CREATE UNIQUE INDEX`
+    solto, que `table_constraints` não lista)
+  - MariaDB via `information_schema.table_constraints`/`key_column_usage`,
+    agrupando por `constraint_name` em Python pra ignorar UNIQUE composto —
+    **bug real encontrado e reproduzido contra MariaDB 11 real** durante a
+    revisão: nomes de constraint no MySQL/MariaDB são escopados por
+    **tabela**, não por schema, então o JOIN precisa de
+    `AND kcu.table_name = %s` explícito (o padrão de PK não precisava
+    porque não faz esse JOIN) — sem isso, duas tabelas do mesmo schema com
+    UNIQUE de mesmo nome (comum: `UNIQUE(email)`) geravam classificação
+    cruzada e falso `unica=False`
+  - `SobrescritaDeTabela._calcular_hash_estrutural` passou a incluir os dois
+    campos novos — sem isso, mudança de NOT NULL/UNIQUE no banco não
+    disparava aviso de estrutura alterada
 
 ## 4. Sobrescrita (ACL Extraction → Curation) e OrquestradorParalelo
 
@@ -230,6 +253,20 @@
   - `requer = [MetricasBaseColuna, MetricasBaseTabela]`
   - Um `.md` por tabela + `index.md`
   - Nota de rodapé com `MetadadosDeAmostra` (estratégia, N amostrado, M total)
+  - Reabertura de escopo da #44: coluna "Chave" renomeada pra "Restrição",
+    acumulando `PK`/`FK`/`UNIQUE`/`NOT NULL` (antes só PK/FK) — suprimidos
+    quando a coluna já é PK; `percentual_nulo` mostra "0.00% (garantido pelo
+    schema)" quando `nao_nulavel=True`, combinando fato estrutural + métrica
+    amostral só na apresentação; aviso de baixo sinal de "Valores frequentes
+    por coluna" (antes só PK) generalizado pra `unica=True`, sem duplicar
+    quando as duas são verdadeiras; seção "Valores frequentes por coluna"
+    sempre renderiza o cabeçalho com uma nota quando nenhuma coluna é
+    elegível (ex.: amostra vazia), em vez de desaparecer em silêncio —
+    achado do usuário testando o artefato real (`docs_gerados/`)
+  - Bugfix trivial e não relacionado, embutido na mesma issue (achado na
+    revisão pós-merge da #13): `CategoriaDeDado.JSON` estava faltando em
+    `_CATEGORIAS_SEM_MINIMO_E_MAXIMO` — mesmo bug de comparação
+    lexicográfica já corrigido pras demais categorias textuais/estruturadas
 - [ ] `GeradorDbt(Gerador)`:
   - `requer = [MetricasBaseColuna]`
   - `dbt_project.yml` + `sources.yml` + `stg_*.sql` (cast com `TipoDeDado` rico)

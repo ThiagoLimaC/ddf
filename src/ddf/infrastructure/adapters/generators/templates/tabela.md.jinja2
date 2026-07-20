@@ -18,10 +18,10 @@
 
 ## Colunas
 
-| Nome | Tipo | Chave | Papel de negócio |
+| Nome | Tipo | Restrição | Papel de negócio |
 |---|---|---|---|
 {% for coluna in tabela.colunas %}
-| {{ coluna.nome | escapar }} | {{ coluna.tipo_dado | formatar_tipo | escapar }} | {{ coluna | marcadores_de_chave | escapar }} | {{ (coluna.papel_de_negocio or "N/D") | escapar }} |
+| {{ coluna.nome | escapar }} | {{ coluna.tipo_dado | formatar_tipo | escapar }} | {{ coluna | marcadores_de_restricao | escapar }} | {{ (coluna.papel_de_negocio or "N/D") | escapar }} |
 {% endfor %}
 
 ## Qualidade dos dados
@@ -34,14 +34,17 @@
 {% endfor %}
 
 {% set secoes = tabela.colunas | secoes_valores_frequentes(tabela.metadados_amostra.tamanho_amostra) %}
-{% if secoes %}
 ## Valores frequentes por coluna
 
+{% if secoes %}
 {% for secao in secoes %}
 #### {{ secao.nome_coluna }}
 
 {% if secao.chave_primaria %}
 *Coluna é chave primária — valores tendem a ser únicos, então esta lista costuma trazer só entradas com contagem 1, sem sinal analítico.*
+
+{% elif secao.unica %}
+*Coluna tem restrição UNIQUE — valores tendem a ser únicos, então esta lista costuma trazer só entradas com contagem 1, sem sinal analítico.*
 
 {% endif %}
 {% if secao.totalmente_nulo %}
@@ -56,6 +59,9 @@
 
 {% endif %}
 {% endfor %}
+{% else %}
+*Nenhuma coluna desta tabela tem valores frequentes elegíveis para listar aqui — geralmente porque a amostra está vazia (tabela sem linhas, ou percentual de amostragem muito baixo) ou porque as métricas de coluna ainda não foram calculadas. Isso não é um erro de geração.*
+
 {% endif %}
 ---
 

@@ -56,6 +56,21 @@ class ColunaAnalisada(BaseModel):
     chave_primaria: bool = False
     chave_estrangeira: bool = False
     referencia: ReferenciaDeColuna | None = None
+    nao_nulavel: bool = Field(
+        default=False,
+        description=(
+            "NOT NULL real do schema — garantia da fonte, não estimativa amostral."
+        ),
+    )
+    unica: bool = Field(
+        default=False,
+        description=(
+            "UNIQUE single-column real do schema (PK excluída). Constraints "
+            "UNIQUE compostas de 2+ colunas não marcam nenhuma coluna "
+            "individual como única — esse caso fica deliberadamente fora de "
+            "representação."
+        ),
+    )
     papel_de_negocio: str | None = None
     regras_de_negocio: list[str] = Field(default_factory=list)
     metricas: list[MetricaDeColuna] = Field(default_factory=list)

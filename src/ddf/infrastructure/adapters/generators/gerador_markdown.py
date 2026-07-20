@@ -27,8 +27,11 @@ _CATEGORIAS_SEM_MINIMO_E_MAXIMO = {
     CategoriaDeDado.ENUM,
     CategoriaDeDado.SET,
     CategoriaDeDado.BOOLEAN,
+    CategoriaDeDado.JSON,
     CategoriaDeDado.UNKNOWN,
 }
+
+_GARANTIDO_PELO_SCHEMA = "0.00% (garantido pelo schema)"
 
 _CATEGORIAS_COM_PRECISAO_ESCALA = {CategoriaDeDado.NUMERIC}
 _CATEGORIAS_COM_TAMANHO_MAXIMO = {CategoriaDeDado.VARCHAR}
@@ -76,15 +79,18 @@ def _formatar_tipo(tipo: TipoDeDado) -> str:
     return categoria.value
 
 
-def _marcadores_de_chave(coluna: ColunaAnalisada) -> str:
-    """Filtro Jinja: combina PK e FK numa coluna que é as duas ao mesmo tempo.
+def _marcadores_de_restricao(coluna: ColunaAnalisada) -> str:
+    """Filtro Jinja: combina PK, FK, UNIQUE e NOT NULL numa mesma coluna.
 
     Args:
         coluna: coluna analisada.
 
     Returns:
-        "PK", "FK → escopo.tabela.coluna", os dois combinados por vírgula,
-        ou string vazia se a coluna não for chave.
+        "PK", "FK → escopo.tabela.coluna", "UNIQUE", "NOT NULL", combinados
+        por vírgula conforme aplicável, ou string vazia se a coluna não tem
+        nenhuma restrição real do schema. "UNIQUE"/"NOT NULL" são omitidos
+        quando a coluna já é PK — PK implica único e não-nulo, marcar os
+        dois seria redundante.
     """
     marcadores: list[str] = []
     if coluna.chave_primaria:
@@ -95,6 +101,10 @@ def _marcadores_de_chave(coluna: ColunaAnalisada) -> str:
             f"FK → {referencia.nome_escopo}.{referencia.nome_tabela}."
             f"{referencia.nome_coluna}"
         )
+    if coluna.unica and not coluna.chave_primaria:
+        marcadores.append("UNIQUE")
+    if coluna.nao_nulavel and not coluna.chave_primaria:
+        marcadores.append("NOT NULL")
     return ", ".join(marcadores)
 
 
@@ -157,7 +167,10 @@ def _linha_qualidade(coluna: ColunaAnalisada) -> dict[str, str]:
 
     Returns:
         Nome e as métricas de qualidade já formatadas/escapadas, com "N/D"
-        onde a métrica ainda não foi calculada.
+        onde a métrica ainda não foi calculada. `percentual_nulo` mostra
+        "0.00% (garantido pelo schema)" quando `coluna.nao_nulavel` é
+        verdadeiro — é garantia do schema, não estimativa sobre a amostra,
+        então independe de MetricasBaseColuna já ter sido calculada.
     """
     aplicavel = coluna.tipo_dado.categoria not in _CATEGORIAS_SEM_MINIMO_E_MAXIMO
     metrica = _metrica_de_coluna(coluna)
@@ -170,6 +183,8 @@ def _linha_qualidade(coluna: ColunaAnalisada) -> dict[str, str]:
         minimo = _formatar_extremo(metrica.minimo, aplicavel)
         maximo = _formatar_extremo(metrica.maximo, aplicavel)
         formato = metrica.formato_detectado or _NAO_DISPONIVEL
+    if coluna.nao_nulavel:
+        percentual_nulo = _GARANTIDO_PELO_SCHEMA
 
     return {
         "nome": _escapar_celula(coluna.nome),
@@ -200,9 +215,11 @@ def _secoes_valores_frequentes(
         valores_frequentes não vazio, ou (b) é 100% nula na amostra — nesse
         caso a lista de fato não existe, e omitir a coluna em silêncio
         pareceria uma omissão do Gerador, não um fato sobre o dado. Colunas
-        com métrica ausente continuam omitidas. Inclui `chave_primaria`
-        (lista tende a ser só ruído: contagem 1 em quase todo valor) e
-        `totalmente_nulo` para o template escolher a nota certa.
+        com métrica ausente continuam omitidas. Inclui `chave_primaria` e
+        `unica` (lista tende a ser só ruído nos dois casos: contagem 1 em
+        quase todo valor) e `totalmente_nulo` para o template escolher a nota
+        certa — PK tem precedência sobre UNIQUE quando as duas são
+        verdadeiras, pra não duplicar o aviso (PK implica único).
     """
     secoes = []
     for coluna in colunas:
@@ -231,6 +248,7 @@ def _secoes_valores_frequentes(
             {
                 "nome_coluna": _escapar_celula(coluna.nome),
                 "chave_primaria": coluna.chave_primaria,
+                "unica": coluna.unica and not coluna.chave_primaria,
                 "totalmente_nulo": totalmente_nulo,
                 "itens": itens,
             }
@@ -248,7 +266,7 @@ _ambiente = Environment(
 )
 _ambiente.filters["escapar"] = _escapar_celula
 _ambiente.filters["formatar_tipo"] = _formatar_tipo
-_ambiente.filters["marcadores_de_chave"] = _marcadores_de_chave
+_ambiente.filters["marcadores_de_restricao"] = _marcadores_de_restricao
 _ambiente.filters["completude"] = _formatar_completude
 _ambiente.filters["linha_qualidade"] = _linha_qualidade
 _ambiente.filters["secoes_valores_frequentes"] = _secoes_valores_frequentes

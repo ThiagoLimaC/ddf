@@ -63,6 +63,44 @@ _SETUP_STATEMENTS = [
     "ANALYZE TABLE vendas.pedidos",
     "ANALYZE TABLE pessoa.pessoa",
     "ANALYZE TABLE rh.funcionario",
+    "CREATE DATABASE restricoes",
+    # "pedidos" e "clientes" têm UNIQUE KEY com o MESMO NOME ("email") no
+    # MESMO database — reproduz a colisão de nome de constraint entre
+    # tabelas (achado da banca nesta issue: nomes de constraint no
+    # MySQL/MariaDB são escopados por tabela, não por schema). Sem o filtro
+    # AND kcu.table_name = %s, extrair "pedidos" veria as 2 linhas (de
+    # "pedidos" e de "clientes") sob o mesmo constraint_name e classificaria
+    # "email" como não-única por acidente.
+    """
+    CREATE TABLE restricoes.pedidos (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        email VARCHAR(150) NOT NULL,
+        apelido VARCHAR(50),
+        UNIQUE KEY email (email)
+    ) ENGINE=InnoDB
+    """,
+    """
+    CREATE TABLE restricoes.clientes (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        email VARCHAR(150) NOT NULL,
+        UNIQUE KEY email (email)
+    ) ENGINE=InnoDB
+    """,
+    "CREATE UNIQUE INDEX idx_pedidos_apelido_unico ON restricoes.pedidos (apelido)",
+    """
+    CREATE TABLE restricoes.enderecos (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        pais CHAR(2) NOT NULL,
+        cep CHAR(9) NOT NULL,
+        UNIQUE KEY uk_pais_cep (pais, cep)
+    ) ENGINE=InnoDB
+    """,
+    "INSERT INTO restricoes.pedidos (email, apelido) VALUES ('ana@x.com', 'aninha')",
+    "INSERT INTO restricoes.clientes (email) VALUES ('bia@x.com')",
+    "INSERT INTO restricoes.enderecos (pais, cep) VALUES ('BR', '01000-000')",
+    "ANALYZE TABLE restricoes.pedidos",
+    "ANALYZE TABLE restricoes.clientes",
+    "ANALYZE TABLE restricoes.enderecos",
 ]
 
 
