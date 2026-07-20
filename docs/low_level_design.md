@@ -165,7 +165,17 @@ class ColunaExtraida(BaseModel):
     chave_primaria: bool = False
     chave_estrangeira: bool = False
     referencia: ReferenciaDeColuna | None = None
+    nao_nulavel: bool = False  # NOT NULL real do schema
+    unica: bool = False        # UNIQUE single-column real do schema (PK excluída)
 ```
+
+**`nao_nulavel`/`unica` (issue #44):** fatos estruturais do schema, no mesmo
+nível epistemológico de `chave_primaria`/`chave_estrangeira` — lidos do
+catálogo da fonte, não calculados sobre amostra. Por isso são campos simples
+aqui, não um novo `MetricaDeColuna` (ver `MetricasBaseColuna` abaixo, que
+não muda). `unica=True` significa "unicidade single-column garantida pelo
+schema": uma constraint UNIQUE composta de 2+ colunas não marca nenhuma
+coluna individual como única — esse caso é deliberadamente não representado.
 
 **`referencia: ReferenciaDeColuna | None`** — Value Object compartilhado
 (`domain/model/common/referencia_de_coluna.py`) com `nome_escopo`,
@@ -213,6 +223,8 @@ class ColunaCurada(BaseModel):
     chave_primaria: bool = False
     chave_estrangeira: bool = False
     referencia: ReferenciaDeColuna | None = None
+    nao_nulavel: bool = False  # NOT NULL real do schema (issue #44)
+    unica: bool = False        # UNIQUE single-column real do schema (issue #44)
     papel_de_negocio: str | None = None     # adicionado neste contexto
     regras_de_negocio: list[str] = Field(default_factory=list)
 ```
@@ -312,6 +324,8 @@ class ColunaAnalisada(BaseModel):
     chave_primaria: bool
     chave_estrangeira: bool
     referencia: ReferenciaDeColuna | None
+    nao_nulavel: bool  # NOT NULL real do schema (issue #44)
+    unica: bool         # UNIQUE single-column real do schema (issue #44)
     papel_de_negocio: str | None
     regras_de_negocio: list[str]
     metricas: list[MetricaDeColuna] = Field(default_factory=list)
@@ -644,7 +658,28 @@ schemas de sistema do Postgres (`information_schema`, `pg_catalog`,
    antes e depois do fix. `MariaDB` nunca teve esse problema —
    `key_column_usage` já traz `REFERENCED_COLUMN_NAME` pareado corretamente
    por linha via `ORDINAL_POSITION`/`POSITION_IN_UNIQUE_CONSTRAINT`, sem
-   precisar de um segundo JOIN.
+   precisar de um segundo JOIN. **Issue #44:** a mesma leitura de
+   `information_schema.columns` passa a incluir `is_nullable` (sem JOIN
+   novo) para `nao_nulavel`. UNIQUE (`unica`) é lido à parte, via catálogo
+   `pg_index` (não `information_schema.table_constraints`, desvio
+   deliberado do padrão de PK/FK): todo UNIQUE constraint no Postgres é
+   backed por um índice em `pg_index`, então uma única query cobre tanto
+   constraint UNIQUE nomeada quanto `CREATE UNIQUE INDEX` solto (sem `ADD
+   CONSTRAINT`) — o segundo caso não aparece em
+   `information_schema.table_constraints` de jeito nenhum. `NOT
+   i.indisprimary` exclui PK sem lógica extra (o índice de suporte de uma PK
+   nunca aparece como uma entrada `indisunique` "solta"); `array_length(
+   i.indkey, 1) = 1` filtra só UNIQUE single-column, ignorando compostos:
+   ```sql
+   SELECT a.attname
+   FROM pg_index i
+   JOIN pg_class t ON t.oid = i.indrelid
+   JOIN pg_namespace n ON n.oid = t.relnamespace
+   JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = i.indkey[0]
+   WHERE i.indisunique AND NOT i.indisprimary
+     AND array_length(i.indkey, 1) = 1
+     AND n.nspname = %s AND t.relname = %s
+   ```
 2. Mapeia tipos Postgres → `TipoDeDado` (tabela abaixo).
 3. Lê `total_linhas` via `pg_catalog.pg_class.reltuples` — **estimativa**, não
    `COUNT(*)` exato. `information_schema.tables` não expõe contagem de linhas
@@ -754,6 +789,7 @@ class SobrescritaDeTabela:
 **Comportamento:**
 1. Calcula hash SHA-256 sobre `(nome_escopo, nome_tabela, [(col.nome,
    col.tipo_dado.model_dump_json(), col.chave_primaria, col.chave_estrangeira,
+   col.nao_nulavel, col.unica,
    col.referencia.model_dump_json() if col.referencia else "None") for col
    in colunas])` — `model_dump_json()` porque `TipoDeDado`/`ReferenciaDeColuna`
    são `BaseModel`, não primitivos hasheáveis diretamente; inclui o destino
@@ -761,7 +797,9 @@ class SobrescritaDeTabela:
    original da #7/#8; mesma issue introduz `ReferenciaDeColuna` pra incluir
    o escopo de destino, corrigindo perda de informação em FK cross-escopo)
    pra detectar mudança de referência mesmo quando `chave_estrangeira`
-   continua `True`.
+   continua `True`. `nao_nulavel`/`unica` entraram no hash na issue #44 —
+   sem eles, uma coluna que virasse NOT NULL/UNIQUE no banco não disparava
+   aviso de mudança estrutural nem regeneração do skeleton.
 2. Lê `diretorio_sobrescritas/<escopo>/<tabela>.yaml` se existir.
 3. **Hash bate:** aplica `papel_de_negocio`/`regras_de_negocio` do YAML.
 4. **Hash não bate (estrutura mudou):** atualiza skeleton preservando curadoria
@@ -928,6 +966,30 @@ class GeradorMarkdown:
 **Conteúdo por arquivo:** nome, escopo, `total_linhas`, `completude`,
 `papel_de_negocio`, `regras_de_negocio`, tabela de colunas com métricas, nota
 de rodapé com `MetadadosDeAmostra` (estratégia, N amostrado, M total).
+
+**NOT NULL/UNIQUE reais do schema (issue #44):** a coluna "Chave" da tabela
+de Colunas virou **"Restrição"** e passou a acumular `PK`, `FK → ...`,
+`UNIQUE` e `NOT NULL` — antes só PK/FK apareciam ali, deixando `nao_nulavel`/
+`unica` visíveis só dentro do texto de Qualidade dos dados. `UNIQUE`/
+`NOT NULL` são suprimidos quando a coluna já é PK (PK implica os dois,
+marcar seria redundante). Na tabela de Qualidade dos dados,
+`percentual_nulo` mostra `"0.00% (garantido pelo schema)"` quando
+`coluna.nao_nulavel` — combina o fato estrutural (`ColunaAnalisada.
+nao_nulavel`, do catálogo) com a métrica amostral (`MetricasBaseColuna.
+percentual_nulo`) só na camada de apresentação, sem criar campo novo em
+`MetricasBaseColuna`. O aviso de baixo sinal analítico em "Valores
+frequentes por coluna" (já existente para PK) passa a valer também para
+`unica=True`, com texto próprio — PK tem precedência quando as duas são
+verdadeiras, sem duplicar o aviso. Quando **nenhuma** coluna é elegível pra
+essa seção (ex.: amostra vazia — tabela sem linhas extraídas, caso comum o
+suficiente pra aparecer num teste manual real), o cabeçalho "## Valores
+frequentes por coluna" continua sendo renderizado com uma nota explicando o
+motivo, em vez de a seção inteira desaparecer em silêncio (parecia bug de
+geração, não fato sobre o dado — achado do usuário testando contra artefato
+real, mesma categoria de correção já feita na #13 pra coluna 100% nula).
+`CategoriaDeDado.JSON` entrou em `_CATEGORIAS_SEM_MINIMO_E_MAXIMO` na mesma
+issue (bugfix trivial, não relacionado: mesma classe de bug de comparação
+lexicográfica já corrigida pras demais categorias textuais/estruturadas).
 
 ---
 
