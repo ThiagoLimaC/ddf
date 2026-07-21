@@ -1,7 +1,8 @@
-"""Testes de mapear_tipo_mariadb."""
+"""Testes de mapear_tipo_mariadb e _extrair_coluna_json_valid."""
 
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado
 from ddf.infrastructure.adapters.extractors.mariadb.mapeamento_de_tipos import (
+    _extrair_coluna_json_valid,
     mapear_tipo_mariadb,
 )
 
@@ -97,9 +98,23 @@ def test_mapeia_time_para_time() -> None:
     assert mapear_tipo_mariadb("time", "time").categoria == CategoriaDeDado.TIME
 
 
-def test_mapeia_json_para_json() -> None:
-    """Caminho feliz: json vira JSON, mesmo sendo alias de longtext no MariaDB."""
-    assert mapear_tipo_mariadb("json", "longtext").categoria == CategoriaDeDado.JSON
+def test_extrai_coluna_de_check_clause_json_valid() -> None:
+    """Caminho feliz: json_valid(`col`) extrai o nome da coluna.
+
+    Formato exato validado empiricamente contra MariaDB 11 real (issue
+    #56) — mesmo CHECK_CLAUSE para coluna `JSON` nativa e para
+    `CHECK(JSON_VALID(...))` explícito, sempre normalizado para minúsculas.
+    """
+    assert _extrair_coluna_json_valid("json_valid(`dados`)") == "dados"
+
+
+def test_extrai_coluna_de_check_clause_json_valid_case_insensitive() -> None:
+    """Caminho feliz: reconhece JSON_VALID em maiúsculas, defensivamente.
+
+    MariaDB 11 real sempre normaliza para minúsculas (validado empiricamente)
+    — este caso cobre a robustez do regex, não um comportamento observado.
+    """
+    assert _extrair_coluna_json_valid("JSON_VALID(`dados`)") == "dados"
 
 
 def test_mapeia_uuid_para_uuid() -> None:
@@ -151,3 +166,19 @@ def test_tipo_desconhecido_vira_unknown() -> None:
         mapear_tipo_mariadb("blob", "blob").categoria == CategoriaDeDado.UNKNOWN
     )
     assert mapear_tipo_mariadb("bit", "bit(1)").categoria == CategoriaDeDado.UNKNOWN
+
+
+def test_data_type_json_isolado_vira_unknown() -> None:
+    """Borda: data_type == "json" sozinho (sem CHECK_CLAUSE) vira UNKNOWN.
+
+    Documenta a decisão da issue #56: contra um MariaDB real, data_type
+    nunca é "json" — a reclassificação correta depende de
+    _extrair_coluna_json_valid sobre o CHECK_CLAUSE, feita por
+    ExtratorMariaDB, não desta função pura.
+    """
+    assert mapear_tipo_mariadb("json", "longtext").categoria == CategoriaDeDado.UNKNOWN
+
+
+def test_check_clause_nao_relacionado_a_json_retorna_none() -> None:
+    """Borda: CHECK_CLAUSE de uma constraint comum (não JSON) não casa o padrão."""
+    assert _extrair_coluna_json_valid("`idade` >= 0") is None
