@@ -132,9 +132,9 @@ def test_extrair_tabela_retorna_estrutura_completa(
     cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
     cursor_fake.fetchall.side_effect = [
         [
-            ("id", "integer", None, None, None, "NO"),
-            ("nome", "character varying", 100, None, None, "YES"),
-            ("cliente_id", "integer", None, None, None, "NO"),
+            ("id", "int4", None, None, None, "NO"),
+            ("nome", "varchar", 100, None, None, "YES"),
+            ("cliente_id", "int4", None, None, None, "NO"),
         ],  # colunas
         [("id",)],  # PK
         [("cliente_id", "vendas", "clientes", "id")],  # FK (schema cross-referenciado)
@@ -277,7 +277,7 @@ def test_extrair_tabela_com_duas_fks_na_mesma_coluna_emite_aviso(
     conexao_fake = MagicMock()
     cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
     cursor_fake.fetchall.side_effect = [
-        [("entidade_id", "integer", None, None, None, "YES")],  # colunas
+        [("entidade_id", "int4", None, None, None, "YES")],  # colunas
         [],  # PK
         [
             ("entidade_id", "vendas", "clientes", "id"),
@@ -374,7 +374,7 @@ def test_extrair_tabela_com_reltuples_negativo_usa_total_linhas_zero(
     conexao_fake = MagicMock()
     cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
     cursor_fake.fetchall.side_effect = [
-        [("id", "integer", None, None, None, "NO")],  # colunas
+        [("id", "int4", None, None, None, "NO")],  # colunas
         [("id",)],  # PK
         [],  # FK
         [],  # UNIQUE
