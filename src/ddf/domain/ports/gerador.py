@@ -13,6 +13,6 @@ class Gerador(Protocol):
 
     requer: list[TipoDeMetrica]
 
-    def __call__(self, entrada: BancoAnalisado, destino: Path) -> Resultado[None]:
+    def __call__(self, entrada: BancoAnalisado, destino: Path, /) -> Resultado[None]:
         """Escreve o artefato correspondente em destino."""
         ...
