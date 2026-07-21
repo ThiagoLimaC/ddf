@@ -283,9 +283,30 @@
   - Única saída cujos identificadores no artefato ficam em inglês (contrato do dbt)
   - Refactor embutido: `_escrever_arquivo` extraído para
     `generators/_escrita.py`, compartilhado com `GeradorMarkdown`
-- [ ] `GeradorContextoDeIA(Gerador)`:
+- [x] `GeradorContextoDeIA(Gerador)` (issue #15) — reabertura de escopo:
+  substitui o `ai_context.json` monolítico original (redundante com
+  Markdown/dbt) por três peças deriváveis do `BancoAnalisado`, sem
+  Analisador novo nem dependência nova:
   - `requer = [MetricasBaseColuna]`
-  - `ai_context.json` com serialização compacta do `BancoAnalisado`
+  - `index.json` com `grafo_de_relacionamentos` bidirecional via FK real
+    (`chave_estrangeira`/`referencia`); `referencia` (saída) sempre
+    exaustiva (vem do FK da própria tabela do lote), `referenciado_por`
+    (entrada) só reflete tabelas presentes no lote — pode ser não-vazia
+    mas incompleta se o lote for subconjunto da fonte, então o grafo carrega
+    `nota_de_escopo` fixa avisando disso (não é `Aviso` por ocorrência,
+    é limitação estrutural de toda execução)
+  - `tabelas/<escopo>__<tabela>.json` — chunk por tabela (mesma convenção
+    de nome do `_nome_model` do dbt), endereçável independente do banco
+    inteiro (schema linking)
+  - `esquema_de_consulta.colunas_filtraveis` por tabela: sugestão de filtro
+    `enum` quando a coluna não é PK, `tamanho_amostra >= 100` e cobertura
+    dos top-10 `valores_frequentes` `>= 0.9` — reaproveita
+    `_cobertura_dos_valores_frequentes`/`_COBERTURA_MINIMA_ACCEPTED_VALUES`
+  - Refactor embutido: as duas acima extraídas de `gerador_dbt.py` para
+    `generators/_metricas.py`, compartilhado entre os dois Geradores
+  - Fora de escopo (decisão explícita, não implícita): inferir
+    `papel_de_negocio`/`regras_de_negocio` a partir de estatísticas —
+    exigiria exceção formal à Restrição 5 do PRD, fica para issue separada
 
 ## 7. CLI real wizard
 
