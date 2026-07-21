@@ -445,6 +445,12 @@ def compor(*estagios: Estagio) -> Estagio:
 4. Retorna `Sucesso(valor=resultado_final, avisos=todos_os_avisos)` se todos
    concluírem com sucesso.
 
+**Boundary de exceção (issue #56):** cada `estagio(valor)` roda dentro de
+`executar_com_seguranca` (`pipeline/seguranca.py`) — uma `Exception` não
+prevista de qualquer Estagio vira `Falha` (nome do Estagio + tipo da
+exceção na mensagem), nunca propaga crua. Ver Decisão 12 do
+`system_design_doc.md`.
+
 ---
 
 ## Ports (`src/ddf/domain/ports/`)
@@ -903,6 +909,14 @@ métodos do Port.
    se qualquer tabela falhou; senão `Sucesso` com `BancoCurado` cujas
    `tabelas` estão ordenadas por `(nome_escopo, nome_tabela)`.
 
+**Boundary de exceção (issue #56):** a chamada de `funcao(item)` dentro de
+cada worker do `ThreadPoolExecutor` (`_executar_em_paralelo`) roda dentro
+de `executar_com_seguranca` — uma `Exception` não prevista dentro de um
+`Extrator`/`Sobrescrita` concreto vira uma falha isolada (mesma política de
+acumulação já descrita acima), em vez de propagar crua via
+`futuro.result()` e quebrar o lote inteiro. Ver Decisão 12 do
+`system_design_doc.md`.
+
 ---
 
 ## Adapters — Analisadores (`src/ddf/infrastructure/adapters/analyzers/`)
@@ -1186,6 +1200,14 @@ def executar(config: Path | None) -> None:
 
 **Exibição de avisos:** após cada etapa, avisos acumulados são exibidos em
 bloco formatado — nunca silenciosamente.
+
+**Boundary de exceção (issue #56, Decisão 12 do `system_design_doc.md`):**
+a etapa 14 é obrigada a envolver cada chamada de Gerador com
+`executar_com_seguranca` (`pipeline/seguranca.py`) — mesmo padrão já
+aplicado em `compor()` (etapa 10) e no worker de `OrquestradorParalelo`
+(etapas 5 e 8). Sem isso, uma exceção não prevista dentro de um Gerador
+propagaria crua pro usuário final do wizard, violando a NFR4/RF7 do PRD —
+exatamente o risco que motivou a issue #56.
 
 **Código de saída:** `0` em sucesso, `1` em qualquer `Falha`.
 
