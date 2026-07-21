@@ -255,6 +255,33 @@ def test_todas_colunas_totalmente_nulas_tem_completude_zero(
     assert resultado.valor.analisado.tabelas[0].metricas[0].completude == 0.0
 
 
+def test_nao_muta_o_contexto_original(
+    tipo_integer: TipoDeDado,
+    construir_contexto: Callable[[list[TabelaCurada]], ContextoDeAnalise],
+) -> None:
+    """Borda: chamar o Analisador não altera o ContextoDeAnalise recebido.
+
+    Reabertura de escopo da issue #53: o Analisador passou a devolver um
+    ContextoDeAnalise novo em vez de mutar `entrada` in-place, deixando a
+    porta aberta para uma futura paralelização de Analisadores sobre o
+    mesmo contexto (mutação compartilhada seria uma race condition).
+    """
+    tabela = _tabela_curada(
+        "clientes", colunas=[ColunaCurada(nome="id", tipo_dado=tipo_integer)]
+    )
+    contexto = construir_contexto([tabela])
+    contexto.analisado.tabelas[0].colunas[0].metricas.append(
+        _metrica(percentual_nulo=0.0)
+    )
+
+    resultado = AnalisadorDeMetricasDeTabela()(contexto)
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor is not contexto
+    assert contexto.analisado.tabelas[0].metricas == []
+    assert resultado.valor.analisado.tabelas[0].metricas[0].completude == 100.0
+
+
 # Open/Closed — composição real com AnalisadorDeMetricasDeColuna
 
 

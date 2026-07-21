@@ -382,6 +382,32 @@ def test_coluna_binaria_nao_vira_endereco_de_memoria(
     assert "bytes" in metrica.minimo
 
 
+def test_nao_muta_o_contexto_original(
+    tipo_integer: TipoDeDado,
+    construir_contexto: Callable[[list[TabelaCurada]], ContextoDeAnalise],
+) -> None:
+    """Borda: chamar o Analisador não altera o ContextoDeAnalise recebido.
+
+    Reabertura de escopo da issue #53: o Analisador passou a devolver um
+    ContextoDeAnalise novo em vez de mutar `entrada` in-place, deixando a
+    porta aberta para uma futura paralelização de Analisadores sobre o
+    mesmo contexto (mutação compartilhada seria uma race condition).
+    """
+    tabela = _tabela_curada(
+        colunas=[ColunaCurada(nome="id", tipo_dado=tipo_integer)],
+        amostra=pl.DataFrame({"id": list(range(100))}),
+        tamanho_amostra=100,
+    )
+    contexto = construir_contexto([tabela])
+
+    resultado = AnalisadorDeMetricasDeColuna()(contexto)
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor is not contexto
+    assert contexto.analisado.tabelas[0].colunas[0].metricas == []
+    assert contexto.curado.tabelas[0].amostra is not None
+
+
 def test_coluna_integer_nunca_tenta_detectar_formato(
     tipo_integer: TipoDeDado,
     construir_contexto: Callable[[list[TabelaCurada]], ContextoDeAnalise],
