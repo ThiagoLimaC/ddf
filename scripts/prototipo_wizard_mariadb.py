@@ -45,6 +45,9 @@ from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
 from ddf.infrastructure.adapters.extractors.postgres.extrator_postgres import (
     ExtratorPostgres,
 )
+from ddf.infrastructure.adapters.generators.gerador_contexto_de_ia import (
+    GeradorContextoDeIA,
+)
 from ddf.infrastructure.adapters.generators.gerador_dbt import GeradorDbt
 from ddf.infrastructure.adapters.generators.gerador_markdown import GeradorMarkdown
 from ddf.infrastructure.adapters.overrides.sobrescrita_de_tabela import (
@@ -52,7 +55,6 @@ from ddf.infrastructure.adapters.overrides.sobrescrita_de_tabela import (
 )
 
 _GERADORES_DISPONIVEIS = ["Markdown", "dbt", "ContextoDeIA"]
-_GERADORES_FAKE = ["ContextoDeIA"]
 _QUADROS_AMPULHETA = ("⏳", "⌛")
 
 
@@ -257,7 +259,7 @@ def _aplicar_sobrescritas(
 
 
 def _executar_geradores(banco_curado: BancoCurado) -> None:
-    """Pergunta quais geradores rodar; Markdown e dbt rodam de verdade.
+    """Pergunta quais geradores rodar; os três rodam de verdade.
 
     Args:
         banco_curado: banco curado a analisar/documentar.
@@ -267,28 +269,21 @@ def _executar_geradores(banco_curado: BancoCurado) -> None:
     )
     print()
 
-    geradores_reais = [g for g in geradores_escolhidos if g not in _GERADORES_FAKE]
-    if geradores_reais:
-        contexto = iniciar_contexto(banco_curado)
-        resultado_contexto = _rodar_analisadores(contexto)
-        if isinstance(resultado_contexto, Falha):
-            print(f"Falha ao calcular métricas: {resultado_contexto.erro}")
-            return
-        contexto = resultado_contexto.valor
-        for aviso in resultado_contexto.avisos:
-            print(f"  [{aviso.origem}] {aviso.mensagem}")
+    contexto = iniciar_contexto(banco_curado)
+    resultado_contexto = _rodar_analisadores(contexto)
+    if isinstance(resultado_contexto, Falha):
+        print(f"Falha ao calcular métricas: {resultado_contexto.erro}")
+        return
+    contexto = resultado_contexto.valor
+    for aviso in resultado_contexto.avisos:
+        print(f"  [{aviso.origem}] {aviso.mensagem}")
 
-        if "Markdown" in geradores_escolhidos:
-            _executar_gerador_markdown(contexto.analisado)
-        if "dbt" in geradores_escolhidos:
-            _executar_gerador_dbt(contexto.analisado)
-
-    for gerador in geradores_escolhidos:
-        if gerador in _GERADORES_FAKE:
-            print(
-                f"[fake] Gerador{gerador} executado sobre "
-                f"{len(banco_curado.tabelas)} tabela(s) curada(s)."
-            )
+    if "Markdown" in geradores_escolhidos:
+        _executar_gerador_markdown(contexto.analisado)
+    if "dbt" in geradores_escolhidos:
+        _executar_gerador_dbt(contexto.analisado)
+    if "ContextoDeIA" in geradores_escolhidos:
+        _executar_gerador_contexto_de_ia(contexto.analisado)
 
 
 def _executar_gerador_markdown(banco_analisado: BancoAnalisado) -> None:
@@ -329,6 +324,26 @@ def _executar_gerador_dbt(banco_analisado: BancoAnalisado) -> None:
     for aviso in resultado_geracao.avisos:
         print(f"  [{aviso.origem}] {aviso.mensagem}")
     print(f"GeradorDbt: projeto dbt escrito em '{destino}'.")
+
+
+def _executar_gerador_contexto_de_ia(banco_analisado: BancoAnalisado) -> None:
+    """Roda o GeradorContextoDeIA sobre o banco já analisado.
+
+    Args:
+        banco_analisado: banco curado com as métricas já calculadas.
+    """
+    destino = Path(
+        questionary.text(
+            "Diretório de destino do contexto de IA:", default="contexto_ia_gerado"
+        ).ask()
+    )
+    resultado_geracao = GeradorContextoDeIA()(banco_analisado, destino)
+    if isinstance(resultado_geracao, Falha):
+        print(f"Falha ao gerar contexto de IA: {resultado_geracao.erro}")
+        return
+    for aviso in resultado_geracao.avisos:
+        print(f"  [{aviso.origem}] {aviso.mensagem}")
+    print(f"GeradorContextoDeIA: contexto escrito em '{destino}'.")
 
 
 def _rodar_analisadores(contexto: ContextoDeAnalise) -> Resultado[ContextoDeAnalise]:
