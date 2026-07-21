@@ -437,6 +437,72 @@ def test_minimo_e_maximo_suprimidos_para_categoria_json(
     assert '{"a": 1' not in linha
 
 
+def test_array_renderiza_elemento_e_suprime_minimo_e_maximo(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """ARRAY mostra 'INTEGER[]' na tabela de Colunas e some de Mínimo/Máximo."""
+    metrica_array = MetricasBaseColuna(
+        percentual_nulo=0.0,
+        percentual_unico=100.0,
+        valores_frequentes=[("['a', 'b']", 1)],
+        minimo="['a', 'b']",
+        maximo="['z']",
+    )
+    coluna = construir_coluna(
+        nome="tags",
+        tipo_dado=TipoDeDado(
+            categoria=CategoriaDeDado.ARRAY, elemento=CategoriaDeDado.INTEGER
+        ),
+        metricas=[metrica_array],
+    )
+    tabela = construir_tabela(colunas=[coluna])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorMarkdown()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    conteudo = (tmp_path / "escopo" / "tabela.md").read_text()
+    secao_colunas = conteudo.split("## Colunas")[1].split("## Qualidade")[0]
+    linha_colunas = next(
+        linha for linha in secao_colunas.splitlines() if "tags" in linha
+    )
+    assert "INTEGER[]" in linha_colunas
+
+    secao_qualidade = conteudo.split("## Qualidade dos dados")[1]
+    linha_qualidade = next(
+        linha for linha in secao_qualidade.splitlines() if linha.startswith("| tags ")
+    )
+    assert "—" in linha_qualidade
+    assert "['a', 'b']" not in linha_qualidade
+
+
+def test_array_sem_elemento_reconhecido_renderiza_unknown(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Borda: ARRAY sem elemento reconhecido mostra 'UNKNOWN[]', não quebra."""
+    coluna = construir_coluna(
+        nome="pontos", tipo_dado=TipoDeDado(categoria=CategoriaDeDado.ARRAY)
+    )
+    tabela = construir_tabela(colunas=[coluna])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorMarkdown()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    conteudo = (tmp_path / "escopo" / "tabela.md").read_text()
+    secao_colunas = conteudo.split("## Colunas")[1].split("## Qualidade")[0]
+    linha_colunas = next(
+        linha for linha in secao_colunas.splitlines() if "pontos" in linha
+    )
+    assert "UNKNOWN[]" in linha_colunas
+
+
 def test_coluna_totalmente_nula_recebe_nota_em_vez_de_ser_omitida(
     tmp_path: Path,
     construir_coluna: Callable[..., ColunaAnalisada],
