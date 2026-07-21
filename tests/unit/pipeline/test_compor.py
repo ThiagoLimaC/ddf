@@ -66,6 +66,32 @@ def test_compor_preserva_avisos_acumulados_ate_a_falha(
     assert resultado.avisos == [aviso_previo, aviso_da_falha]
 
 
+def test_compor_converte_excecao_nao_prevista_em_falha(
+    fabrica_estagio_sucesso: FabricaEstagioSucesso,
+    estagio_espiao: EstagioInt,
+) -> None:
+    """Erro esperado: Estagio que levanta Exception vira Falha, não propaga crua.
+
+    Reproduz o boundary sistemático da issue #56 — nenhum Estagio (nem
+    Analisador nem qualquer outro) tinha essa rede de segurança antes.
+    Estagios seguintes não rodam, mesmo comportamento de Falha explícita.
+    """
+
+    def _estagio_com_bug(entrada: int) -> Resultado[int]:
+        raise ValueError("dtype não suportado")
+
+    pipeline = compor(
+        fabrica_estagio_sucesso(1, None), _estagio_com_bug, estagio_espiao
+    )
+
+    resultado = pipeline(0)
+
+    assert isinstance(resultado, Falha)
+    assert "ValueError" in resultado.erro
+    assert "dtype não suportado" in resultado.erro
+    assert estagio_espiao.chamado is False  # type: ignore[attr-defined]
+
+
 def test_compor_sem_estagios_retorna_entrada_inalterada() -> None:
     """Borda: compor() sem nenhum estagio (ex.: usuário não seleciona Analisadores)."""
     pipeline = compor()
