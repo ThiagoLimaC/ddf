@@ -30,6 +30,7 @@ _CATEGORIAS_SEM_MINIMO_E_MAXIMO = {
     CategoriaDeDado.SET,
     CategoriaDeDado.BOOLEAN,
     CategoriaDeDado.JSON,
+    CategoriaDeDado.ARRAY,
     CategoriaDeDado.UNKNOWN,
 }
 
@@ -77,8 +78,11 @@ def _formatar_tipo(tipo: TipoDeDado) -> str:
         return f"{categoria.value} WITH TIME ZONE"
     if categoria in _CATEGORIAS_COM_VALORES_PERMITIDOS and tipo.valores_permitidos:
         return f"{categoria.value}({', '.join(tipo.valores_permitidos)})"
+    if categoria == CategoriaDeDado.ARRAY:
+        elemento = tipo.elemento.value if tipo.elemento is not None else "UNKNOWN"
+        return f"{elemento}[]"
 
-    return categoria.value
+    return str(categoria.value)
 
 
 def _marcadores_de_restricao(coluna: ColunaAnalisada) -> str:

@@ -37,7 +37,7 @@ def mapear_tipo_postgres(
 
     Tipos fora da tabela de mapeamento caem em CategoriaDeDado.UNKNOWN, nunca
     levantam exceção. Um udt_name com o prefixo "_" (ex. "_int4") identifica
-    uma coluna ARRAY 
+    uma coluna ARRAY.
 
     Args:
         udt_name: information_schema.columns.udt_name — nome interno do

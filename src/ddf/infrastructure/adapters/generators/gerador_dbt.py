@@ -104,8 +104,26 @@ def _tipo_sql(tipo: TipoDeDado) -> str:
         return f"{categoria.value} WITH TIME ZONE"
     if categoria in _CATEGORIAS_SEM_EQUIVALENTE_ANSI:
         return "VARCHAR"
+    if categoria == CategoriaDeDado.ARRAY and tipo.elemento is not None:
+        return f"{_tipo_sql(TipoDeDado(categoria=tipo.elemento))}[]"
 
     return str(categoria.value)
+
+
+def _tem_cast_seguro(tipo: TipoDeDado) -> bool:
+    """Decide se `tipo` tem um CAST SQL seguro a fazer.
+
+    Args:
+        tipo: tipo de dado da coluna.
+
+    Returns:
+        False para UNKNOWN (sem tipo mapeado) e para ARRAY sem elemento
+        reconhecido (`[]` sem tipo dentro não é SQL válido) — nesses casos
+        a coluna é projetada raw. True para as demais categorias.
+    """
+    if tipo.categoria == CategoriaDeDado.UNKNOWN:
+        return False
+    return tipo.categoria != CategoriaDeDado.ARRAY or tipo.elemento is not None
 
 
 def _expressao_coluna(coluna: ColunaAnalisada) -> str:
@@ -115,10 +133,10 @@ def _expressao_coluna(coluna: ColunaAnalisada) -> str:
         coluna: coluna analisada a projetar no SELECT.
 
     Returns:
-        `CAST(<coluna> AS <tipo>)`, ou o nome puro da coluna quando a
-        categoria é UNKNOWN — sem tipo mapeado, não há CAST seguro a fazer.
+        `CAST(<coluna> AS <tipo>)`, ou o nome puro da coluna quando não há
+        CAST seguro a fazer (ver `_tem_cast_seguro`).
     """
-    if coluna.tipo_dado.categoria == CategoriaDeDado.UNKNOWN:
+    if not _tem_cast_seguro(coluna.tipo_dado):
         return coluna.nome
     return f"CAST({coluna.nome} AS {_tipo_sql(coluna.tipo_dado)})"
 
