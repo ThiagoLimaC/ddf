@@ -233,8 +233,13 @@ def _montar_tabela_json(tabela: TabelaAnalisada) -> dict[str, Any]:
 
     Returns:
         Dict pronto para `json.dumps`. `metricas_tabela` fica ausente se a
-        tabela não tiver `MetricasBaseTabela` calculada; `esquema_de_consulta`
-        fica ausente se nenhuma coluna sugerir filtro de enum.
+        tabela não tiver `MetricasBaseTabela` calculada; quando presente,
+        carrega `amostra_vazia` ao lado de `completude` — sem essa flag, um
+        agente consumidor não tem como distinguir "100% de completude
+        confirmada pela amostra" de "nenhuma linha inspecionada"
+        já que o valor numérico de `completude` é o mesmo nos dois
+        casos. `esquema_de_consulta` fica ausente se nenhuma coluna sugerir
+        filtro de enum.
     """
     tamanho_amostra = tabela.metadados_amostra.tamanho_amostra
     conteudo: dict[str, Any] = {
@@ -251,7 +256,10 @@ def _montar_tabela_json(tabela: TabelaAnalisada) -> dict[str, Any]:
 
     metrica_tabela = _metrica_de_tabela(tabela)
     if metrica_tabela is not None:
-        conteudo["metricas_tabela"] = {"completude": metrica_tabela.completude}
+        conteudo["metricas_tabela"] = {
+            "completude": metrica_tabela.completude,
+            "amostra_vazia": tamanho_amostra == 0,
+        }
 
     conteudo["colunas"] = [_serializar_coluna(coluna) for coluna in tabela.colunas]
 

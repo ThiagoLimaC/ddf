@@ -35,6 +35,7 @@ _CATEGORIAS_SEM_MINIMO_E_MAXIMO = {
 }
 
 _GARANTIDO_PELO_SCHEMA = "0.00% (garantido pelo schema)"
+_SEM_EVIDENCIA = "sem evidência (amostra vazia)"
 
 _CATEGORIAS_COM_PRECISAO_ESCALA = {CategoriaDeDado.NUMERIC}
 _CATEGORIAS_COM_TAMANHO_MAXIMO = {CategoriaDeDado.VARCHAR}
@@ -134,9 +135,14 @@ def _formatar_completude(tabela: TabelaAnalisada) -> str:
         tabela: tabela analisada a documentar.
 
     Returns:
-        Completude formatada como percentual, ou "N/D" se a métrica ainda
-        não tiver sido calculada.
+        "sem evidência (amostra vazia)" se `tamanho_amostra == 0` — 100%
+        de completude nesse caso seria "nenhuma linha inspecionada", não
+        "nenhum nulo encontrado", uma afirmação que a amostra não sustenta.
+        Senão, completude formatada como percentual, ou "N/D" se a métrica
+        ainda não tiver sido calculada.
     """
+    if tabela.metadados_amostra.tamanho_amostra == 0:
+        return _SEM_EVIDENCIA
     metricas_tabela = [m for m in tabela.metricas if isinstance(m, MetricasBaseTabela)]
     if not metricas_tabela:
         return _NAO_DISPONIVEL
@@ -160,7 +166,7 @@ def _formatar_extremo(valor: str | None, aplicavel: bool) -> str:
     return valor if valor is not None else _NAO_DISPONIVEL
 
 
-def _linha_qualidade(coluna: ColunaAnalisada) -> dict[str, str]:
+def _linha_qualidade(coluna: ColunaAnalisada, tamanho_amostra: int) -> dict[str, str]:
     """Filtro Jinja: monta os campos formatados de uma linha de qualidade dos dados.
 
     Mínimo/máximo saem como "—" (não aplicável) para categorias em que a
@@ -170,13 +176,17 @@ def _linha_qualidade(coluna: ColunaAnalisada) -> dict[str, str]:
 
     Args:
         coluna: coluna analisada a documentar.
+        tamanho_amostra: total de linhas amostradas da tabela desta coluna.
 
     Returns:
         Nome e as métricas de qualidade já formatadas/escapadas, com "N/D"
-        onde a métrica ainda não foi calculada. `percentual_nulo` mostra
-        "0.00% (garantido pelo schema)" quando `coluna.nao_nulavel` é
-        verdadeiro — é garantia do schema, não estimativa sobre a amostra,
-        então independe de MetricasBaseColuna já ter sido calculada.
+        onde a métrica ainda não foi calculada. `percentual_nulo`/
+        `percentual_unico` mostram "sem evidência (amostra vazia)" quando
+        `tamanho_amostra == 0` — 0.00% nesse caso seria "nenhuma linha
+        inspecionada", não "nenhum nulo/duplicata encontrado". `nao_nulavel`
+        tem precedência sobre isso: "0.00% (garantido pelo schema)" é
+        garantia do catálogo, não estimativa sobre a amostra, então vale
+        mesmo sem evidência amostral.
     """
     aplicavel = coluna.tipo_dado.categoria not in _CATEGORIAS_SEM_MINIMO_E_MAXIMO
     metrica = _metrica_de_coluna(coluna)
@@ -189,6 +199,8 @@ def _linha_qualidade(coluna: ColunaAnalisada) -> dict[str, str]:
         minimo = _formatar_extremo(metrica.minimo, aplicavel)
         maximo = _formatar_extremo(metrica.maximo, aplicavel)
         formato = metrica.formato_detectado or _NAO_DISPONIVEL
+    if tamanho_amostra == 0:
+        percentual_nulo = percentual_unico = _SEM_EVIDENCIA
     if coluna.nao_nulavel:
         percentual_nulo = _GARANTIDO_PELO_SCHEMA
 
