@@ -16,27 +16,45 @@ class AnalisadorDeMetricasDeTabela:
     produz: list[TipoDeMetrica] = [MetricasBaseTabela]
     requer: list[TipoDeMetrica] = [MetricasBaseColuna]
 
-    def __call__(self, entrada: ContextoDeAnalise) -> Resultado[ContextoDeAnalise]:
+    def __call__(self, entrada: ContextoDeAnalise, /) -> Resultado[ContextoDeAnalise]:
         """Acrescenta MetricasBaseTabela a cada TabelaAnalisada.
 
         Args:
             entrada: contexto cujo BancoAnalisado já tem MetricasBaseColuna
                 calculada pelo AnalisadorDeMetricasDeColuna em cada coluna.
+                Não é modificado — o Analisador é sequencial hoje, mas
+                devolve um contexto novo para não impor essa suposição a
+                quem o chama (ver docs/system_design_doc.md, Decisão 11).
 
         Returns:
-            Sucesso com o mesmo ContextoDeAnalise, `analisado` enriquecido
+            Sucesso com um ContextoDeAnalise novo, `analisado` enriquecido
             com MetricasBaseTabela por tabela. Falha se MetricasBaseColuna
             estiver ausente ou duplicada em qualquer coluna.
         """
+        novas_tabelas: list[TabelaAnalisada] = []
         for tabela in entrada.analisado.tabelas:
             resultado_completude = _completude_da_tabela(tabela)
             if isinstance(resultado_completude, Falha):
                 return resultado_completude
-            tabela.metricas.append(
-                MetricasBaseTabela(completude=resultado_completude.valor)
+            novas_tabelas.append(
+                tabela.model_copy(
+                    update={
+                        "metricas": [
+                            *tabela.metricas,
+                            MetricasBaseTabela(completude=resultado_completude.valor),
+                        ]
+                    }
+                )
             )
 
-        return Sucesso(entrada)
+        novo_contexto = entrada.model_copy(
+            update={
+                "analisado": entrada.analisado.model_copy(
+                    update={"tabelas": novas_tabelas}
+                )
+            }
+        )
+        return Sucesso(novo_contexto)
 
 
 def _completude_da_tabela(tabela: TabelaAnalisada) -> Resultado[float]:

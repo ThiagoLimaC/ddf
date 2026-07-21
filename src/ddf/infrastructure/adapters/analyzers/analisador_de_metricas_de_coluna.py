@@ -3,6 +3,7 @@
 import polars as pl
 
 from ddf.domain.model.analysis import (
+    ColunaAnalisada,
     ContextoDeAnalise,
     MetricasBaseColuna,
     TabelaAnalisada,
@@ -25,15 +26,18 @@ class AnalisadorDeMetricasDeColuna:
     produz: list[TipoDeMetrica] = [MetricasBaseColuna]
     requer: list[TipoDeMetrica] = []
 
-    def __call__(self, entrada: ContextoDeAnalise) -> Resultado[ContextoDeAnalise]:
+    def __call__(self, entrada: ContextoDeAnalise, /) -> Resultado[ContextoDeAnalise]:
         """Preenche MetricasBaseColuna de cada coluna e libera a amostra usada.
 
         Args:
             entrada: contexto com o BancoCurado (amostras Polars) e o
-                BancoAnalisado acumulado até aqui.
+                BancoAnalisado acumulado até aqui. Não é modificado — o
+                Analisador é sequencial hoje, mas devolve um contexto novo
+                para não impor essa suposição a quem o chama (ver
+                docs/system_design_doc.md, Decisão 11).
 
         Returns:
-            Sucesso com o mesmo ContextoDeAnalise, `analisado` enriquecido
+            Sucesso com um ContextoDeAnalise novo, `analisado` enriquecido
             com MetricasBaseColuna por coluna e `curado.tabelas[*].amostra`
             liberado, com Aviso por coluna cuja amostra tem menos de 100
             linhas. Falha apenas se curado e analisado estiverem fora de
@@ -46,6 +50,8 @@ class AnalisadorDeMetricasDeColuna:
             )
 
         avisos: list[Aviso] = []
+        novas_tabelas_curadas: list[TabelaCurada] = []
+        novas_tabelas_analisadas: list[TabelaAnalisada] = []
         for tabela_curada, tabela_analisada in zip(
             entrada.curado.tabelas, entrada.analisado.tabelas, strict=True
         ):
@@ -55,14 +61,25 @@ class AnalisadorDeMetricasDeColuna:
                     f"'{tabela_curada.nome_escopo}.{tabela_curada.nome_tabela}' "
                     "não bate entre curado e analisado."
                 )
-            avisos.extend(_processar_tabela(tabela_curada, tabela_analisada))
+            nova_curada, nova_analisada, avisos_tabela = _processar_tabela(
+                tabela_curada, tabela_analisada
+            )
+            novas_tabelas_curadas.append(nova_curada)
+            novas_tabelas_analisadas.append(nova_analisada)
+            avisos.extend(avisos_tabela)
 
-        return Sucesso(entrada, avisos=avisos)
+        novo_contexto = ContextoDeAnalise(
+            curado=entrada.curado.model_copy(update={"tabelas": novas_tabelas_curadas}),
+            analisado=entrada.analisado.model_copy(
+                update={"tabelas": novas_tabelas_analisadas}
+            ),
+        )
+        return Sucesso(novo_contexto, avisos=avisos)
 
 
 def _processar_tabela(
     tabela_curada: TabelaCurada, tabela_analisada: TabelaAnalisada
-) -> list[Aviso]:
+) -> tuple[TabelaCurada, TabelaAnalisada, list[Aviso]]:
     """Calcula as métricas de todas as colunas de uma tabela e libera a amostra.
 
     Pré-condição: `tabela_curada.colunas` e `tabela_analisada.colunas` têm o
@@ -70,15 +87,18 @@ def _processar_tabela(
 
     Args:
         tabela_curada: tabela curada, fonte da amostra Polars.
-        tabela_analisada: tabela analisada, destino das métricas calculadas.
+        tabela_analisada: tabela analisada, base das métricas calculadas.
 
     Returns:
-        Um Aviso por coluna cuja amostra tem menos de 100 linhas.
+        Uma nova TabelaCurada (amostra liberada), uma nova TabelaAnalisada
+        (colunas com a métrica calculada acrescentada) e um Aviso por coluna
+        cuja amostra tem menos de 100 linhas.
     """
     avisos: list[Aviso] = []
     tamanho_amostra = tabela_curada.metadados_amostra.tamanho_amostra
     amostra = tabela_curada.amostra
 
+    novas_colunas: list[ColunaAnalisada] = []
     for coluna_curada, coluna_analisada in zip(
         tabela_curada.colunas, tabela_analisada.colunas, strict=True
     ):
@@ -89,7 +109,11 @@ def _processar_tabela(
             metrica = _calcular_metricas_coluna(
                 serie, coluna_curada.tipo_dado, tamanho_amostra
             )
-        coluna_analisada.metricas.append(metrica)
+        novas_colunas.append(
+            coluna_analisada.model_copy(
+                update={"metricas": [*coluna_analisada.metricas, metrica]}
+            )
+        )
 
         if tamanho_amostra < _TAMANHO_AMOSTRA_MINIMO_AVISO:
             avisos.append(
@@ -104,8 +128,11 @@ def _processar_tabela(
                 )
             )
 
-    _liberar_amostra(tabela_curada)
-    return avisos
+    nova_tabela_curada = tabela_curada.model_copy(update={"amostra": None})
+    nova_tabela_analisada = tabela_analisada.model_copy(
+        update={"colunas": novas_colunas}
+    )
+    return nova_tabela_curada, nova_tabela_analisada, avisos
 
 
 def _metricas_vazias() -> MetricasBaseColuna:
@@ -229,13 +256,3 @@ def _top_valores_frequentes(nao_nulos: pl.Series) -> list[tuple[str, int]]:
     valores = topo[nome].cast(pl.Utf8).to_list()
     frequencias = topo["count"].to_list()
     return list(zip(valores, frequencias))
-
-
-def _liberar_amostra(tabela: TabelaCurada) -> None:
-    """Descarta a amostra Polars da tabela após todas as colunas processadas.
-
-    Args:
-        tabela: tabela curada cuja amostra já foi totalmente lida por este
-            Analisador nesta execução.
-    """
-    tabela.amostra = None

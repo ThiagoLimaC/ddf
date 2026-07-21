@@ -62,6 +62,8 @@ class CategoriaDeDado(str, Enum):
     DATE = "DATE"
     JSON = "JSON"
     UUID = "UUID"
+    ENUM = "ENUM"
+    SET = "SET"
     UNKNOWN = "UNKNOWN"
 
 class TipoDeDado(BaseModel):
@@ -72,6 +74,7 @@ class TipoDeDado(BaseModel):
     tamanho_fixo: int | None = None    # tamanho exato (CHAR)
     com_timezone: bool | None = None   # TIMESTAMP e TIME
     com_precisao_dupla: bool | None = None  # FLOAT (real vs. double precision)
+    valores_permitidos: tuple[str, ...] | None = None  # ENUM e SET
 ```
 
 **Comportamento:** imutável após construção. `UNKNOWN` quando o tipo da fonte
@@ -93,6 +96,14 @@ foi separado de `VARCHAR` pelo mesmo motivo original: comprimento fixo
 máximo. `TIME` e `TIMESTAMP` compartilham `com_timezone` para capturar a
 distinção `with/without time zone` do Postgres, que a v1 original desta issue
 (`#5`/`#6`) não previa.
+
+**Adicionado na issue #35:** `ENUM`, `SET` e o atributo `valores_permitidos`
+(tupla imutável dos valores aceitos) — MariaDB é a primeira fonte a modelar
+essas categorias nativamente; os dois tipos compartilham `valores_permitidos`
+porque a única diferença semântica entre eles (um valor vs. múltiplos valores
+simultâneos por linha) não afeta como `ExtratorMariaDB`, `GeradorMarkdown` e
+`GeradorDbt` consomem o atributo. Sem equivalente ANSI portável, `GeradorDbt`
+faz cast para `VARCHAR` (ver seção do `GeradorDbt`).
 
 ### `MetadadosDeAmostra`
 
@@ -506,16 +517,23 @@ class Analisador(Protocol):
     def __call__(
         self,
         entrada: ContextoDeAnalise,
+        /,
     ) -> Resultado[ContextoDeAnalise]: ...
+    # parâmetro positional-only (`/`) — mesmo motivo do Extrator: adapters
+    # concretos podem usar outro nome internamente sem quebrar em runtime
+    # uma chamada por keyword feita contra o tipo Analisador
 ```
 
 **Comportamento esperado:**
 - Lê `entrada.curado` para acessar os DataFrames via Polars.
 - Lê `entrada.analisado` para acessar métricas de Analisadores anteriores.
-- Acrescenta Value Objects do seu tipo à lista `metricas` de cada
-  `ColunaAnalisada`/`TabelaAnalisada` — sem sobrescrever métricas existentes.
-- Seta `tabela_curada.amostra = None` após processar cada tabela — libera
-  memória sem quebrar o tipo (`amostra: pl.DataFrame | None`).
+- Devolve um `ContextoDeAnalise` **novo**, nunca muta `entrada` (Decisão 11
+  do `system_design_doc.md`, revisão pré-CLI/issue #53) — o `analisado`
+  desse novo contexto acrescenta Value Objects do seu tipo à lista
+  `metricas` de cada `ColunaAnalisada`/`TabelaAnalisada`, sem sobrescrever
+  métricas existentes; o `curado` desse novo contexto tem
+  `tabela_curada.amostra = None` após processar cada tabela — libera memória
+  sem quebrar o tipo (`amostra: pl.DataFrame | None`).
 - Emite `Aviso` se amostra vazia ou muito pequena (< 100 linhas).
 - `Falha` apenas em erro inesperado — amostra vazia é `Aviso`, não `Falha`.
 
@@ -532,7 +550,9 @@ class Gerador(Protocol):
         self,
         entrada: BancoAnalisado,
         destino: Path,
+        /,
     ) -> Resultado[None]: ...
+    # parâmetro positional-only (`/`) — mesmo motivo do Extrator/Analisador
 ```
 
 **Comportamento esperado:**

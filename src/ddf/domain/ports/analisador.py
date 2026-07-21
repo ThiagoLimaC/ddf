@@ -13,6 +13,6 @@ class Analisador(Protocol):
     produz: list[TipoDeMetrica]
     requer: list[TipoDeMetrica]
 
-    def __call__(self, entrada: ContextoDeAnalise) -> Resultado[ContextoDeAnalise]:
+    def __call__(self, entrada: ContextoDeAnalise, /) -> Resultado[ContextoDeAnalise]:
         """Executa o Analisador sobre o ContextoDeAnalise recebido."""
         ...

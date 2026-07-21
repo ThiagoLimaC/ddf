@@ -10,6 +10,7 @@ from ddf.domain.model.analysis import (
     ColunaAnalisada,
     MetricasBaseColuna,
     MetricasBaseTabela,
+    TabelaAnalisada,
     TipoDeMetrica,
 )
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
@@ -122,7 +123,7 @@ def _metrica_de_coluna(coluna: ColunaAnalisada) -> MetricasBaseColuna | None:
     return metricas_coluna[0] if metricas_coluna else None
 
 
-def _formatar_completude(tabela: Any) -> str:
+def _formatar_completude(tabela: TabelaAnalisada) -> str:
     """Filtro Jinja: formata a completude da tabela, se já tiver sido calculada.
 
     Args:
