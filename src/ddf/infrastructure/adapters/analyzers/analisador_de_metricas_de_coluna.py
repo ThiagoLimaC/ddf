@@ -169,8 +169,8 @@ def _calcular_metricas_coluna(
     """
     if serie.dtype.is_float():
         serie = serie.fill_nan(None)
-    elif serie.dtype == pl.Object:
-        serie = _normalizar_serie_objeto(serie)
+    elif serie.dtype == pl.Object or serie.dtype.base_type() == pl.List:
+        serie = _normalizar_serie_nao_nativa(serie)
 
     nao_nulos = serie.drop_nulls()
 
@@ -191,37 +191,40 @@ def _calcular_metricas_coluna(
     )
 
 
-def _normalizar_serie_objeto(serie: pl.Series) -> pl.Series:
-    """Stringifica uma Series de dtype Object para liberar min/max/n_unique.
+def _normalizar_serie_nao_nativa(serie: pl.Series) -> pl.Series:
+    """Stringifica uma Series de dtype Object ou List para liberar min/max/n_unique.
 
     `pl.Object` é o fallback do Polars pra tipos Python que ele não mapeia
     nativamente (ex.: `uuid.UUID` de uma coluna UUID do MariaDB, retornado
-    assim pelo driver) — nesse dtype, `min()`, `n_unique()` e
-    `value_counts()` levantam `InvalidOperationError`. Como o domínio já
-    guarda `minimo`/`maximo` como `str` (MetricasBaseColuna), convertê-los
-    aqui via `str()` não perde nada que seria usado depois, e restaura as
-    mesmas operações que qualquer coluna Utf8 já suporta.
+    assim pelo driver). `pl.List` é o dtype de uma coluna `ARRAY` do Postgres
+    (ex.: `text[]`, `integer[]`). Nos dois dtypes, `min()`/`max()` levantam
+    `InvalidOperationError` (`n_unique()`/`value_counts()` funcionam
+    normalmente, só min/max quebram). Como o domínio já guarda `minimo`/
+    `maximo` como `str` (MetricasBaseColuna), convertê-los aqui via `str()`
+    não perde nada que seria usado depois, e restaura as mesmas operações
+    que qualquer coluna Utf8 já suporta.
 
     Args:
-        serie: valores amostrados da coluna, com dtype Object.
+        serie: valores amostrados da coluna, com dtype Object ou List.
 
     Returns:
         A mesma série, com valores convertidos para Utf8 (nulos preservados)
-        — via `_representar_valor_objeto`, não `str()` puro.
+        — via `_representar_valor_nao_nativo`, não `str()` puro.
     """
-    valores = [_representar_valor_objeto(valor) for valor in serie.to_list()]
+    valores = [_representar_valor_nao_nativo(valor) for valor in serie.to_list()]
     return pl.Series(serie.name, valores, dtype=pl.Utf8)
 
 
-def _representar_valor_objeto(valor: object) -> str | None:
-    """Converte um valor de dtype Object para texto legível.
+def _representar_valor_nao_nativo(valor: object) -> str | None:
+    """Converte um valor de dtype Object ou List para texto legível.
 
     `str()` puro é enganoso pra dado binário: `psycopg2` devolve `memoryview`
     pra colunas `bytea`, e `str(memoryview(...))` produz algo como
     `<memory at 0x7f...>` — um endereço de memória, não informação sobre o
     dado. `bytes`/`bytearray`/`memoryview` viram `[dado binário, N bytes]`
     (mesmo espírito do "[binary data]" que o pgAdmin já mostra); qualquer
-    outro tipo (ex.: `uuid.UUID`) usa `str()`, que já produz texto útil.
+    outro tipo (ex.: `uuid.UUID`, ou uma `list` vinda de coluna `ARRAY`) usa
+    `str()`, que já produz texto útil.
 
     Args:
         valor: valor bruto de uma célula, ou None.
