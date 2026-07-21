@@ -17,6 +17,7 @@ from ddf.infrastructure.adapters.extractors.construir_colunas_fk import (
     construir_colunas_fk,
 )
 from ddf.infrastructure.adapters.extractors.mariadb.mapeamento_de_tipos import (
+    _extrair_coluna_json_valid,
     mapear_tipo_mariadb,
 )
 
@@ -81,6 +82,19 @@ _COLUNAS_UNICAS_SQL = """
     WHERE tc.constraint_type = 'UNIQUE'
         AND tc.table_schema = %s AND tc.table_name = %s
 """
+# `_construir_coluna` só aceita um match de `_extrair_coluna_json_valid`
+# se o nome extraído também existir entre as colunas reais desta tabela
+# (`linhas_colunas`) — a validação cruzada é o que torna este SELECT sem
+# filtro de tabela seguro de usar.
+_COLUNAS_JSON_SQL = """
+    SELECT cc.check_clause
+    FROM information_schema.table_constraints tc
+    JOIN information_schema.check_constraints cc
+        ON tc.constraint_schema = cc.constraint_schema
+        AND tc.constraint_name = cc.constraint_name
+    WHERE tc.constraint_type = 'CHECK'
+        AND tc.table_schema = %s AND tc.table_name = %s
+"""
 
 
 class _LinhaColuna(NamedTuple):
@@ -116,18 +130,31 @@ def _construir_coluna(
     colunas_pk: set[str],
     colunas_fk: dict[str, ReferenciaDeColuna],
     colunas_unicas: set[str],
+    colunas_json: set[str],
 ) -> ColunaExtraida:
-    """Combina uma linha de information_schema.columns com PK/FK/UNIQUE já lidas."""
+    """Combina uma linha de information_schema.columns com PK/FK/UNIQUE/JSON já lidas.
+
+    `colunas_json` sobrescreve o resultado de `mapear_tipo_mariadb` — o
+    MariaDB nunca reporta `data_type == "json"` de verdade (ver
+    `_extrair_coluna_json_valid`), então a única forma de saber que uma
+    coluna `LONGTEXT` é na real uma coluna `JSON` é via essa reclassificação
+    baseada no `CHECK_CLAUSE`, não via `data_type`.
+    """
     referencia = colunas_fk.get(linha.nome)
-    return ColunaExtraida(
-        nome=linha.nome,
-        tipo_dado=mapear_tipo_mariadb(
+    tipo_dado = (
+        TipoDeDado(categoria=CategoriaDeDado.JSON)
+        if linha.nome in colunas_json
+        else mapear_tipo_mariadb(
             linha.data_type,
             linha.column_type,
             linha.tamanho_maximo,
             linha.precisao,
             linha.escala,
-        ),
+        )
+    )
+    return ColunaExtraida(
+        nome=linha.nome,
+        tipo_dado=tipo_dado,
         chave_primaria=linha.nome in colunas_pk,
         chave_estrangeira=referencia is not None,
         referencia=referencia,
@@ -159,6 +186,36 @@ def _colunas_unicas_de_coluna_unica(
         for colunas in colunas_por_constraint.values()
         if len(colunas) == 1
     }
+
+
+def _colunas_json_de_check_clauses(
+    check_clauses: list[str], nomes_colunas_reais: set[str]
+) -> set[str]:
+    """Extrai as colunas JSON reais a partir dos CHECK_CLAUSE da tabela.
+
+    `_COLUNAS_JSON_SQL` pode retornar CHECK_CLAUSE de constraints de outra
+    tabela do schema com o mesmo nome (ver comentário da query — MariaDB
+    escopa nome de constraint por tabela, não por schema, e
+    CHECK_CONSTRAINTS não tem TABLE_NAME pra filtrar isso na query). O
+    cruzamento com `nomes_colunas_reais` (as colunas de fato lidas de
+    `information_schema.columns` para esta tabela) é o que descarta esse
+    ruído — um nome extraído que não é coluna desta tabela é ignorado.
+
+    Args:
+        check_clauses: valores de CHECK_CLAUSE retornados por
+            _COLUNAS_JSON_SQL para o par (escopo, tabela) já filtrado.
+        nomes_colunas_reais: nomes de todas as colunas desta tabela, lidas
+            de _COLUNAS_SQL.
+
+    Returns:
+        Nomes de coluna desta tabela que são JSON de verdade.
+    """
+    colunas_json: set[str] = set()
+    for check_clause in check_clauses:
+        nome_coluna = _extrair_coluna_json_valid(check_clause)
+        if nome_coluna is not None and nome_coluna in nomes_colunas_reais:
+            colunas_json.add(nome_coluna)
+    return colunas_json
 
 
 def _promover_booleanos_pela_amostra(
@@ -326,6 +383,13 @@ class ExtratorMariaDB:
                 cursor.execute(_COLUNAS_UNICAS_SQL, (escopo, tabela))
                 colunas_unicas = _colunas_unicas_de_coluna_unica(cursor.fetchall())
 
+                cursor.execute(_COLUNAS_JSON_SQL, (escopo, tabela))
+                nomes_colunas_reais = {linha.nome for linha in linhas_colunas}
+                colunas_json = _colunas_json_de_check_clauses(
+                    [check_clause for (check_clause,) in cursor.fetchall()],
+                    nomes_colunas_reais,
+                )
+
                 # Colunas só são finalizadas depois da amostra (abaixo) — ao
                 # contrário do ExtratorPostgres, aqui a promoção de BOOLEAN
                 # depende de dado real já carregado. Ver docstring de
@@ -341,7 +405,11 @@ class ExtratorMariaDB:
                         candidatos_booleanos.add(linha_coluna.nome)
                     colunas.append(
                         _construir_coluna(
-                            linha_coluna, colunas_pk, colunas_fk, colunas_unicas
+                            linha_coluna,
+                            colunas_pk,
+                            colunas_fk,
+                            colunas_unicas,
+                            colunas_json,
                         )
                     )
 

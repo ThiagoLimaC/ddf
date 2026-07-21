@@ -1,11 +1,23 @@
 """Testes de integração de ExtratorPostgres contra Postgres real (testcontainers)."""
 
+from pathlib import Path
+
+import pytest
+
+from ddf.domain.model.analysis import iniciar_contexto
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado
+from ddf.domain.model.curation import BancoCurado
 from ddf.domain.shared.resultado import Falha, Sucesso
+from ddf.infrastructure.adapters.analyzers.analisador_de_metricas_de_coluna import (
+    AnalisadorDeMetricasDeColuna,
+)
 from ddf.infrastructure.adapters.extractors.postgres.extrator_postgres import (
     ExtratorPostgres,
+)
+from ddf.infrastructure.adapters.overrides.sobrescrita_de_tabela import (
+    SobrescritaDeTabela,
 )
 
 # Caminho feliz
@@ -72,6 +84,23 @@ def test_extrair_tabela_mapeia_coluna_com_timezone(
     assert coluna_criado_em.tipo_dado.com_timezone is True
 
 
+def test_extrair_tabela_com_coluna_array_mapeia_categoria_e_elemento(
+    dsn: str, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Caminho feliz: colunas TEXT[]/INTEGER[] viram ARRAY com elemento correto."""
+    extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+
+    resultado = extrator.extrair_tabela("arrays", "colunas_array")
+
+    assert isinstance(resultado, Sucesso)
+    coluna_tags = next(c for c in resultado.valor.colunas if c.nome == "tags")
+    coluna_numeros = next(c for c in resultado.valor.colunas if c.nome == "numeros")
+    assert coluna_tags.tipo_dado.categoria == CategoriaDeDado.ARRAY
+    assert coluna_tags.tipo_dado.elemento == CategoriaDeDado.TEXT
+    assert coluna_numeros.tipo_dado.categoria == CategoriaDeDado.ARRAY
+    assert coluna_numeros.tipo_dado.elemento == CategoriaDeDado.INTEGER
+
+
 def test_listar_escopos_retorna_escopos_semeados(
     dsn: str, configuracao: ConfiguracaoDeExtracao
 ) -> None:
@@ -81,7 +110,7 @@ def test_listar_escopos_retorna_escopos_semeados(
     resultado = extrator.listar_escopos()
 
     assert resultado == Sucesso(
-        ["geografia", "pessoa", "public", "restricoes", "rh", "vazio"]
+        ["arrays", "geografia", "pessoa", "public", "restricoes", "rh", "vazio"]
     )
 
 
@@ -228,3 +257,33 @@ def test_extrair_tabela_com_fk_composta_pareia_colunas_corretamente(
         nome_escopo="geografia", nome_tabela="pais", nome_coluna="estado"
     )
     assert resultado.avisos == []
+
+
+def test_coluna_array_com_valores_vazios_e_nulos_nao_quebra_analisador(
+    dsn: str, configuracao: ConfiguracaoDeExtracao, tmp_path: Path
+) -> None:
+    """Borda: array vazio/nulo alimenta o Analisador ponta a ponta sem exceção.
+
+    Reproduz o bug real da auditoria (issue #56): antes da correção,
+    `.min()`/`.max()` sobre dtype `pl.List` levantavam
+    `polars.exceptions.InvalidOperationError` não capturado por nenhuma
+    camada — aqui o pipeline completo (Extrator -> Sobrescrita -> Analisador)
+    roda contra a mesma tabela `arrays.colunas_array` do teste de caminho
+    feliz, que já tem uma linha com array vazio e uma com array nulo.
+    """
+    extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+    resultado_extracao = extrator.extrair_tabela("arrays", "colunas_array")
+    assert isinstance(resultado_extracao, Sucesso)
+
+    sobrescrita = SobrescritaDeTabela(tmp_path)
+    resultado_curadoria = sobrescrita(resultado_extracao.valor)
+    assert isinstance(resultado_curadoria, Sucesso)
+
+    contexto = iniciar_contexto(BancoCurado(tabelas=[resultado_curadoria.valor]))
+    resultado_analise = AnalisadorDeMetricasDeColuna()(contexto)
+
+    assert isinstance(resultado_analise, Sucesso)
+    tabela_analisada = resultado_analise.valor.analisado.tabelas[0]
+    coluna_tags = next(c for c in tabela_analisada.colunas if c.nome == "tags")
+    metrica = coluna_tags.metricas[0]
+    assert metrica.percentual_nulo == pytest.approx(100 / 3)

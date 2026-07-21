@@ -71,11 +71,21 @@ _SETUP_STATEMENTS = [
     # AND kcu.table_name = %s, extrair "pedidos" veria as 2 linhas (de
     # "pedidos" e de "clientes") sob o mesmo constraint_name e classificaria
     # "email" como não-única por acidente.
+    # "metadados" é JSON nas duas tabelas — mesma coluna, mesmo nome de
+    # constraint CHECK auto-gerado (issue #56), reproduzindo pra JSON o
+    # mesmo cenário de colisão de nome entre tabelas já usado acima pra
+    # UNIQUE ("email"): sem o cruzamento com as colunas reais da tabela em
+    # _colunas_json_de_check_clauses, o JOIN sem TABLE_NAME em
+    # CHECK_CONSTRAINTS faria "pedidos" enxergar o CHECK_CLAUSE de
+    # "clientes" (e vice-versa) — mas como os dois têm coluna "metadados",
+    # o resultado seria o mesmo por coincidência; a defesa real está
+    # provada no teste unit com nomes de coluna diferentes.
     """
     CREATE TABLE restricoes.pedidos (
         id INT AUTO_INCREMENT PRIMARY KEY,
         email VARCHAR(150) NOT NULL,
         apelido VARCHAR(50),
+        metadados JSON,
         UNIQUE KEY email (email)
     ) ENGINE=InnoDB
     """,
@@ -83,6 +93,7 @@ _SETUP_STATEMENTS = [
     CREATE TABLE restricoes.clientes (
         id INT AUTO_INCREMENT PRIMARY KEY,
         email VARCHAR(150) NOT NULL,
+        metadados JSON,
         UNIQUE KEY email (email)
     ) ENGINE=InnoDB
     """,
@@ -95,8 +106,11 @@ _SETUP_STATEMENTS = [
         UNIQUE KEY uk_pais_cep (pais, cep)
     ) ENGINE=InnoDB
     """,
-    "INSERT INTO restricoes.pedidos (email, apelido) VALUES ('ana@x.com', 'aninha')",
-    "INSERT INTO restricoes.clientes (email) VALUES ('bia@x.com')",
+    """
+    INSERT INTO restricoes.pedidos (email, apelido, metadados) VALUES
+        ('ana@x.com', 'aninha', '{"origem": "site"}')
+    """,
+    "INSERT INTO restricoes.clientes (email, metadados) VALUES ('bia@x.com', '{}')",
     "INSERT INTO restricoes.enderecos (pais, cep) VALUES ('BR', '01000-000')",
     "ANALYZE TABLE restricoes.pedidos",
     "ANALYZE TABLE restricoes.clientes",

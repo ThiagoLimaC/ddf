@@ -36,7 +36,7 @@ _LISTAR_TABELAS_SQL = """
 """
 
 _COLUNAS_SQL = """
-    SELECT column_name, data_type, character_maximum_length,
+    SELECT column_name, udt_name, character_maximum_length,
            numeric_precision, numeric_scale, is_nullable
     FROM information_schema.columns
     WHERE table_schema = %s AND table_name = %s
@@ -103,11 +103,11 @@ class _LinhaColuna(NamedTuple):
     A ordem dos campos aqui precisa acompanhar a ordem do SELECT em
     _COLUNAS_SQL — construir a tupla (`_LinhaColuna(*linha)`) é o único
     ponto onde essa correspondência posicional existe; daqui pra frente,
-    todo o código lê por nome (`linha.data_type`), não por índice.
+    todo o código lê por nome (`linha.udt_name`), não por índice.
     """
 
     nome: str
-    data_type: str
+    udt_name: str
     tamanho_maximo: int | None
     precisao: int | None
     escala: int | None
@@ -125,7 +125,10 @@ def _construir_coluna(
     return ColunaExtraida(
         nome=linha.nome,
         tipo_dado=mapear_tipo_postgres(
-            linha.data_type, linha.tamanho_maximo, linha.precisao, linha.escala
+            linha.udt_name,
+            linha.tamanho_maximo,
+            linha.precisao,
+            linha.escala,
         ),
         chave_primaria=linha.nome in colunas_pk,
         chave_estrangeira=referencia is not None,

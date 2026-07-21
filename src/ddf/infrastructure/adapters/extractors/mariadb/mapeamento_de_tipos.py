@@ -15,12 +15,36 @@ _CATEGORIAS_SIMPLES: dict[str, CategoriaDeDado] = {
     "int": CategoriaDeDado.INTEGER,
     "bigint": CategoriaDeDado.BIGINT,
     "date": CategoriaDeDado.DATE,
-    "json": CategoriaDeDado.JSON,
     "uuid": CategoriaDeDado.UUID,
     "time": CategoriaDeDado.TIME,
 }
 
 _PADRAO_VALOR_ENUM = re.compile(r"'((?:[^']|'')*)'")
+
+
+_PADRAO_CHECK_JSON_VALID = re.compile(r"^json_valid\(`(\w+)`\)$", re.IGNORECASE)
+
+
+def _extrair_coluna_json_valid(check_clause: str) -> str | None:
+    """Extrai o nome da coluna de um CHECK_CLAUSE do tipo json_valid(`col`).
+
+    MariaDB reporta `data_type = "longtext"` para colunas `JSON` — a coluna
+    real vira `LONGTEXT` com um `CHECK(json_valid(...))` implícito, nunca
+    reporta `"json"` como data_type. Esta função identifica esse padrão
+    específico de CHECK_CLAUSE para permitir a reclassificação correta em
+    `ExtratorMariaDB`.
+
+    Args:
+        check_clause: valor de information_schema.CHECK_CONSTRAINTS.
+            CHECK_CLAUSE.
+
+    Returns:
+        O nome da coluna, ou None se check_clause não seguir o padrão
+        json_valid(`<coluna>`) — CHECK constraints não relacionados a JSON
+        (ex. "`idade` >= 0") são ignorados, não geram erro.
+    """
+    casamento = _PADRAO_CHECK_JSON_VALID.match(check_clause)
+    return casamento.group(1) if casamento else None
 
 
 def _extrair_valores_enum(column_type: str) -> tuple[str, ...]:

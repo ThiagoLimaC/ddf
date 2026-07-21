@@ -105,6 +105,25 @@ _SETUP_SQL = """
 
     ANALYZE restricoes.contas;
     ANALYZE restricoes.enderecos;
+
+    -- Colunas ARRAY (issue #56, Fase 1): tags/numeros cobrem elemento
+    -- reconhecido (TEXT/INTEGER), array vazio (linha 2) e array nulo
+    -- (linha 3) — reproduz o crash de InvalidOperationError encontrado na
+    -- auditoria (.min()/.max() sobre dtype pl.List).
+    CREATE SCHEMA arrays;
+
+    CREATE TABLE arrays.colunas_array (
+        id SERIAL PRIMARY KEY,
+        tags TEXT[],
+        numeros INTEGER[]
+    );
+
+    INSERT INTO arrays.colunas_array (tags, numeros) VALUES
+        (ARRAY['a', 'b'], ARRAY[1, 2, 3]),
+        (ARRAY['c'], ARRAY[]::INTEGER[]),
+        (NULL, NULL);
+
+    ANALYZE arrays.colunas_array;
 """
 
 

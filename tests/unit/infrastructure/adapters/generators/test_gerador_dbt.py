@@ -304,6 +304,53 @@ def test_coluna_unknown_nao_recebe_cast(
     assert "CAST" not in sql
 
 
+def test_array_com_elemento_reconhecido_recebe_cast_de_array(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """ARRAY com elemento reconhecido vira CAST(col AS <TIPO>[])."""
+    coluna = construir_coluna(
+        nome="tags",
+        tipo_dado=TipoDeDado(
+            categoria=CategoriaDeDado.ARRAY, elemento=CategoriaDeDado.INTEGER
+        ),
+        metricas=[],
+    )
+    tabela = construir_tabela(colunas=[coluna])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    sql = (tmp_path / "models" / "staging" / "stg_escopo__tabela.sql").read_text()
+    assert "CAST(tags AS INTEGER[])" in sql
+
+
+def test_array_sem_elemento_reconhecido_nao_recebe_cast(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Borda: ARRAY sem elemento reconhecido é projetado raw, sem '[]' sem tipo."""
+    coluna = construir_coluna(
+        nome="pontos",
+        tipo_dado=TipoDeDado(categoria=CategoriaDeDado.ARRAY),
+        metricas=[],
+    )
+    tabela = construir_tabela(colunas=[coluna])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    sql = (tmp_path / "models" / "staging" / "stg_escopo__tabela.sql").read_text()
+    assert "pontos as pontos" in sql
+    assert "CAST" not in sql
+
+
 def test_geracao_e_deterministica(
     tmp_path: Path,
     construir_coluna: Callable[..., ColunaAnalisada],

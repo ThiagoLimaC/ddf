@@ -71,6 +71,14 @@ def test_cria_tipo_set_com_valores_permitidos() -> None:
     assert tipo.valores_permitidos == ("leitura", "escrita")
 
 
+def test_cria_tipo_array_com_elemento() -> None:
+    """Caminho feliz: ARRAY guarda a categoria do elemento, sem precisão dele."""
+    tipo = TipoDeDado(categoria=CategoriaDeDado.ARRAY, elemento=CategoriaDeDado.INTEGER)
+
+    assert tipo.categoria == CategoriaDeDado.ARRAY
+    assert tipo.elemento == CategoriaDeDado.INTEGER
+
+
 # Erro esperado
 
 
@@ -140,6 +148,12 @@ def test_varchar_com_valores_permitidos_levanta_validation_error() -> None:
         TipoDeDado(categoria=CategoriaDeDado.VARCHAR, valores_permitidos=("a",))
 
 
+def test_varchar_com_elemento_levanta_validation_error() -> None:
+    """Erro esperado: elemento é exclusivo de ARRAY, não de VARCHAR."""
+    with pytest.raises(ValidationError, match="VARCHAR"):
+        TipoDeDado(categoria=CategoriaDeDado.VARCHAR, elemento=CategoriaDeDado.TEXT)
+
+
 # Borda
 
 
@@ -165,3 +179,11 @@ def test_numeric_apenas_com_precisao_e_aceito() -> None:
 
     assert tipo.precisao == 10
     assert tipo.escala is None
+
+
+def test_array_sem_elemento_e_aceito() -> None:
+    """Borda: ARRAY sem elemento reconhecido é aceito (elemento fora do mapeamento)."""
+    tipo = TipoDeDado(categoria=CategoriaDeDado.ARRAY)
+
+    assert tipo.categoria == CategoriaDeDado.ARRAY
+    assert tipo.elemento is None
