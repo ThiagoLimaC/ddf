@@ -269,3 +269,15 @@ Exibe `Aviso`s em streaming por etapa concluída.
 10. **Pipeline como estágios compostos** — adicionar Analisador ou Gerador
     novo = incluir mais um item na composição; nenhum componente existente
     muda.
+11. **`Analisador` devolve um `ContextoDeAnalise` novo, nunca muta a
+    `entrada`** — decisão reaberta na revisão pré-CLI (issue #53).
+    `AnalisadorDeMetricasDeColuna`/`AnalisadorDeMetricasDeTabela` mutavam
+    `entrada` in-place e devolviam o mesmo objeto; isso funcionava porque
+    `compor()` roda Analisadores em sequência, mas não estava registrado em
+    lugar nenhum como restrição consciente. Um Analisador concreto continua
+    livre para processar internamente do jeito que quiser, mas o contrato do
+    Port passou a ser "devolve um `ContextoDeAnalise` novo com as métricas
+    acrescentadas", não "mutou o que recebeu" — deixa a porta aberta para uma
+    futura paralelização de múltiplos Analisadores sobre o mesmo contexto sem
+    reabrir esta decisão (mutação compartilhada entre threads seria uma race
+    condition silenciosa, não um erro que `mypy` capturaria).

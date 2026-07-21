@@ -21,62 +21,63 @@
 
 ### Shared (`domain/shared/`)
 
-- [ ] `Aviso` (dataclass frozen) — `mensagem: str`, `origem: str`
-- [ ] `Resultado[T]` como sum type — `Sucesso[T](valor, avisos: list[Aviso])` |
+- [x] `Aviso` (dataclass frozen) — `mensagem: str`, `origem: str`
+- [x] `Resultado[T]` como sum type — `Sucesso[T](valor, avisos: list[Aviso])` |
       `Falha(erro: str)`
 
 ### Modelos compartilhados (`domain/model/common`)
 
-- [ ] `TipoDeDado` — `CategoriaDeDado` (Enum) +
+- [x] `TipoDeDado` — `CategoriaDeDado` (Enum) +
       `precisao`/`escala`/`tamanho_maximo` opcionais
-- [ ] `MetadadosDeAmostra` — `estrategia: str`, `tamanho_amostra: int`,
+- [x] `MetadadosDeAmostra` — `estrategia: str`, `tamanho_amostra: int`,
       `total_linhas: int`
-- [ ] `ConfiguracaoDeExtracao` — `estrategia: EstrategiaDeAmostragem`,
-      `max_trabalhadores`, `max_conexoes`; valida `max_conexoes >=
-      max_trabalhadores` (sem `tamanho_amostra` — dimensionamento é
-      responsabilidade de cada `EstrategiaDeAmostragem` concreta)
+- [x] `ConfiguracaoDeExtracao` — `estrategia: EstrategiaDeAmostragem`
+      (reabertura de escopo da issue #10: `max_trabalhadores`/`max_conexoes`
+      removidos — nunca foram uma distinção com diferença real; concorrência
+      segura é responsabilidade interna e encapsulada de cada `Extrator`
+      concreto, ver `plan/registry-plan/issue-10-*.md`)
 
 ### Extraction Context (`domain/model/extraction.py`)
 
-- [ ] `ColunaExtraida` — `nome`, `tipo_dado`, `chave_primaria`,
+- [x] `ColunaExtraida` — `nome`, `tipo_dado`, `chave_primaria`,
       `chave_estrangeira`, `referencia: ReferenciaDeColuna | None`
-- [ ] `TabelaExtraida` — `nome_tabela`, `nome_escopo`,
+- [x] `TabelaExtraida` — `nome_tabela`, `nome_escopo`,
       `colunas: list[ColunaExtraida]`, `total_linhas`,
       `amostra: pl.DataFrame | None`, `metadados_amostra`;
       `arbitrary_types_allowed=True`
 
 ### Curation Context (`domain/model/curation.py`)
 
-- [ ] `ColunaCurada` — `ColunaExtraida` + `papel_de_negocio`,
+- [x] `ColunaCurada` — `ColunaExtraida` + `papel_de_negocio`,
       `regras_de_negocio`
-- [ ] `TabelaCurada` — mesma estrutura de `TabelaExtraida` com `ColunaCurada` +
+- [x] `TabelaCurada` — mesma estrutura de `TabelaExtraida` com `ColunaCurada` +
       `papel_de_negocio`, `regras_de_negocio`; `arbitrary_types_allowed=True`
-- [ ] `BancoCurado` — `tabelas: list[TabelaCurada]`;
+- [x] `BancoCurado` — `tabelas: list[TabelaCurada]`;
       `arbitrary_types_allowed=True`
 
 ### Analysis Context (`domain/model/analysis.py`)
 
-- [ ] `MetricaDeColuna` (BaseModel frozen) — `origem: str` — Value Object base
-- [ ] `MetricasBaseColuna(MetricaDeColuna)` — `percentual_nulo`, `percentual_unico`,
+- [x] `MetricaDeColuna` (BaseModel frozen) — `origem: str` — Value Object base
+- [x] `MetricasBaseColuna(MetricaDeColuna)` — `percentual_nulo`, `percentual_unico`,
       `valores_frequentes`, `minimo`, `maximo`, `formato_detectado`;
       `origem = "AnalisadorDeMetricasDeColuna"`
-- [ ] `MetricaDeTabela` (BaseModel frozen) — `origem: str` — Value Object base
-- [ ] `MetricasBaseTabela(MetricaDeTabela)` — `completude: float`;
+- [x] `MetricaDeTabela` (BaseModel frozen) — `origem: str` — Value Object base
+- [x] `MetricasBaseTabela(MetricaDeTabela)` — `completude: float`;
       `origem = "AnalisadorDeMetricasDeTabela"`
-- [ ] `ColunaAnalisada` — campos de `ColunaCurada` +
+- [x] `ColunaAnalisada` — campos de `ColunaCurada` +
       `metricas: list[MetricaDeColuna]`
-- [ ] `TabelaAnalisada` — campos de `TabelaCurada` (sem amostra) +
+- [x] `TabelaAnalisada` — campos de `TabelaCurada` (sem amostra) +
       `metricas: list[MetricaDeTabela]` + `metadados_amostra`
-- [ ] `BancoAnalisado` — `tabelas: list[TabelaAnalisada]`; Pydantic puro
-- [ ] `ContextoDeAnalise` — `curado: BancoCurado`, `analisado: BancoAnalisado`;
+- [x] `BancoAnalisado` — `tabelas: list[TabelaAnalisada]`; Pydantic puro
+- [x] `ContextoDeAnalise` — `curado: BancoCurado`, `analisado: BancoAnalisado`;
       `arbitrary_types_allowed=True`
-- [ ] `iniciar_contexto(curado: BancoCurado) -> ContextoDeAnalise` —
+- [x] `iniciar_contexto(curado: BancoCurado) -> ContextoDeAnalise` —
       constrói `BancoAnalisado` vazio a partir de `BancoCurado`
 
 ### Pipeline (`pipeline/`)
 
-- [ ] `Estagio[Entrada, Saida]` (Protocol genérico) em `pipeline/estagio.py`
-- [ ] `compor(*estagios)` em `pipeline/compor.py` — acumula avisos, para no
+- [x] `Estagio[Entrada, Saida]` (Protocol genérico) em `pipeline/estagio.py`
+- [x] `compor(*estagios)` em `pipeline/compor.py` — acumula avisos, para no
       primeiro `Falha`
 
 ### Ports (`domain/ports/`)
@@ -85,29 +86,34 @@
       `listar_tabelas(escopo) -> Resultado[list[tuple]]`,
       `extrair_tabela(escopo, tabela) -> Resultado[TabelaExtraida]`
       (issue #34: `listar_escopos` adicionado, vocabulário generalizado de `schema` para `escopo`)
-- [ ] `Analisador` (Protocol) — `produz`, `requer`,
-      `__call__(ContextoDeAnalise) -> Resultado[ContextoDeAnalise]`
-- [ ] `Gerador` (Protocol) — `requer`,
-      `__call__(BancoAnalisado, destino) -> Resultado[None]`
-- [ ] `OrquestradorDeTabelas` (Protocol) — `extrair(escopos, extrator) ->
+- [x] `Analisador` (Protocol) — `produz`, `requer`,
+      `__call__(ContextoDeAnalise, /) -> Resultado[ContextoDeAnalise]`
+      (parâmetro positional-only desde a revisão pré-CLI, issue #53)
+- [x] `Gerador` (Protocol) — `requer`,
+      `__call__(BancoAnalisado, destino, /) -> Resultado[None]`
+      (parâmetro positional-only desde a revisão pré-CLI, issue #53)
+- [x] `OrquestradorDeTabelas` (Protocol) — `extrair(escopos, extrator) ->
       Resultado[list[TabelaExtraida]]` + `aplicar_sobrescritas(tabelas, sobrescrita)
       -> Resultado[BancoCurado]`
-- [ ] `EstrategiaDeAmostragem` (Protocol) — `nome: str`, `percentual: float`
+- [x] `EstrategiaDeAmostragem` (Protocol) — `nome: str`, `percentual: float`
       (política pura, sem SQL — cada Extrator traduz pro próprio dialeto)
 
 ### Contrato da CLI (`infrastructure/adapters/cli/`)
 
-- [ ] `FONTES_REGISTRADAS` + `registrar_fonte()` em `cli/fontes.py` — registro
+- [x] `FONTES_REGISTRADAS` + `registrar_fonte()` em `cli/fontes.py` — registro
       de Extratores disponíveis; define o contrato de extensão desde o início
 - [ ] `wizard.py` — esqueleto do fluxo completo com chamadas aos Ports já
       assinadas e comentários `# TODO: implementar na Task 7`; permite detectar
-      cedo se o fluxo exige mudanças no modelo
-- [ ] `validar_dependencias(analisadores, geradores) -> Resultado[None]` em
+      cedo se o fluxo exige mudanças no modelo (Task 7, ainda não iniciada)
+- [x] `validar_dependencias(analisadores, geradores) -> Resultado[None]` em
       `cli/validacao.py` — lógica pura, testável sem adapters concretos
 
-- [ ] **Verificação:** testes de validação Pydantic (`percentual_nulo`/
-      `percentual_unico` entre 0–100 em `MetricasBaseColuna`; `max_conexoes >=
-      max_trabalhadores` em `ConfiguracaoDeExtracao`)
+- [x] **Verificação:** testes de validação Pydantic (`percentual_nulo`/
+      `percentual_unico`/`completude` entre 0–100 em
+      `MetricasBaseColuna`/`MetricasBaseTabela`). A validação de
+      `max_conexoes >= max_trabalhadores` em `ConfiguracaoDeExtracao` citada
+      na v1 desta task não existe mais — reaberta e removida na issue #10 (ver
+      nota acima em "Modelos compartilhados").
 
 ## 3. Adaptador de Extrator concreto
 
@@ -210,13 +216,13 @@
 
 ## 4. Sobrescrita (ACL Extraction → Curation) e OrquestradorParalelo
 
-- [ ] `SobrescritaDeTabela(Estagio[TabelaExtraida, TabelaCurada])`:
+- [x] `SobrescritaDeTabela(Estagio[TabelaExtraida, TabelaCurada])`:
   - Hash SHA-256 de campos estruturais
   - Leitura de `overrides/<escopo>/<tabela>.yaml`
   - Geração de skeleton na primeira execução
   - Atualização idempotente (preserva curadoria, emite `Aviso` por mudança)
   - YAML malformado → `Falha` com mensagem clara
-- [ ] `OrquestradorParalelo(OrquestradorDeTabelas)`:
+- [x] `OrquestradorParalelo(OrquestradorDeTabelas)`:
   - `extrair`: `ThreadPoolExecutor` para extração paralela; retorna
     `list[TabelaExtraida]`
   - `aplicar_sobrescritas`: `ThreadPoolExecutor` para sobrescrita paralela;
@@ -226,7 +232,7 @@
 
 ## 5. Analisadores
 
-- [ ] `AnalisadorDeMetricasDeColuna(Analisador)`:
+- [x] `AnalisadorDeMetricasDeColuna(Analisador)`:
   - `produz = [MetricasBaseColuna]`, `requer = []`
   - Calcula métricas via Polars: `percentual_nulo`, `percentual_unico`
     (nulos excluídos do numerador), `minimo`, `maximo`, `valores_frequentes`
@@ -237,7 +243,7 @@
   - Normaliza com `MetadadosDeAmostra.tamanho_amostra`
   - Seta `tabela.amostra = None` após processar cada tabela (libera memória)
   - `Aviso` se `tamanho_amostra < 100`
-- [ ] `AnalisadorDeMetricasDeTabela(Analisador)`:
+- [x] `AnalisadorDeMetricasDeTabela(Analisador)`:
   - `produz = [MetricasBaseTabela]`, `requer = [MetricasBaseColuna]`
   - Calcula `completude` a partir de `MetricasBaseColuna` já presentes no
     `ContextoDeAnalise.analisado`, como média de `(100 - percentual_nulo)`
