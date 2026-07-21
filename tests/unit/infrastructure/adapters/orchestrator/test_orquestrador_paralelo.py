@@ -93,6 +93,33 @@ def test_extrair_com_tabela_com_falha_retorna_falha_agregada(
     assert "vendas.clientes: conexão perdida" in resultado.erro
 
 
+def test_extrair_com_excecao_nao_prevista_acumula_como_falha(
+    construir_extrator_fake: Callable[..., ExtratorFake],
+) -> None:
+    """Erro esperado: Exception não prevista dentro do worker vira Falha isolada.
+
+    Reproduz o boundary sistemático da issue #56 — sem executar_com_seguranca
+    em volta da chamada no worker, isso propagaria crua via futuro.result(),
+    quebrando a extração inteira em vez de virar uma falha isolada, acumulada
+    como as demais (mesma política de 'não interrompe os outros workers').
+    """
+    extrator = construir_extrator_fake(
+        {"vendas": Sucesso([("vendas", "pedidos"), ("vendas", "clientes")])},
+        excecoes_de_extracao={
+            ("vendas", "clientes"): ValueError("dtype não suportado")
+        },
+    )
+    orquestrador = OrquestradorParalelo(max_trabalhadores=4)
+
+    resultado = orquestrador.extrair(["vendas"], extrator)
+
+    assert isinstance(resultado, Falha)
+    assert "Falha ao extrair 1 de 2 tabelas" in resultado.erro
+    assert "vendas.clientes" in resultado.erro
+    assert "ValueError" in resultado.erro
+    assert "dtype não suportado" in resultado.erro
+
+
 def test_extrair_com_falha_de_listagem_de_escopo_acumula(
     construir_extrator_fake: Callable[..., ExtratorFake],
 ) -> None:

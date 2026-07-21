@@ -9,6 +9,7 @@ from ddf.domain.model.extraction import TabelaExtraida
 from ddf.domain.ports.extrator import Extrator
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.pipeline.estagio import Estagio
+from ddf.pipeline.seguranca import executar_com_seguranca
 
 _Item = TypeVar("_Item")
 _Saida = TypeVar("_Saida")
@@ -58,13 +59,23 @@ class OrquestradorParalelo:
 
     def _executar_em_paralelo(
         self,
+        nome_estagio: str,
         itens: list[_Item],
         funcao: Callable[[_Item], Resultado[_Saida]],
         identificador: Callable[[_Item], str],
     ) -> tuple[list[_Saida], list[tuple[str, str]]]:
         """Executa `funcao` em paralelo sobre `itens`, acumulando sucessos e falhas.
 
+        Cada chamada roda dentro de `executar_com_seguranca` — uma exceção
+        não prevista levantada por `funcao` (ex.: dentro de um `Extrator`
+        concreto) viraria uma exceção crua propagada por `futuro.result()`
+        sem essa proteção, quebrando os demais itens do lote em vez de
+        virar uma falha isolada, acumulada como as demais.
+
         Args:
+            nome_estagio: identificador do Estagio chamado por `funcao`
+                (ex.: "Extrator", "Sobrescrita"), usado como prefixo na
+                mensagem de falha inesperada.
             itens: itens de entrada, um por chamada de `funcao`.
             funcao: transformação aplicada a cada item, retornando um Resultado.
             identificador: extrai o identificador textual de um item, usado
@@ -76,8 +87,13 @@ class OrquestradorParalelo:
         sucessos: list[_Saida] = []
         falhas: list[tuple[str, str]] = []
 
+        def _funcao_segura(item: _Item) -> Resultado[_Saida]:
+            return executar_com_seguranca(
+                f"{nome_estagio}[{identificador(item)}]", lambda: funcao(item)
+            )
+
         with ThreadPoolExecutor(max_workers=self._max_trabalhadores) as executor:
-            futuros = {executor.submit(funcao, item): item for item in itens}
+            futuros = {executor.submit(_funcao_segura, item): item for item in itens}
             for futuro in as_completed(futuros):
                 item = futuros[futuro]
                 resultado = futuro.result()
@@ -113,6 +129,7 @@ class OrquestradorParalelo:
 
         total = len(pares_a_extrair) + len(falhas_listagem)
         tabelas, falhas_extracao = self._executar_em_paralelo(
+            "Extrator",
             pares_a_extrair,
             lambda par: extrator.extrair_tabela(*par),
             lambda par: f"{par[0]}.{par[1]}",
@@ -144,6 +161,7 @@ class OrquestradorParalelo:
         """
         total = len(tabelas)
         tabelas_curadas, falhas = self._executar_em_paralelo(
+            "Sobrescrita",
             tabelas,
             sobrescrita,
             lambda tabela: f"{tabela.nome_escopo}.{tabela.nome_tabela}",
