@@ -101,6 +101,29 @@ def test_extrair_tabela_mapeia_enum_com_valores_permitidos(
     assert coluna_status.tipo_dado.valores_permitidos == ("ativo", "inativo")
 
 
+def test_extrair_tabela_mapeia_coluna_json_via_check_clause(
+    conexao: tuple[str, int, str, str], configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Caminho feliz: coluna JSON real vira CategoriaDeDado.JSON, não TEXT.
+
+    Contra MariaDB real, data_type de uma coluna JSON é "longtext" — a
+    classificação correta depende só do CHECK(json_valid(...)) implícito
+    (issue #56, validado empiricamente antes desta implementação).
+    """
+    host, port, user, password = conexao
+    extrator = ExtratorMariaDB(
+        host=host, port=port, user=user, password=password, configuracao=configuracao
+    )
+
+    resultado = extrator.extrair_tabela("restricoes", "pedidos")
+
+    assert isinstance(resultado, Sucesso)
+    coluna_metadados = next(
+        coluna for coluna in resultado.valor.colunas if coluna.nome == "metadados"
+    )
+    assert coluna_metadados.tipo_dado.categoria == CategoriaDeDado.JSON
+
+
 def test_extrair_tabela_promove_tinyint_um_real_para_boolean(
     conexao: tuple[str, int, str, str], configuracao: ConfiguracaoDeExtracao
 ) -> None:

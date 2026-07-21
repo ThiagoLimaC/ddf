@@ -145,6 +145,7 @@ def test_extrair_tabela_retorna_estrutura_completa(
         [("id",)],  # PK
         [("cliente_id", "vendas", "clientes", "id")],  # FK
         [("nome", "nome")],  # UNIQUE (single-column)
+        [],  # JSON
         [(1, "ana", 1, 10), (2, "bia", 0, 20)],  # amostra
     ]
     cursor_fake.fetchone.return_value = (1000,)
@@ -184,6 +185,41 @@ def test_extrair_tabela_retorna_estrutura_completa(
     conexao_fake.close.assert_called_once()
 
 
+def test_coluna_json_e_reclassificada_via_check_clause(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Caminho feliz: coluna LONGTEXT com CHECK json_valid vira categoria JSON.
+
+    MariaDB nunca reporta data_type == "json" (issue #56) — a coluna real
+    reportada é "longtext"; a reclassificação depende só do CHECK_CLAUSE.
+    """
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.side_effect = [
+        [
+            ("id", "int", "int(11)", None, None, None, "NO"),
+            ("dados", "longtext", "longtext", None, None, None, "YES"),
+        ],  # colunas
+        [("id",)],  # PK
+        [],  # FK
+        [],  # UNIQUE
+        [("json_valid(`dados`)",)],  # JSON
+        [],  # amostra
+    ]
+    cursor_fake.fetchone.return_value = (0,)
+    cursor_fake.description = [("id",), ("dados",)]
+    pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+    extrator = ExtratorMariaDB(
+        host="fake", user="root", password="senha", configuracao=configuracao
+    )
+    resultado = extrator.extrair_tabela("vendas", "pedidos")
+
+    assert isinstance(resultado, Sucesso)
+    coluna_dados = next(c for c in resultado.valor.colunas if c.nome == "dados")
+    assert coluna_dados.tipo_dado.categoria == CategoriaDeDado.JSON
+
+
 def test_tinyint_um_unsigned_tambem_e_candidato_a_boolean(
     pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
 ) -> None:
@@ -197,6 +233,7 @@ def test_tinyint_um_unsigned_tambem_e_candidato_a_boolean(
         [],  # PK
         [],  # FK
         [],  # UNIQUE
+        [],  # JSON
         [(1,), (0,), (1,)],  # amostra
     ]
     cursor_fake.fetchone.return_value = (3,)
@@ -297,6 +334,7 @@ def test_extrair_tabela_com_duas_fks_na_mesma_coluna_emite_aviso(
             ("entidade_id", "vendas", "fornecedores", "id"),
         ],  # FK duplicada na mesma coluna
         [],  # UNIQUE
+        [],  # JSON
         [],  # amostra
     ]
     cursor_fake.fetchone.return_value = (0,)
@@ -344,6 +382,7 @@ def test_extrair_tabela_com_table_rows_nulo_usa_total_linhas_zero(
         [("id",)],  # PK
         [],  # FK
         [],  # UNIQUE
+        [],  # JSON
         [],  # amostra
     ]
     cursor_fake.fetchone.return_value = (None,)
@@ -371,6 +410,7 @@ def test_tinyint_um_com_valor_atipico_na_amostra_mantem_integer(
         [],  # PK
         [],  # FK
         [],  # UNIQUE
+        [],  # JSON
         [(0,), (1,), (2,)],  # amostra com valor atípico
     ]
     cursor_fake.fetchone.return_value = (3,)
@@ -397,6 +437,7 @@ def test_tinyint_um_com_amostra_vazia_mantem_integer(
         [],  # PK
         [],  # FK
         [],  # UNIQUE
+        [],  # JSON
         [],  # amostra vazia
     ]
     cursor_fake.fetchone.return_value = (0,)
@@ -429,6 +470,7 @@ def test_unique_composta_nao_marca_nenhuma_coluna_como_unica(
             ("uk_pais_local", "codigo_pais"),
             ("uk_pais_local", "codigo_local"),
         ],  # UNIQUE composta — mesmo constraint_name, 2 colunas
+        [],  # JSON
         [],  # amostra
     ]
     cursor_fake.fetchone.return_value = (0,)
@@ -443,6 +485,41 @@ def test_unique_composta_nao_marca_nenhuma_coluna_como_unica(
     assert isinstance(resultado, Sucesso)
     assert resultado.valor.colunas[0].unica is False
     assert resultado.valor.colunas[1].unica is False
+
+
+def test_check_clause_de_outra_tabela_nao_reclassifica_coluna(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: CHECK_CLAUSE cujo nome de coluna não existe nesta tabela é ignorado.
+
+    Reproduz o fan-out do JOIN documentado em _COLUNAS_JSON_SQL — nomes de
+    constraint são escopados por tabela no MariaDB, e CHECK_CONSTRAINTS não
+    tem TABLE_NAME pra filtrar isso na query. Aqui a tabela consultada só
+    tem a coluna "nome" (VARCHAR); "outra_coluna" no CHECK_CLAUSE simula o
+    resultado de uma constraint de mesmo nome vinda de outra tabela do
+    schema — não deve reclassificar nada.
+    """
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.side_effect = [
+        [("nome", "varchar", "varchar(50)", 50, None, None, "YES")],  # colunas
+        [],  # PK
+        [],  # FK
+        [],  # UNIQUE
+        [("json_valid(`outra_coluna`)",)],  # JSON — de outra tabela
+        [],  # amostra
+    ]
+    cursor_fake.fetchone.return_value = (0,)
+    cursor_fake.description = [("nome",)]
+    pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+    extrator = ExtratorMariaDB(
+        host="fake", user="root", password="senha", configuracao=configuracao
+    )
+    resultado = extrator.extrair_tabela("vendas", "pedidos")
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor.colunas[0].tipo_dado.categoria == CategoriaDeDado.VARCHAR
 
 
 def test_listar_tabelas_sem_tabelas_retorna_lista_vazia(
