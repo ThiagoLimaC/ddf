@@ -10,6 +10,7 @@ linking), em vez do banco inteiro.
 """
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -299,6 +300,7 @@ class GeradorContextoDeIA:
         tabelas = sorted(entrada.tabelas, key=lambda t: (t.nome_escopo, t.nome_tabela))
 
         indice: dict[str, Any] = {
+            "generated_at": datetime.now(UTC).isoformat(),
             "tabelas": [
                 {
                     "nome_escopo": tabela.nome_escopo,

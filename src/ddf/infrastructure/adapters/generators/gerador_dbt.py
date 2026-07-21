@@ -8,6 +8,7 @@ do código Python (ver `docs/engineer_guidelines.md`, "Nomenclatura: idioma
 como contrato").
 """
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -402,8 +403,10 @@ class GeradorDbt:
         tabelas = sorted(entrada.tabelas, key=lambda t: (t.nome_escopo, t.nome_tabela))
         presentes = {(tabela.nome_escopo, tabela.nome_tabela) for tabela in tabelas}
 
+        gerado_em = datetime.now(UTC).isoformat()
+        projeto = {**_DBT_PROJECT, "meta": {"generated_at": gerado_em}}
         resultado_projeto = escrever_arquivo(
-            destino / "dbt_project.yml", _dump_yaml(_DBT_PROJECT)
+            destino / "dbt_project.yml", _dump_yaml(projeto)
         )
         if isinstance(resultado_projeto, Falha):
             return resultado_projeto

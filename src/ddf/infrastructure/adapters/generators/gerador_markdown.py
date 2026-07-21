@@ -1,5 +1,6 @@
 """GeradorMarkdown: documentação navegável em Markdown a partir do BancoAnalisado."""
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -309,10 +310,11 @@ class GeradorMarkdown:
             Sucesso(None) com Aviso por tabela sem papel_de_negocio, ou
             Falha na primeira escrita em disco que falhar.
         """
+        gerado_em = datetime.now(UTC).isoformat()
         avisos: list[Aviso] = []
         for tabela in entrada.tabelas:
             caminho_tabela = destino / tabela.nome_escopo / f"{tabela.nome_tabela}.md"
-            conteudo = _TEMPLATE_TABELA.render(tabela=tabela)
+            conteudo = _TEMPLATE_TABELA.render(tabela=tabela, gerado_em=gerado_em)
             resultado = escrever_arquivo(caminho_tabela, conteudo)
             if isinstance(resultado, Falha):
                 return resultado
@@ -330,7 +332,7 @@ class GeradorMarkdown:
         ordenadas = sorted(
             entrada.tabelas, key=lambda t: (t.nome_escopo, t.nome_tabela)
         )
-        conteudo_index = _TEMPLATE_INDEX.render(tabelas=ordenadas)
+        conteudo_index = _TEMPLATE_INDEX.render(tabelas=ordenadas, gerado_em=gerado_em)
         resultado_index = escrever_arquivo(destino / "index.md", conteudo_index)
         if isinstance(resultado_index, Falha):
             return resultado_index
