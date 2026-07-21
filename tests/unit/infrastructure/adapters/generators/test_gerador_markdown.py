@@ -503,6 +503,79 @@ def test_array_sem_elemento_reconhecido_renderiza_unknown(
     assert "UNKNOWN[]" in linha_colunas
 
 
+def test_amostra_vazia_mostra_sem_evidencia_em_vez_de_completude_falsa(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Borda: tamanho_amostra == 0 mostra 'sem evidência', não 100%/0.00% falsos.
+
+    _metricas_vazias() zera percentual_nulo pra amostra vazia — sem essa
+    distinção na apresentação, a tabela mostraria 100% de completude e
+    0.00% de nulos/duplicatas como se a amostra tivesse confirmado isso,
+    quando na real nenhuma linha foi inspecionada (issue #56).
+    """
+    metrica_vazia = MetricasBaseColuna(
+        percentual_nulo=0.0, percentual_unico=0.0, valores_frequentes=[]
+    )
+    coluna = construir_coluna(nome="email", metricas=[metrica_vazia])
+    tabela = construir_tabela(
+        colunas=[coluna],
+        tamanho_amostra=0,
+        metricas=[MetricasBaseTabela(completude=100.0)],
+    )
+    banco = construir_banco([tabela])
+
+    resultado = GeradorMarkdown()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    conteudo = (tmp_path / "escopo" / "tabela.md").read_text()
+    assert "sem evidência (amostra vazia)" in conteudo.split("## Fatos extraídos")[1]
+    secao_qualidade = conteudo.split("## Qualidade dos dados")[1]
+    linha = next(
+        linha for linha in secao_qualidade.splitlines() if linha.startswith("| email ")
+    )
+    assert "sem evidência (amostra vazia)" in linha
+    assert "0.00%" not in linha
+
+
+def test_nao_nulavel_tem_precedencia_mesmo_com_amostra_vazia(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Borda: NOT NULL do schema continua valendo mesmo sem evidência amostral.
+
+    Garantia estrutural do catálogo não depende da amostra ter encontrado
+    alguma linha — diferente de percentual_unico (célula seguinte), que não
+    tem fato estrutural equivalente e por isso continua 'sem evidência'.
+    """
+    metrica_vazia = MetricasBaseColuna(
+        percentual_nulo=0.0, percentual_unico=0.0, valores_frequentes=[]
+    )
+    coluna = construir_coluna(
+        nome="id", nao_nulavel=True, metricas=[metrica_vazia]
+    )
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=0)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorMarkdown()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    conteudo = (tmp_path / "escopo" / "tabela.md").read_text()
+    secao_qualidade = conteudo.split("## Qualidade dos dados")[1]
+    linha = next(
+        linha for linha in secao_qualidade.splitlines() if linha.startswith("| id ")
+    )
+    _, _, percentual_nulo, percentual_unico, _minimo, _maximo, _formato, _ = (
+        celula.strip() for celula in linha.split("|")
+    )
+    assert percentual_nulo == "0.00% (garantido pelo schema)"
+    assert percentual_unico == "sem evidência (amostra vazia)"
+
+
 def test_coluna_totalmente_nula_recebe_nota_em_vez_de_ser_omitida(
     tmp_path: Path,
     construir_coluna: Callable[..., ColunaAnalisada],

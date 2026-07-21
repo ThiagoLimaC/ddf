@@ -266,7 +266,34 @@ def test_tabela_com_metricas_base_tabela_inclui_completude(
 
     assert isinstance(resultado, Sucesso)
     chunk = _ler_json(tmp_path / "tabelas" / "escopo__pedidos.json")
-    assert chunk["metricas_tabela"] == {"completude": 92.4}
+    assert chunk["metricas_tabela"] == {"completude": 92.4, "amostra_vazia": False}
+
+
+def test_amostra_vazia_sinaliza_completude_sem_evidencia(
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    tmp_path: Path,
+) -> None:
+    """Borda: tamanho_amostra == 0 marca amostra_vazia=True junto da completude.
+
+    completude=100.0 é o mesmo valor numérico de uma tabela genuinamente
+    completa — sem essa flag, um agente consumidor não tem como distinguir
+    os dois casos (issue #56).
+    """
+    tabela = construir_tabela(
+        colunas=[construir_coluna()],
+        nome_tabela="pedidos",
+        tamanho_amostra=0,
+        metricas=[MetricasBaseTabela(completude=100.0)],
+    )
+    banco = construir_banco([tabela])
+
+    resultado = GeradorContextoDeIA()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    chunk = _ler_json(tmp_path / "tabelas" / "escopo__pedidos.json")
+    assert chunk["metricas_tabela"] == {"completude": 100.0, "amostra_vazia": True}
 
 
 def test_geracao_e_deterministica(
