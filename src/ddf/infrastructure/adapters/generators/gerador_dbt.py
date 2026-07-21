@@ -190,7 +190,7 @@ def _sugestoes_de_teste(
     usado no GeradorMarkdown (#44) de priorizar o fato do schema sobre a
     estimativa amostral. Ambos são suprimidos quando a coluna já é PK (PK
     implica os dois, sugerir seria redundante). A checagem amostral só
-    entra em jogo com `tamanho_amostra > 0` sem isso,
+    entra em jogo com `tamanho_amostra > 0` — sem isso,
     `_metricas_vazias()` zera `percentual_nulo` pra amostra vazia, e o
     Gerador sugeriria `not_null`/`unique` sobre zero evidência real; o fato
     estrutural do schema continua valendo independente disso.
@@ -199,6 +199,19 @@ def _sugestoes_de_teste(
     também está no lote analisado nesta execução — apontar `ref()` para um
     model que este Gerador não produziu quebraria `dbt run`. Quando a
     referência está fora do lote, emite `Aviso` e omite o teste.
+
+    **Limitação conhecida — FK composta:** o teste
+    é gerado **por coluna**, uma `relationships` independente para cada
+    coluna local apontando pro seu par referenciado. Isso testa que cada
+    valor individual existe na coluna referenciada correspondente, **não**
+    que a combinação das colunas juntas forma uma linha válida na tabela
+    referenciada — a integridade referencial real de uma FK composta.
+    `ColunaAnalisada.referencia` é modelado por coluna (`ReferenciaDeColuna`
+    não agrupa colunas de uma mesma constraint), então este Gerador não tem
+    como saber que duas colunas pertencem à mesma FK composta pra emitir um
+    teste único sobre o par. Modelar isso exigiria agrupar colunas de uma
+    mesma constraint composta já no Extraction Context — mudança de escopo
+    maior, avaliada e adiada nesta issue.
 
     `accepted_values` usa `severity: warn` e só é sugerido quando os top-10
     `valores_frequentes` cobrem pelo menos `_COBERTURA_MINIMA_ACCEPTED_VALUES`
