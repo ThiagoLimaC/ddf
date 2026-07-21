@@ -281,3 +281,25 @@ Exibe `Aviso`s em streaming por etapa concluída.
     futura paralelização de múltiplos Analisadores sobre o mesmo contexto sem
     reabrir esta decisão (mutação compartilhada entre threads seria uma race
     condition silenciosa, não um erro que `mypy` capturaria).
+12. **`executar_com_seguranca` como boundary sistemático de exceção não
+    prevista** — achado da auditoria de engenharia de dados pré-CLI (issue
+    #56): o contrato "nenhum Estagio propaga exceção crua" (`Resultado`,
+    seção Shared) dependia inteiramente da disciplina de quem escrevia cada
+    Adapter — nem `compor()` nem `OrquestradorParalelo._executar_em_paralelo`
+    capturavam `Exception` genérica, só `Falha` explícita. Um bug real (coluna
+    `ARRAY` do Postgres quebrando `AnalisadorDeMetricasDeColuna` com
+    `polars.exceptions.InvalidOperationError`) mostrou que essa disciplina
+    falha na prática, e o mesmo risco existe em qualquer Extrator (rodando em
+    thread do Orquestrador) ou Gerador. `pipeline/seguranca.py` centraliza a
+    conversão de qualquer `Exception` não antecipada em `Falha` — nome do
+    Estagio + tipo da exceção preservados na mensagem, traceback original só
+    no log interno — aplicada nas 3 costuras onde um Estagio é chamado fora
+    do controle do próprio Adapter: `compor()`, o worker de
+    `OrquestradorParalelo._executar_em_paralelo`, e o loop de Geradores
+    (hoje só em `scripts/prototipo_wizard_mariadb.py`; **a Task 7 é
+    obrigada a repetir o mesmo padrão** em torno de cada chamada de Gerador
+    no wizard real). **Não substitui** a conversão de exceções esperadas e
+    específicas que cada Adapter já faz em sua própria mensagem de domínio
+    (ex.: `OperationalError` → `Falha("Não foi possível conectar...")`) — é
+    chamada em volta dessas conversões, não dentro delas; rede de segurança
+    para o que não foi previsto, não a primeira linha de tratamento.
