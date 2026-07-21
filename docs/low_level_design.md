@@ -1073,9 +1073,64 @@ class GeradorContextoDeIA:
     def __call__(self, entrada: BancoAnalisado, destino: Path) -> Resultado[None]: ...
 ```
 
-**Saída:** `<destino>/ai_context.json` — serialização compacta do
-`BancoAnalisado`, incluindo todas as métricas (Value Objects serializados)
-e `MetadadosDeAmostra` por tabela.
+Reabertura de escopo da issue original: em vez de um único `ai_context.json`
+com o `BancoAnalisado` inteiro serializado — redundante com Markdown/dbt,
+mesma informação, outro parser, e o antipadrão documentado na prática atual
+de contexto-pra-agente (schema linking, M-Schema, chunking > dump
+monolítico) — o artefato é dividido em três peças, todas deriváveis 100% do
+que já está em `BancoAnalisado`, sem Analisador novo e sem dependência nova:
+
+**Saída:** `<destino>/index.json` + `<destino>/tabelas/<escopo>__<tabela>.json`
+(um arquivo por tabela; convenção de nome igual ao `_nome_model` do
+`GeradorDbt`, evita colisão entre escopos com tabela homônima).
+
+**`index.json`:**
+```json
+{
+  "tabelas": [{"nome_escopo": "...", "nome_tabela": "...", "arquivo": "tabelas/..."}],
+  "grafo_de_relacionamentos": {
+    "nota_de_escopo": "referenciado_por reflete apenas as tabelas presentes neste lote de análise; se o lote for um subconjunto da fonte, tabelas fora dele que também referenciam a mesma tabela não aparecem aqui.",
+    "tabelas": {
+      "vendas.pedidos": {
+        "referencia": [{"coluna": "cliente_id", "tabela_destino": "vendas.clientes", "coluna_destino": "id"}],
+        "referenciado_por": [{"tabela_origem": "vendas.itens_pedido", "coluna_origem": "pedido_id", "coluna": "id"}]
+      }
+    }
+  }
+}
+```
+Grafo bidirecional de relacionamentos via FK real (`chave_estrangeira`/
+`referencia`), chave `f"{nome_escopo}.{nome_tabela}"`. `referencia` (saída)
+é sempre exaustiva — vem do FK da própria tabela, que está sendo iterada
+porque está no lote, então não depende do que mais foi analisado.
+`referenciado_por` (entrada) é fundamentalmente diferente: só existe porque
+outras tabelas do lote foram inspecionadas e apontavam pra essa. Se o lote
+for um subconjunto do banco, uma tabela fora dele que também referencia a
+mesma tabela fica invisível — a lista pode aparecer **não-vazia mas
+incompleta**, o que é pior que vazia (convida conclusão errada de
+exaustividade). Como é limitação estrutural de toda execução (não um caso
+pontual), não vira `Aviso` por ocorrência — vira uma nota fixa
+(`nota_de_escopo`) sempre presente no artefato, no mesmo espírito da nota
+de rodapé de `MetadadosDeAmostra` no `GeradorMarkdown`.
+
+**`tabelas/<escopo>__<tabela>.json`:** dados estruturais + métricas da
+tabela (chunk endereçável independentemente, para um agente carregar só o
+subconjunto do schema relevante à tarefa) e, quando aplicável, uma seção
+`esquema_de_consulta.colunas_filtraveis` (tool/function-calling schema):
+sugestão de filtro `enum` quando a coluna não é PK, a amostra tem
+`tamanho_amostra >= 100` (mesmo piso do `Aviso` de baixo sinal do
+`AnalisadorDeMetricasDeColuna`) e a cobertura dos top-10 `valores_frequentes`
+sobre os não-nulos da amostra é `>= 0.9` — reaproveita **exatamente** a
+função `_cobertura_dos_valores_frequentes` e a constante
+`_COBERTURA_MINIMA_ACCEPTED_VALUES`, extraídas de `gerador_dbt.py` para
+`generators/_metricas.py`, já que é a mesma pergunta estatística que o
+`GeradorDbt` resolveu para `accepted_values`. `esquema_de_consulta` fica em
+chave própria, nunca misturada nos campos descritivos da coluna — separa
+"dado passivo" de "contrato de execução".
+
+Fora de escopo (decisão registrada, não implícita): inferência de
+`papel_de_negocio`/`regras_de_negocio` a partir de estatísticas exigiria
+exceção formal à Restrição 5 do PRD e fica para issue separada.
 
 ---
 
