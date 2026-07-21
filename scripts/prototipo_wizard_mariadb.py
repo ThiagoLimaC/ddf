@@ -53,6 +53,7 @@ from ddf.infrastructure.adapters.generators.gerador_markdown import GeradorMarkd
 from ddf.infrastructure.adapters.overrides.sobrescrita_de_tabela import (
     SobrescritaDeTabela,
 )
+from ddf.pipeline.seguranca import executar_com_seguranca
 
 _GERADORES_DISPONIVEIS = ["Markdown", "dbt", "ContextoDeIA"]
 _QUADROS_AMPULHETA = ("⏳", "⌛")
@@ -297,7 +298,9 @@ def _executar_gerador_markdown(banco_analisado: BancoAnalisado) -> None:
             "Diretório de destino do Markdown:", default="docs_gerados"
         ).ask()
     )
-    resultado_geracao = GeradorMarkdown()(banco_analisado, destino)
+    resultado_geracao = executar_com_seguranca(
+        "GeradorMarkdown", lambda: GeradorMarkdown()(banco_analisado, destino)
+    )
     if isinstance(resultado_geracao, Falha):
         print(f"Falha ao gerar Markdown: {resultado_geracao.erro}")
         return
@@ -317,7 +320,9 @@ def _executar_gerador_dbt(banco_analisado: BancoAnalisado) -> None:
             "Diretório de destino do projeto dbt:", default="dbt_gerado"
         ).ask()
     )
-    resultado_geracao = GeradorDbt()(banco_analisado, destino)
+    resultado_geracao = executar_com_seguranca(
+        "GeradorDbt", lambda: GeradorDbt()(banco_analisado, destino)
+    )
     if isinstance(resultado_geracao, Falha):
         print(f"Falha ao gerar projeto dbt: {resultado_geracao.erro}")
         return
@@ -337,7 +342,9 @@ def _executar_gerador_contexto_de_ia(banco_analisado: BancoAnalisado) -> None:
             "Diretório de destino do contexto de IA:", default="contexto_ia_gerado"
         ).ask()
     )
-    resultado_geracao = GeradorContextoDeIA()(banco_analisado, destino)
+    resultado_geracao = executar_com_seguranca(
+        "GeradorContextoDeIA", lambda: GeradorContextoDeIA()(banco_analisado, destino)
+    )
     if isinstance(resultado_geracao, Falha):
         print(f"Falha ao gerar contexto de IA: {resultado_geracao.erro}")
         return
