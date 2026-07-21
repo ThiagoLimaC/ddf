@@ -1,6 +1,7 @@
 """Testes de GeradorMarkdown: caminho feliz, erro de disco e bordas."""
 
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 from ddf.domain.model.analysis import (
@@ -62,6 +63,34 @@ def test_caminho_feliz_gera_um_md_por_tabela_e_index(
     posicao_estoque = conteudo_index.index("estoque")
     posicao_vendas = conteudo_index.index("vendas")
     assert posicao_estoque < posicao_vendas
+
+
+def test_index_e_tabela_registram_generated_at(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """index.md e o .md por tabela registram o momento da geração (issue #56).
+
+    Sem timestamp, um snapshot estático não dá ao humano nem ao agente de
+    IA como julgar frescor do artefato.
+    """
+    tabela = construir_tabela(colunas=[construir_coluna()])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorMarkdown()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    for conteudo in (
+        (tmp_path / "escopo" / "tabela.md").read_text(),
+        (tmp_path / "index.md").read_text(),
+    ):
+        linha = next(
+            linha for linha in conteudo.splitlines() if linha.startswith("*Gerado em:")
+        )
+        timestamp = linha.removeprefix("*Gerado em: ").removesuffix("*")
+        datetime.fromisoformat(timestamp)  # levanta ValueError se malformado
 
 
 def test_falha_ao_nao_conseguir_escrever_em_disco(
