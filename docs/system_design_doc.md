@@ -119,10 +119,21 @@ amostra como `pl.DataFrame` e `MetadadosDeAmostra`.
 ### 2. EstrategiaDeAmostragem
 
 Controla a query de amostragem por tabela. Plugável via
-`ConfiguracaoDeExtracao`.
+`ConfiguracaoDeExtracao`. Só descreve a política (quanto amostrar); cada
+`Extrator` traduz pro dialeto SQL da própria fonte (ver `low_level_design.md`).
 
-- `LimiteAleatorio` — `SELECT * FROM tabela LIMIT N` (padrão v1)
-- Extensão futura: `TableSample`, `FullScan`, estratégia por tabela.
+- `PercentualDeLinhas` — amostra `percentual`% das linhas de cada tabela
+  (padrão v1). `ExtratorPostgres` usa `TABLESAMPLE BERNOULLI`;
+  `ExtratorMariaDB` usa `WHERE RAND() <= p` (sem `TABLESAMPLE` nesse motor).
+- Extensão futura: estratégia por tabela.
+
+**Limitação de custo conhecida (issue #56):** as duas implementações acima
+fazem varredura sequencial completa da tabela, independente do `percentual`
+pedido — o custo escala com `total_linhas`, não com o tamanho da amostra
+resultante. Relevante pra NFR9 ("dezenas ou centenas de tabelas... tempo
+razoável") em bancos com tabelas muito grandes; nenhum dos dois motores
+oferece amostragem sem varredura completa por padrão. Documentado também em
+`PercentualDeLinhas`/`EstrategiaDeAmostragem` no código.
 
 ### 3. MetadadosDeAmostra
 
