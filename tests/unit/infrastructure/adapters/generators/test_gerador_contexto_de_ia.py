@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 from ddf.domain.model.analysis import (
@@ -91,6 +92,23 @@ def test_caminho_feliz_gera_index_e_chunk_por_tabela(
         "nome_tabela": "clientes",
         "nome_coluna": "id",
     }
+
+
+def test_index_registra_generated_at(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """index.json registra generated_at no topo (issue #56)."""
+    tabela = construir_tabela(colunas=[construir_coluna()])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorContextoDeIA()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    indice = _ler_json(tmp_path / "index.json")
+    datetime.fromisoformat(indice["generated_at"])  # levanta ValueError se malformado
 
 
 def test_falha_ao_nao_conseguir_escrever_em_disco(
@@ -266,7 +284,34 @@ def test_tabela_com_metricas_base_tabela_inclui_completude(
 
     assert isinstance(resultado, Sucesso)
     chunk = _ler_json(tmp_path / "tabelas" / "escopo__pedidos.json")
-    assert chunk["metricas_tabela"] == {"completude": 92.4}
+    assert chunk["metricas_tabela"] == {"completude": 92.4, "amostra_vazia": False}
+
+
+def test_amostra_vazia_sinaliza_completude_sem_evidencia(
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    tmp_path: Path,
+) -> None:
+    """Borda: tamanho_amostra == 0 marca amostra_vazia=True junto da completude.
+
+    completude=100.0 é o mesmo valor numérico de uma tabela genuinamente
+    completa — sem essa flag, um agente consumidor não tem como distinguir
+    os dois casos (issue #56).
+    """
+    tabela = construir_tabela(
+        colunas=[construir_coluna()],
+        nome_tabela="pedidos",
+        tamanho_amostra=0,
+        metricas=[MetricasBaseTabela(completude=100.0)],
+    )
+    banco = construir_banco([tabela])
+
+    resultado = GeradorContextoDeIA()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    chunk = _ler_json(tmp_path / "tabelas" / "escopo__pedidos.json")
+    assert chunk["metricas_tabela"] == {"completude": 100.0, "amostra_vazia": True}
 
 
 def test_geracao_e_deterministica(
@@ -275,7 +320,14 @@ def test_geracao_e_deterministica(
     construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
     tmp_path: Path,
 ) -> None:
-    """Gerar duas vezes o mesmo BancoAnalisado produz JSONs idênticos byte-a-byte."""
+    """Gerar duas vezes o mesmo BancoAnalisado produz JSONs idênticos byte-a-byte.
+
+    `index.json` é comparado à parte, excluindo `generated_at` — esse campo
+    captura o momento da geração de propósito (issue #56), então difere
+    entre as duas execuções mesmo com entrada idêntica; o resto do arquivo
+    (e o chunk por tabela, que não carrega esse campo) continua
+    determinístico.
+    """
     coluna_fk = construir_coluna(
         nome="cliente_id",
         chave_estrangeira=True,
@@ -300,9 +352,12 @@ def test_geracao_e_deterministica(
 
     assert isinstance(resultado_a, Sucesso)
     assert isinstance(resultado_b, Sucesso)
-    assert (destino_a / "index.json").read_text(encoding="utf-8") == (
-        destino_b / "index.json"
-    ).read_text(encoding="utf-8")
+    indice_a = _ler_json(destino_a / "index.json")
+    indice_b = _ler_json(destino_b / "index.json")
+    assert "generated_at" in indice_a
+    del indice_a["generated_at"]
+    del indice_b["generated_at"]
+    assert indice_a == indice_b
     assert (destino_a / "tabelas" / "vendas__pedidos.json").read_text(
         encoding="utf-8"
     ) == (destino_b / "tabelas" / "vendas__pedidos.json").read_text(encoding="utf-8")

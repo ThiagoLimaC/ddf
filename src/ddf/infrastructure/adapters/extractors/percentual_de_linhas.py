@@ -2,7 +2,19 @@
 
 
 class PercentualDeLinhas:
-    """Descreve uma amostra de `percentual`% das linhas de cada tabela."""
+    """Descreve uma amostra de `percentual`% das linhas de cada tabela.
+
+    **Limitação de custo conhecida** tanto `TABLESAMPLE
+    BERNOULLI` (`ExtratorPostgres`) quanto `WHERE RAND() <= p`
+    (`ExtratorMariaDB`) fazem varredura sequencial completa da tabela,
+    independente do `percentual` pedido — o custo escala com `total_linhas`
+    da tabela, não com o tamanho da amostra resultante. `percentual=1.0`
+    numa tabela de 50 milhões de linhas continua lendo as 50 milhões, só
+    descarta a maioria após ler. Relevante pra NFR9 do PRD ("dezenas ou
+    centenas de tabelas... tempo razoável") em bancos com tabelas muito
+    grandes — não há forma de amostrar sem varredura completa nesses dois
+    motores sem um índice específico para isso.
+    """
 
     def __init__(self, percentual: float) -> None:
         """Levanta ValueError se `percentual` não estiver em (0, 100].

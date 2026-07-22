@@ -11,6 +11,11 @@ class EstrategiaDeAmostragem(Protocol):
     Extrator (já acoplado ao dialeto SQL da própria fonte de dados) — este
     Port nunca gera SQL, para não amarrar a política de amostragem a nenhum
     banco específico.
+
+    **Custo de execução é responsabilidade de cada `Extrator`, não deste
+    Port** — a política aqui descreve só "quanto" amostrar, nunca "quão
+    caro" é fazer isso num motor específico. Ver `PercentualDeLinhas` para
+    a limitação de custo conhecida da implementação padrão.
     """
 
     @property

@@ -392,6 +392,38 @@ def test_extrair_tabela_com_reltuples_negativo_usa_total_linhas_zero(
     assert resultado.valor.metadados_amostra.tamanho_amostra == 0
 
 
+def test_amostra_maior_que_total_linhas_emite_aviso(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: tamanho_amostra > total_linhas emite Aviso (total_linhas desatualizado).
+
+    reltuples reflete a última ANALYZE/autovacuum — pode ficar defasado
+    logo após uma carga de dados (issue #56).
+    """
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.side_effect = [
+        [("id", "int4", None, None, None, "NO")],  # colunas
+        [("id",)],  # PK
+        [],  # FK
+        [],  # UNIQUE
+        [(1,), (2,)],  # amostra — 2 linhas
+    ]
+    cursor_fake.fetchone.return_value = (1.0,)  # total_linhas desatualizado
+    cursor_fake.description = [SimpleNamespace(name="id")]
+    pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+    extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
+    resultado = extrator.extrair_tabela("public", "tabela_recem_carregada")
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor.total_linhas == 1
+    assert resultado.valor.metadados_amostra.tamanho_amostra == 2
+    assert len(resultado.avisos) == 1
+    assert resultado.avisos[0].origem == "ExtratorPostgres"
+    assert "maior que total_linhas" in resultado.avisos[0].mensagem
+
+
 def test_max_conexoes_um_faz_segunda_chamada_concorrente_esperar(
     pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
 ) -> None:

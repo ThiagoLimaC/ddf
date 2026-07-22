@@ -12,6 +12,7 @@ from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
+from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.extractors.construir_colunas_fk import (
     construir_colunas_fk,
@@ -452,6 +453,17 @@ class ExtratorMariaDB:
                 estrategia=self._configuracao.estrategia.nome,
                 tamanho_amostra=len(amostra),
             )
+            if metadados_amostra.tamanho_amostra > total_linhas:
+                avisos.append(
+                    Aviso(
+                        mensagem=(
+                            f"Amostra ({metadados_amostra.tamanho_amostra} linhas) "
+                            f"maior que total_linhas ({total_linhas}) — total_linhas "
+                            "pode estar desatualizado (sem ANALYZE TABLE recente)."
+                        ),
+                        origem="ExtratorMariaDB",
+                    )
+                )
             return Sucesso(
                 TabelaExtraida(
                     nome_tabela=tabela,

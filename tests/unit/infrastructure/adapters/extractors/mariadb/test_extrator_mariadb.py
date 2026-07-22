@@ -399,6 +399,41 @@ def test_extrair_tabela_com_table_rows_nulo_usa_total_linhas_zero(
     assert resultado.valor.metadados_amostra.tamanho_amostra == 0
 
 
+def test_amostra_maior_que_total_linhas_emite_aviso(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: tamanho_amostra > total_linhas emite Aviso (total_linhas desatualizado).
+
+    TABLE_ROWS é estimativa do MariaDB — pode ficar defasada logo após uma
+    carga de dados (issue #56).
+    """
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.side_effect = [
+        [("id", "int", "int(11)", None, None, None, "NO")],  # colunas
+        [("id",)],  # PK
+        [],  # FK
+        [],  # UNIQUE
+        [],  # JSON
+        [(1,), (2,)],  # amostra — 2 linhas
+    ]
+    cursor_fake.fetchone.return_value = (1,)  # total_linhas desatualizado
+    cursor_fake.description = [("id",)]
+    pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+    extrator = ExtratorMariaDB(
+        host="fake", user="root", password="senha", configuracao=configuracao
+    )
+    resultado = extrator.extrair_tabela("vendas", "tabela_recem_carregada")
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor.total_linhas == 1
+    assert resultado.valor.metadados_amostra.tamanho_amostra == 2
+    assert len(resultado.avisos) == 1
+    assert resultado.avisos[0].origem == "ExtratorMariaDB"
+    assert "maior que total_linhas" in resultado.avisos[0].mensagem
+
+
 def test_tinyint_um_com_valor_atipico_na_amostra_mantem_integer(
     pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
 ) -> None:

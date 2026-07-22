@@ -5,3 +5,7 @@
 {% for tabela in tabelas %}
 | {{ tabela.nome_escopo }} | [{{ tabela.nome_tabela }}]({{ tabela.nome_escopo }}/{{ tabela.nome_tabela }}.md) | {{ tabela | completude }} | {{ tabela.total_linhas }} |
 {% endfor %}
+
+---
+
+*Gerado em: {{ gerado_em }}*
