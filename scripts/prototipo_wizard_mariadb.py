@@ -88,23 +88,40 @@ def _ampulheta(mensagem: str) -> Iterator[None]:
         thread.join()
 
 
+def _perguntar(pergunta: questionary.Question) -> str:
+    """Roda .ask() e sai limpo (sem traceback) se o usuário cancelar (Ctrl+C/Esc).
+
+    questionary captura o KeyboardInterrupt internamente e devolve None em
+    vez de propagar — sem essa checagem, cada prompt cancelado quebraria em
+    um TypeError diferente lá na frente (ex.: Path(None)), em vez de sair.
+    """
+    resposta = pergunta.ask()
+    if resposta is None:
+        sys.exit(0)
+    return resposta
+
+
 def _construir_extrator(configuracao: ConfiguracaoDeExtracao) -> Extrator:
     """Pergunta qual fonte usar e monta o Extrator concreto correspondente."""
-    fonte = questionary.select("Qual fonte?", choices=["Postgres", "MariaDB"]).ask()
-    if fonte is None:
-        sys.exit(0)
+    fonte = _perguntar(
+        questionary.select("Qual fonte?", choices=["Postgres", "MariaDB"])
+    )
 
     if fonte == "Postgres":
-        dsn = questionary.text(
-            "Connection string do Postgres:",
-            default="postgresql://admin:admin@localhost:5432/postgres",
-        ).ask()
+        dsn = _perguntar(
+            questionary.text(
+                "Connection string do Postgres:",
+                default="postgresql://admin:admin@localhost:5498/adventureworks",
+            )
+        )
         return ExtratorPostgres(dsn=dsn, configuracao=configuracao)
 
-    host = questionary.text("Host do MariaDB:", default="localhost").ask()
-    port = int(questionary.text("Porta:", default="3306").ask())
-    user = questionary.text("Usuário:", default="root").ask()
-    password = questionary.password("Senha:").ask()
+    host = _perguntar(
+        questionary.text("Host do MariaDB:", default="relational.fel.cvut.cz")
+    )
+    port = int(_perguntar(questionary.text("Porta:", default="3306")))
+    user = _perguntar(questionary.text("Usuário:", default="guest"))
+    password = _perguntar(questionary.password("Senha:", default="ctu-relational"))
     return ExtratorMariaDB(
         host=host, port=port, user=user, password=password, configuracao=configuracao
     )
@@ -132,7 +149,7 @@ def _escolher_multiplos(mensagem: str, escolhas: list[str]) -> list[str]:
 def main() -> None:
     """Conecta, lista escopos (multi-seleção) e extrai todas as suas tabelas."""
     percentual = float(
-        questionary.text("Percentual de amostragem (0-100]:", default="10").ask()
+        _perguntar(questionary.text("Percentual de amostragem (0-100]:", default="10"))
     )
     configuracao = ConfiguracaoDeExtracao(
         estrategia=PercentualDeLinhas(percentual=percentual)
@@ -151,18 +168,22 @@ def main() -> None:
     )
 
     tabelas_escolhidas: list[tuple[str, str]] = []
-    for escopo in escopos_escolhidos:
-        resultado_tabelas = extrator.listar_tabelas(escopo)
+    for indice, escopo in enumerate(escopos_escolhidos, start=1):
+        with _ampulheta(
+            f"Listando tabelas... ({indice}/{len(escopos_escolhidos)}) {escopo}"
+        ):
+            resultado_tabelas = extrator.listar_tabelas(escopo)
         if isinstance(resultado_tabelas, Falha):
-            print(f"Falha ao listar tabelas de '{escopo}': {resultado_tabelas.erro}")
+            print(f"\nFalha ao listar tabelas de '{escopo}': {resultado_tabelas.erro}")
             continue
         tabelas_escolhidas.extend((escopo, nome) for _, nome in resultado_tabelas.valor)
+    print()
     if not tabelas_escolhidas:
         print("Nenhuma tabela disponível nos escopos escolhidos.")
         sys.exit(0)
 
     diretorio_overrides = Path(
-        questionary.text("Diretório de overrides:", default="overrides").ask()
+        _perguntar(questionary.text("Diretório de overrides:", default="overrides"))
     )
     sobrescrita = SobrescritaDeTabela(diretorio_overrides)
 
@@ -294,9 +315,11 @@ def _executar_gerador_markdown(banco_analisado: BancoAnalisado) -> None:
         banco_analisado: banco curado com as métricas já calculadas.
     """
     destino = Path(
-        questionary.text(
-            "Diretório de destino do Markdown:", default="docs_gerados"
-        ).ask()
+        _perguntar(
+            questionary.text(
+                "Diretório de destino do Markdown:", default="docs_gerados"
+            )
+        )
     )
     resultado_geracao = executar_com_seguranca(
         "GeradorMarkdown", lambda: GeradorMarkdown()(banco_analisado, destino)
@@ -316,9 +339,11 @@ def _executar_gerador_dbt(banco_analisado: BancoAnalisado) -> None:
         banco_analisado: banco curado com as métricas já calculadas.
     """
     destino = Path(
-        questionary.text(
-            "Diretório de destino do projeto dbt:", default="dbt_gerado"
-        ).ask()
+        _perguntar(
+            questionary.text(
+                "Diretório de destino do projeto dbt:", default="dbt_gerado"
+            )
+        )
     )
     resultado_geracao = executar_com_seguranca(
         "GeradorDbt", lambda: GeradorDbt()(banco_analisado, destino)
@@ -338,9 +363,11 @@ def _executar_gerador_contexto_de_ia(banco_analisado: BancoAnalisado) -> None:
         banco_analisado: banco curado com as métricas já calculadas.
     """
     destino = Path(
-        questionary.text(
-            "Diretório de destino do contexto de IA:", default="contexto_ia_gerado"
-        ).ask()
+        _perguntar(
+            questionary.text(
+                "Diretório de destino do contexto de IA:", default="contexto_ia_gerado"
+            )
+        )
     )
     resultado_geracao = executar_com_seguranca(
         "GeradorContextoDeIA", lambda: GeradorContextoDeIA()(banco_analisado, destino)

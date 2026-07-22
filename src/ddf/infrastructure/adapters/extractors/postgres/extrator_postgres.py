@@ -1,6 +1,7 @@
 """Extrator concreto para bancos Postgres."""
 
 import threading
+from collections import defaultdict
 from typing import NamedTuple
 
 import polars as pl
@@ -36,26 +37,27 @@ _LISTAR_TABELAS_SQL = """
     ORDER BY table_name
 """
 
-_COLUNAS_SQL = """
-    SELECT column_name, udt_name, character_maximum_length,
+_COLUNAS_SCHEMA_SQL = """
+    SELECT table_name, column_name, udt_name, character_maximum_length,
            numeric_precision, numeric_scale, is_nullable
     FROM information_schema.columns
-    WHERE table_schema = %s AND table_name = %s
-    ORDER BY ordinal_position
+    WHERE table_schema = %s
+    ORDER BY table_name, ordinal_position
 """
 
-_CHAVES_PRIMARIAS_SQL = """
-    SELECT kcu.column_name
+_CHAVES_PRIMARIAS_SCHEMA_SQL = """
+    SELECT tc.table_name, kcu.column_name
     FROM information_schema.table_constraints tc
     JOIN information_schema.key_column_usage kcu
         ON tc.constraint_name = kcu.constraint_name
         AND tc.table_schema = kcu.table_schema
     WHERE tc.constraint_type = 'PRIMARY KEY'
-        AND tc.table_schema = %s AND tc.table_name = %s
+        AND tc.table_schema = %s
 """
 
-_CHAVES_ESTRANGEIRAS_SQL = """
-    SELECT kcu.column_name, ccu.table_schema, ccu.table_name, ccu.column_name
+_CHAVES_ESTRANGEIRAS_SCHEMA_SQL = """
+    SELECT tc.table_name AS tabela_de_origem, kcu.column_name,
+           ccu.table_schema, ccu.table_name, ccu.column_name
     FROM information_schema.table_constraints tc
     JOIN information_schema.key_column_usage kcu
         ON tc.constraint_name = kcu.constraint_name
@@ -68,14 +70,23 @@ _CHAVES_ESTRANGEIRAS_SQL = """
         AND rc.unique_constraint_schema = ccu.constraint_schema
         AND kcu.position_in_unique_constraint = ccu.ordinal_position
     WHERE tc.constraint_type = 'FOREIGN KEY'
-        AND tc.table_schema = %s AND tc.table_name = %s
+        AND tc.table_schema = %s
 """
 
-_TOTAL_LINHAS_SQL = """
-    SELECT reltuples
+# relkind IN ('r', 'p') — bug pré-existente encontrado no desenho da issue
+# #66 (não introduzido aqui): sem o filtro, information_schema.tables já
+# classifica tabela particionada (relkind='p') como BASE TABLE normalmente,
+# mas reltuples do pai particionado só agrega os filhos a partir do PG14 —
+# podia ficar em 0 mesmo com dado real nas partições em versões anteriores.
+# O join por nome contra pg_namespace já blindava contra pegar a relação
+# errada (Postgres não permite colisão de nome entre tabela/view/sequence no
+# mesmo schema); o filtro é defesa explícita do tipo de relação, não
+# correção de uma colisão observada.
+_TOTAL_LINHAS_SCHEMA_SQL = """
+    SELECT c.relname, c.reltuples
     FROM pg_catalog.pg_class c
     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = %s AND c.relname = %s
+    WHERE n.nspname = %s AND c.relkind IN ('r', 'p')
 """
 
 # Via pg_index (catálogo), não information_schema.table_constraints como
@@ -85,8 +96,8 @@ _TOTAL_LINHAS_SQL = """
 # aparece em information_schema.table_constraints de jeito nenhum.
 # NOT i.indisprimary exclui PK sem lógica extra: o índice de suporte de uma
 # PK nunca aparece como uma segunda entrada indisunique "solta".
-_COLUNAS_UNICAS_SQL = """
-    SELECT a.attname
+_COLUNAS_UNICAS_SCHEMA_SQL = """
+    SELECT t.relname, a.attname
     FROM pg_catalog.pg_index i
     JOIN pg_catalog.pg_class t ON t.oid = i.indrelid
     JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
@@ -94,7 +105,7 @@ _COLUNAS_UNICAS_SQL = """
         ON a.attrelid = t.oid AND a.attnum = i.indkey[0]
     WHERE i.indisunique AND NOT i.indisprimary
         AND array_length(i.indkey, 1) = 1
-        AND n.nspname = %s AND t.relname = %s
+        AND n.nspname = %s
 """
 
 
@@ -102,9 +113,10 @@ class _LinhaColuna(NamedTuple):
     """Uma linha de information_schema.columns, nomeada por campo.
 
     A ordem dos campos aqui precisa acompanhar a ordem do SELECT em
-    _COLUNAS_SQL — construir a tupla (`_LinhaColuna(*linha)`) é o único
-    ponto onde essa correspondência posicional existe; daqui pra frente,
-    todo o código lê por nome (`linha.udt_name`), não por índice.
+    _COLUNAS_SCHEMA_SQL (a partir da 2ª coluna — a 1ª é table_name, usada só
+    para agrupar por tabela antes de construir esta tupla) — construir a
+    tupla é o único ponto onde essa correspondência posicional existe; daqui
+    pra frente, todo o código lê por nome (`linha.udt_name`), não por índice.
     """
 
     nome: str
@@ -113,6 +125,24 @@ class _LinhaColuna(NamedTuple):
     precisao: int | None
     escala: int | None
     is_nullable: str
+
+
+class _MetadadosDoSchema(NamedTuple):
+    """Metadados de catálogo de todas as tabelas de um schema, lidos de uma vez.
+
+    Populado por ExtratorPostgres._obter_metadados_schema e cacheado por
+    schema — elimina o N+1 de rodar 4 queries de metadado por tabela restrita.
+    fks_por_tabela guarda linhas cruas (mesmo formato que
+    construir_colunas_fk espera), não ReferenciaDeColuna já resolvida — a
+    resolução (com Aviso de colisão) continua acontecendo por tabela, em
+    extrair_tabela, não aqui.
+    """
+
+    colunas_por_tabela: dict[str, list[_LinhaColuna]]
+    pks_por_tabela: dict[str, set[str]]
+    fks_por_tabela: dict[str, list[tuple[str, str, str, str]]]
+    unicas_por_tabela: dict[str, set[str]]
+    total_linhas_por_tabela: dict[str, int]
 
 
 def _construir_coluna(
@@ -168,6 +198,8 @@ class ExtratorPostgres:
         self._pool: ThreadedConnectionPool | None = None
         self._semaforo = threading.Semaphore(max_conexoes)
         self._lock_pool = threading.Lock()
+        self._cache_schemas: dict[str, _MetadadosDoSchema] = {}
+        self._lock_cache_schemas = threading.Lock()
 
     def _obter_pool(self) -> Resultado[ThreadedConnectionPool]:
         """Cria o pool sob demanda, pra falha de conexão virar Falha, não exceção."""
@@ -234,8 +266,108 @@ class ExtratorPostgres:
             pool.putconn(conexao)
             self._semaforo.release()
 
+    def _obter_metadados_schema(self, schema: str) -> Resultado[_MetadadosDoSchema]:
+        """Cacheia os metadados de catálogo de um schema inteiro, por schema.
+
+        Populado sob demanda na 1ª extrair_tabela daquele schema — chamadas
+        seguintes (mesmo schema, tabelas diferentes) reaproveitam o cache em
+        vez de repetir os 4 round-trips de metadado por tabela.
+        Double-checked locking, mesmo padrão de _obter_pool/_lock_pool: um
+        único lock para todo o cache (não um lock por schema) — populações
+        de schemas diferentes se serializam entre si, mas isso só acontece
+        uma vez por schema ao longo da vida do Extrator, nunca por tabela.
+        """
+        metadados = self._cache_schemas.get(schema)
+        if metadados is not None:
+            return Sucesso(metadados)
+        with self._lock_cache_schemas:
+            metadados = self._cache_schemas.get(schema)
+            if metadados is not None:
+                return Sucesso(metadados)
+
+            resultado_pool = self._obter_pool()
+            if isinstance(resultado_pool, Falha):
+                return resultado_pool
+            pool = resultado_pool.valor
+            self._semaforo.acquire()
+            try:
+                conexao = pool.getconn()
+            except OperationalError as erro:
+                self._semaforo.release()
+                return Falha(f"Não foi possível conectar: {erro}")
+            try:
+                conexao.autocommit = True
+                with conexao.cursor() as cursor:
+                    cursor.execute(_COLUNAS_SCHEMA_SQL, (schema,))
+                    colunas_por_tabela: dict[str, list[_LinhaColuna]] = defaultdict(
+                        list
+                    )
+                    for linha_bruta in cursor.fetchall():
+                        nome_tabela, *resto_colunas = linha_bruta
+                        colunas_por_tabela[nome_tabela].append(
+                            _LinhaColuna(*resto_colunas)
+                        )
+
+                    cursor.execute(_CHAVES_PRIMARIAS_SCHEMA_SQL, (schema,))
+                    pks_por_tabela: dict[str, set[str]] = defaultdict(set)
+                    for nome_tabela, nome_coluna_pk in cursor.fetchall():
+                        pks_por_tabela[nome_tabela].add(nome_coluna_pk)
+
+                    cursor.execute(_CHAVES_ESTRANGEIRAS_SCHEMA_SQL, (schema,))
+                    fks_por_tabela: dict[str, list[tuple[str, str, str, str]]] = (
+                        defaultdict(list)
+                    )
+                    for linha_fk in cursor.fetchall():
+                        nome_tabela, *resto_fk = linha_fk
+                        fks_por_tabela[nome_tabela].append(tuple(resto_fk))
+
+                    cursor.execute(_COLUNAS_UNICAS_SCHEMA_SQL, (schema,))
+                    unicas_por_tabela: dict[str, set[str]] = defaultdict(set)
+                    for nome_tabela, nome_coluna_unica in cursor.fetchall():
+                        unicas_por_tabela[nome_tabela].add(nome_coluna_unica)
+
+                    cursor.execute(_TOTAL_LINHAS_SCHEMA_SQL, (schema,))
+                    total_linhas_por_tabela: dict[str, int] = {}
+                    for nome_tabela, reltuples in cursor.fetchall():
+                        total_linhas_por_tabela[nome_tabela] = max(0, round(reltuples))
+            finally:
+                pool.putconn(conexao)
+                self._semaforo.release()
+
+            metadados = _MetadadosDoSchema(
+                colunas_por_tabela=dict(colunas_por_tabela),
+                pks_por_tabela=dict(pks_por_tabela),
+                fks_por_tabela=dict(fks_por_tabela),
+                unicas_por_tabela=dict(unicas_por_tabela),
+                total_linhas_por_tabela=total_linhas_por_tabela,
+            )
+            self._cache_schemas[schema] = metadados
+            return Sucesso(metadados)
+
     def extrair_tabela(self, schema: str, tabela: str) -> Resultado[TabelaExtraida]:
         """Extrai estrutura, amostra e metadados de uma tabela específica."""
+        resultado_metadados = self._obter_metadados_schema(schema)
+        if isinstance(resultado_metadados, Falha):
+            return resultado_metadados
+        metadados = resultado_metadados.valor
+
+        linhas_colunas = metadados.colunas_por_tabela.get(tabela)
+        if not linhas_colunas:
+            return Falha(f"Schema '{schema}' ou tabela '{tabela}' não encontrada.")
+
+        colunas_pk = metadados.pks_por_tabela.get(tabela, set())
+        colunas_fk, avisos = construir_colunas_fk(
+            metadados.fks_por_tabela.get(tabela, []), origem="ExtratorPostgres"
+        )
+        colunas_unicas = metadados.unicas_por_tabela.get(tabela, set())
+        total_linhas = metadados.total_linhas_por_tabela.get(tabela, 0)
+
+        colunas: list[ColunaExtraida] = []
+        for linha_coluna in linhas_colunas:
+            colunas.append(
+                _construir_coluna(linha_coluna, colunas_pk, colunas_fk, colunas_unicas)
+            )
+
         resultado_pool = self._obter_pool()
         if isinstance(resultado_pool, Falha):
             return resultado_pool
@@ -249,43 +381,6 @@ class ExtratorPostgres:
         try:
             conexao.autocommit = True
             with conexao.cursor() as cursor:
-                cursor.execute(_COLUNAS_SQL, (schema, tabela))
-                linhas_colunas: list[_LinhaColuna] = []
-                for linha_bruta in cursor.fetchall():
-                    linhas_colunas.append(_LinhaColuna(*linha_bruta))
-                if not linhas_colunas:
-                    return Falha(
-                        f"Schema '{schema}' ou tabela '{tabela}' não encontrada."
-                    )
-
-                cursor.execute(_CHAVES_PRIMARIAS_SQL, (schema, tabela))
-                colunas_pk: set[str] = set()
-                for linha_pk in cursor.fetchall():
-                    nome_coluna_pk = linha_pk[0]
-                    colunas_pk.add(nome_coluna_pk)
-
-                cursor.execute(_CHAVES_ESTRANGEIRAS_SQL, (schema, tabela))
-                colunas_fk, avisos = construir_colunas_fk(
-                    cursor.fetchall(), origem="ExtratorPostgres"
-                )
-
-                cursor.execute(_COLUNAS_UNICAS_SQL, (schema, tabela))
-                colunas_unicas: set[str] = set()
-                for linha_unica in cursor.fetchall():
-                    colunas_unicas.add(linha_unica[0])
-
-                colunas: list[ColunaExtraida] = []
-                for linha_coluna in linhas_colunas:
-                    colunas.append(
-                        _construir_coluna(
-                            linha_coluna, colunas_pk, colunas_fk, colunas_unicas
-                        )
-                    )
-
-                cursor.execute(_TOTAL_LINHAS_SQL, (schema, tabela))
-                linha_total = cursor.fetchone()
-                total_linhas = max(0, round(linha_total[0])) if linha_total else 0
-
                 consulta_amostra = sql.SQL(
                     "SELECT * FROM {}.{} TABLESAMPLE BERNOULLI ({})"
                 ).format(
