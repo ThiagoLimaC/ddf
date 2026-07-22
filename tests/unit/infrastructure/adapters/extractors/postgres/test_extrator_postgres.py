@@ -178,6 +178,47 @@ def test_extrair_tabela_retorna_estrutura_completa(
     pool_classe_fake.return_value.putconn.assert_called_with(conexao_fake)
 
 
+def test_segunda_extracao_no_mesmo_schema_reaproveita_cache_de_metadados(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Caminho feliz: 2ª extrair_tabela no mesmo schema não repete queries de metadado.
+
+    Prova o ganho real da consolidação: a 1ª chamada popula o
+    cache do schema inteiro; a 2ª tabela só busca a própria amostra — nada
+    de colunas/PK/FK/UNIQUE/total_linhas é lido do banco de novo.
+    """
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.side_effect = [
+        [
+            ("pedidos", "id", "int4", None, None, None, "NO"),
+            ("clientes", "id", "int4", None, None, None, "NO"),
+        ],  # colunas — as 2 tabelas do schema, lidas de uma vez
+        [("pedidos", "id"), ("clientes", "id")],  # PK
+        [],  # FK
+        [],  # UNIQUE
+        [("pedidos", 10.0), ("clientes", 5.0)],  # total_linhas
+        [],  # amostra de "pedidos"
+        [],  # amostra de "clientes"
+    ]
+    cursor_fake.description = [SimpleNamespace(name="id")]
+    pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+    extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
+    primeira = extrator.extrair_tabela("public", "pedidos")
+    segunda = extrator.extrair_tabela("public", "clientes")
+
+    assert isinstance(primeira, Sucesso)
+    assert isinstance(segunda, Sucesso)
+    assert primeira.valor.total_linhas == 10
+    assert segunda.valor.total_linhas == 5
+    # 5 queries de metadado (rodadas 1x só) + 1 amostra por tabela = 7.
+    assert cursor_fake.fetchall.call_count == 7
+    # 1 conexão pro cache de metadado (só na 1ª chamada) + 1 amostra por
+    # tabela (2) = 3 — não 4, que seria o caso sem o cache reaproveitado.
+    assert pool_classe_fake.return_value.putconn.call_count == 3
+
+
 # Erro esperado
 
 
@@ -354,6 +395,60 @@ def test_primeiro_uso_concorrente_cria_pool_uma_unica_vez(
 
     assert pool_classe_fake.call_count == 1
     assert isinstance(resultado_concorrente, Sucesso)
+
+
+def test_metadados_de_schema_concorrentes_populam_cache_uma_unica_vez(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: 2 chamadas concorrentes ao mesmo schema populam o cache 1x.
+
+    Sem lock em _obter_metadados_schema, duas threads poderiam ver o cache
+    do schema vazio ao mesmo tempo e rodar as 5 queries de metadado duas
+    vezes cada — o ganho da consolidação (issue #66) dependeria de sorte de
+    timing, não de garantia. Mesmo padrão de
+    test_primeiro_uso_concorrente_cria_pool_uma_unica_vez, aplicado ao cache
+    de schema em vez de ao pool de conexões.
+    """
+    primeira_thread_entrou = threading.Event()
+    pode_prosseguir = threading.Event()
+    respostas = iter(
+        [
+            [("pedidos", "id", "int4", None, None, None, "NO")],  # colunas
+            [("pedidos", "id")],  # PK
+            [],  # FK
+            [],  # UNIQUE
+            [("pedidos", 10.0)],  # total_linhas
+        ]
+    )
+
+    def fetchall_lento_na_primeira_chamada() -> list[tuple[object, ...]]:
+        if not primeira_thread_entrou.is_set():
+            primeira_thread_entrou.set()
+            pode_prosseguir.wait(timeout=1)
+        return next(respostas)
+
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.side_effect = fetchall_lento_na_primeira_chamada
+    pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+    extrator = ExtratorPostgres(
+        dsn="postgresql://fake", configuracao=configuracao, max_conexoes=10
+    )
+
+    thread_lenta = threading.Thread(
+        target=lambda: extrator._obter_metadados_schema("public")
+    )
+    thread_lenta.start()
+    assert primeira_thread_entrou.wait(timeout=1) is True
+
+    resultado_concorrente = extrator._obter_metadados_schema("public")
+    pode_prosseguir.set()
+    thread_lenta.join(timeout=1)
+
+    assert cursor_fake.fetchall.call_count == 5
+    assert isinstance(resultado_concorrente, Sucesso)
+    assert extrator._cache_schemas["public"] is resultado_concorrente.valor
 
 
 def test_listar_tabelas_sem_tabelas_retorna_lista_vazia(
