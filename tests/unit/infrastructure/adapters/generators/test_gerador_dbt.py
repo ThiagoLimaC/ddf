@@ -1,6 +1,7 @@
 """Testes de GeradorDbt: caminho feliz, erro de disco, bordas e determinismo."""
 
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -142,6 +143,23 @@ def test_caminho_feliz_gera_os_quatro_artefatos(
     assert relacionamento["relationships"]["field"] == "id"
 
 
+def test_dbt_project_registra_generated_at(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """dbt_project.yml registra meta.generated_at (issue #56)."""
+    tabela = construir_tabela(colunas=[construir_coluna()])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    projeto = yaml.safe_load((tmp_path / "dbt_project.yml").read_text())
+    datetime.fromisoformat(projeto["meta"]["generated_at"])  # ValueError se malformado
+
+
 def test_falha_ao_nao_conseguir_escrever_em_disco(
     tmp_path: Path,
     construir_coluna: Callable[..., ColunaAnalisada],
@@ -181,6 +199,59 @@ def test_coluna_sem_metrica_e_sem_fato_estrutural_nao_sugere_teste(
     modelo = _modelo(schema, "stg_escopo__tabela")
     coluna_yaml = _coluna(modelo, "observacao")
     assert "tests" not in coluna_yaml
+
+
+def test_amostra_vazia_nao_sugere_unique_ou_not_null_sem_fato_estrutural(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Borda: amostra vazia não sugere unique/not_null com base em zero evidência.
+
+    _metricas_vazias() zera percentual_nulo/percentual_unico pra amostra
+    vazia — sem o guard de tamanho_amostra > 0, o Gerador sugeriria
+    unique/not_null como se a amostra tivesse confirmado isso (issue #56).
+    """
+    metrica_vazia = MetricasBaseColuna(
+        percentual_nulo=0.0, percentual_unico=0.0, valores_frequentes=[]
+    )
+    coluna = construir_coluna(nome="email", metricas=[metrica_vazia])
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=0)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "email")
+    assert "tests" not in coluna_yaml
+
+
+def test_amostra_vazia_com_fato_estrutural_ainda_sugere_teste(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Borda: NOT NULL do schema ainda sugere o teste mesmo sem evidência amostral."""
+    metrica_vazia = MetricasBaseColuna(
+        percentual_nulo=0.0, percentual_unico=0.0, valores_frequentes=[]
+    )
+    coluna = construir_coluna(
+        nome="email", nao_nulavel=True, metricas=[metrica_vazia]
+    )
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=0)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "email")
+    assert coluna_yaml["tests"] == ["not_null"]
 
 
 def test_fk_fora_do_lote_emite_aviso_e_omite_relationships(
@@ -358,7 +429,13 @@ def test_geracao_e_deterministica(
     construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
     metrica_coluna_completa: MetricasBaseColuna,
 ) -> None:
-    """A mesma entrada produz exatamente os mesmos artefatos em duas execuções."""
+    """A mesma entrada produz exatamente os mesmos artefatos em duas execuções.
+
+    `dbt_project.yml` é comparado à parte, excluindo `meta.generated_at` —
+    esse campo captura o momento da geração de propósito (issue #56), então
+    difere entre as duas execuções mesmo com entrada idêntica; o resto do
+    arquivo continua determinístico.
+    """
     coluna = construir_coluna(nome="id", metricas=[metrica_coluna_completa])
     tabela = construir_tabela(colunas=[coluna])
     banco = construir_banco([tabela])
@@ -371,9 +448,15 @@ def test_geracao_e_deterministica(
     assert isinstance(resultado_a, Sucesso)
     assert isinstance(resultado_b, Sucesso)
     for relativo in (
-        "dbt_project.yml",
         "models/staging/sources.yml",
         "models/staging/schema.yml",
         "models/staging/stg_escopo__tabela.sql",
     ):
         assert (destino_a / relativo).read_text() == (destino_b / relativo).read_text()
+
+    projeto_a = yaml.safe_load((destino_a / "dbt_project.yml").read_text())
+    projeto_b = yaml.safe_load((destino_b / "dbt_project.yml").read_text())
+    assert "generated_at" in projeto_a["meta"]
+    del projeto_a["meta"]["generated_at"]
+    del projeto_b["meta"]["generated_at"]
+    assert projeto_a == projeto_b

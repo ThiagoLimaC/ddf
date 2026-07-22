@@ -1089,6 +1089,18 @@ bruto; só é gerado quando a tabela referenciada também foi analisada nesta
 execução — apontar `ref()` para um model que este Gerador não produziu
 quebraria `dbt run` do usuário.
 
+**Limitação conhecida — `relationships` em FK composta (issue #56):** o
+teste é gerado por coluna, uma `relationships` independente por coluna
+local → coluna referenciada — testa que cada valor individual existe na
+coluna referenciada, não que a combinação das colunas juntas forma uma
+linha válida na tabela referenciada (a integridade referencial real de uma
+FK composta). Modelar isso de verdade exigiria agrupar colunas de uma
+mesma constraint composta no Extraction Context (`ColunaAnalisada.
+referencia` é por coluna hoje, sem esse agrupamento) — mudança de escopo
+maior que as demais sugestões da auditoria, tocando 3 Bounded Contexts.
+Decisão registrada: documentar a limitação, não modelar FK composta nesta
+issue.
+
 **Cast SQL:** usa `TipoDeDado.categoria` + atributos de precisão para gerar
 `CAST(col AS NUMERIC(10,2))`, `CAST(col AS VARCHAR(255))`,
 `CAST(col AS TIMESTAMP WITH TIME ZONE)` etc. `ENUM`/`SET` (MariaDB, issue

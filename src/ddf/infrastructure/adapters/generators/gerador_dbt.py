@@ -8,6 +8,7 @@ do código Python (ver `docs/engineer_guidelines.md`, "Nomenclatura: idioma
 como contrato").
 """
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -189,12 +190,29 @@ def _sugestoes_de_teste(
     (`percentual_unico == 100.0`/`percentual_nulo == 0.0`) — mesmo padrão já
     usado no GeradorMarkdown (#44) de priorizar o fato do schema sobre a
     estimativa amostral. Ambos são suprimidos quando a coluna já é PK (PK
-    implica os dois, sugerir seria redundante).
+    implica os dois, sugerir seria redundante). A checagem amostral só
+    entra em jogo com `tamanho_amostra > 0` — sem isso,
+    `_metricas_vazias()` zera `percentual_nulo` pra amostra vazia, e o
+    Gerador sugeriria `not_null`/`unique` sobre zero evidência real; o fato
+    estrutural do schema continua valendo independente disso.
 
     `relationships` só é sugerido quando a tabela referenciada pela FK
     também está no lote analisado nesta execução — apontar `ref()` para um
     model que este Gerador não produziu quebraria `dbt run`. Quando a
     referência está fora do lote, emite `Aviso` e omite o teste.
+
+    **Limitação conhecida — FK composta:** o teste
+    é gerado **por coluna**, uma `relationships` independente para cada
+    coluna local apontando pro seu par referenciado. Isso testa que cada
+    valor individual existe na coluna referenciada correspondente, **não**
+    que a combinação das colunas juntas forma uma linha válida na tabela
+    referenciada — a integridade referencial real de uma FK composta.
+    `ColunaAnalisada.referencia` é modelado por coluna (`ReferenciaDeColuna`
+    não agrupa colunas de uma mesma constraint), então este Gerador não tem
+    como saber que duas colunas pertencem à mesma FK composta pra emitir um
+    teste único sobre o par. Modelar isso exigiria agrupar colunas de uma
+    mesma constraint composta já no Extraction Context — mudança de escopo
+    maior, avaliada e adiada nesta issue.
 
     `accepted_values` usa `severity: warn` e só é sugerido quando os top-10
     `valores_frequentes` cobrem pelo menos `_COBERTURA_MINIMA_ACCEPTED_VALUES`
@@ -220,9 +238,15 @@ def _sugestoes_de_teste(
     testes: list[Any] = []
     metrica = _metrica_de_coluna(coluna)
 
-    unico = coluna.unica or (metrica is not None and metrica.percentual_unico == 100.0)
+    unico = coluna.unica or (
+        tamanho_amostra > 0
+        and metrica is not None
+        and metrica.percentual_unico == 100.0
+    )
     nao_nulo = coluna.nao_nulavel or (
-        metrica is not None and metrica.percentual_nulo == 0.0
+        tamanho_amostra > 0
+        and metrica is not None
+        and metrica.percentual_nulo == 0.0
     )
     if unico and not coluna.chave_primaria:
         testes.append("unique")
@@ -379,8 +403,10 @@ class GeradorDbt:
         tabelas = sorted(entrada.tabelas, key=lambda t: (t.nome_escopo, t.nome_tabela))
         presentes = {(tabela.nome_escopo, tabela.nome_tabela) for tabela in tabelas}
 
+        gerado_em = datetime.now(UTC).isoformat()
+        projeto = {**_DBT_PROJECT, "meta": {"generated_at": gerado_em}}
         resultado_projeto = escrever_arquivo(
-            destino / "dbt_project.yml", _dump_yaml(_DBT_PROJECT)
+            destino / "dbt_project.yml", _dump_yaml(projeto)
         )
         if isinstance(resultado_projeto, Falha):
             return resultado_projeto

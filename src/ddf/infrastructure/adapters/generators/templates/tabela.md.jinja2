@@ -29,7 +29,7 @@
 | Nome | % Nulo | % Único | Mínimo | Máximo | Formato |
 |---|---|---|---|---|---|
 {% for coluna in tabela.colunas %}
-{% set q = coluna | linha_qualidade %}
+{% set q = coluna | linha_qualidade(tabela.metadados_amostra.tamanho_amostra) %}
 | {{ q.nome }} | {{ q.percentual_nulo }} | {{ q.percentual_unico }} | {{ q.minimo }} | {{ q.maximo }} | {{ q.formato }} |
 {% endfor %}
 
@@ -66,3 +66,5 @@
 ---
 
 *Amostragem: estratégia `{{ tabela.metadados_amostra.estrategia }}`, {{ tabela.metadados_amostra.tamanho_amostra }} linhas amostradas de {{ tabela.total_linhas }} no total — métricas de coluna são estimativas sobre a amostra, não o dado completo.*
+
+*Gerado em: {{ gerado_em }}*
