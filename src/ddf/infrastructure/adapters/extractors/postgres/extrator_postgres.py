@@ -131,7 +131,7 @@ class _MetadadosDoSchema(NamedTuple):
     """Metadados de catálogo de todas as tabelas de um schema, lidos de uma vez.
 
     Populado por ExtratorPostgres._obter_metadados_schema e cacheado por
-    schema — elimina o N+1 de rodar 4 queries de metadado por tabela restrita. 
+    schema — elimina o N+1 de rodar 4 queries de metadado por tabela restrita.
     fks_por_tabela guarda linhas cruas (mesmo formato que
     construir_colunas_fk espera), não ReferenciaDeColuna já resolvida — a
     resolução (com Aviso de colisão) continua acontecendo por tabela, em
