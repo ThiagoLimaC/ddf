@@ -16,6 +16,9 @@ from ddf.infrastructure.adapters.analyzers.analisador_de_metricas_de_coluna impo
 from ddf.infrastructure.adapters.extractors.postgres.extrator_postgres import (
     ExtratorPostgres,
 )
+from ddf.infrastructure.adapters.orchestrator.orquestrador_paralelo import (
+    OrquestradorParalelo,
+)
 from ddf.infrastructure.adapters.overrides.sobrescrita_de_tabela import (
     SobrescritaDeTabela,
 )
@@ -111,6 +114,44 @@ def test_listar_escopos_retorna_escopos_semeados(
 
     assert resultado == Sucesso(
         ["arrays", "geografia", "pessoa", "public", "restricoes", "rh", "vazio"]
+    )
+
+
+def test_extrair_duas_tabelas_do_mesmo_schema_reaproveita_cache_de_metadados(
+    dsn: str, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Caminho feliz: 2 extrações no mesmo schema (1 instância) trazem dados corretos.
+
+    Prova a corretude da consolidação por schema (issue #66) contra Postgres
+    real: a 2ª extração (pedidos) reaproveita o cache de metadados já
+    populado pela 1ª (clientes) — mesma instância de ExtratorPostgres, mesmo
+    schema — e ainda assim PK/FK/NOT NULL saem corretos pras duas tabelas,
+    igual ao caso de instâncias separadas já coberto pelos outros testes.
+    """
+    extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+
+    resultado_clientes = extrator.extrair_tabela("public", "clientes")
+    resultado_pedidos = extrator.extrair_tabela("public", "pedidos")
+
+    assert isinstance(resultado_clientes, Sucesso)
+    assert isinstance(resultado_pedidos, Sucesso)
+
+    clientes = resultado_clientes.valor
+    assert clientes.total_linhas == 3
+    assert [coluna.nome for coluna in clientes.colunas] == [
+        "id",
+        "nome",
+        "criado_em",
+    ]
+    assert clientes.colunas[0].chave_primaria is True
+
+    pedidos = resultado_pedidos.valor
+    assert pedidos.total_linhas == 3
+    coluna_fk = pedidos.colunas[1]
+    assert coluna_fk.nome == "cliente_id"
+    assert coluna_fk.chave_estrangeira is True
+    assert coluna_fk.referencia == ReferenciaDeColuna(
+        nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
     )
 
 
@@ -287,3 +328,30 @@ def test_coluna_array_com_valores_vazios_e_nulos_nao_quebra_analisador(
     coluna_tags = next(c for c in tabela_analisada.colunas if c.nome == "tags")
     metrica = coluna_tags.metricas[0]
     assert metrica.percentual_nulo == pytest.approx(100 / 3)
+
+
+def test_extracao_paralela_de_tabelas_do_mesmo_schema_via_orquestrador(
+    dsn: str, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: OrquestradorParalelo real extrai tabelas do mesmo schema em paralelo.
+
+    Contra Postgres real (não mockado), prova que o double-checked locking
+    do cache por schema (issue #66) segura sob concorrência de verdade:
+    clientes/pedidos são extraídas em threads simultâneas do Orquestrador,
+    disputando a 1ª população do cache de `public` — o resultado tem que
+    sair correto pras duas, sem corromper nem travar.
+    """
+    extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao, max_conexoes=4)
+    orquestrador = OrquestradorParalelo(max_trabalhadores=4)
+
+    resultado = orquestrador.extrair(["public"], extrator)
+
+    assert isinstance(resultado, Sucesso)
+    tabelas = {tabela.nome_tabela: tabela for tabela in resultado.valor}
+    assert set(tabelas) == {"clientes", "pedidos"}
+    assert tabelas["clientes"].total_linhas == 3
+    assert tabelas["pedidos"].total_linhas == 3
+    coluna_fk = tabelas["pedidos"].colunas[1]
+    assert coluna_fk.referencia == ReferenciaDeColuna(
+        nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
+    )

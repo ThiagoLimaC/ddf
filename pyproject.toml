@@ -55,4 +55,7 @@ module = "dbutils.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-addopts = "--import-mode=importlib"
+addopts = "--import-mode=importlib -m 'not benchmark'"
+markers = [
+    "benchmark: oneroso (cria centenas de tabelas via testcontainers); rode explicitamente com -m benchmark",
+]
