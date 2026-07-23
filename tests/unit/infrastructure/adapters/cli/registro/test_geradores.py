@@ -7,7 +7,7 @@ import pytest
 from ddf.domain.model.analysis import BancoAnalisado, TipoDeMetrica
 from ddf.domain.ports.gerador import Gerador
 from ddf.domain.shared.resultado import Resultado
-from ddf.infrastructure.adapters.cli.geradores import (
+from ddf.infrastructure.adapters.cli.registro.geradores import (
     GERADORES_REGISTRADOS,
     registrar_gerador,
 )

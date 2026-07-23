@@ -1,6 +1,7 @@
 """Registro de Geradores disponíveis para o wizard da CLI."""
 
 from ddf.domain.ports.gerador import Gerador
+from ddf.infrastructure.adapters.cli.registro.comum import registrar_ou_falhar
 from ddf.infrastructure.adapters.generators.gerador_contexto_de_ia import (
     GeradorContextoDeIA,
 )
@@ -26,9 +27,7 @@ def registrar_gerador(
         registro: Dicionário onde o Gerador é registrado. Usa
             GERADORES_REGISTRADOS por padrão.
     """
-    if nome in registro:
-        raise ValueError(f"Gerador '{nome}' já está registrado.")
-    registro[nome] = gerador
+    registrar_ou_falhar(nome, "Gerador", gerador, registro)
 
 
 registrar_gerador("Markdown", GeradorMarkdown())

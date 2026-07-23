@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.ports.extrator import Extrator
 from ddf.infrastructure.adapters.cli import prompts
+from ddf.infrastructure.adapters.cli.registro.comum import registrar_ou_falhar
 from ddf.infrastructure.adapters.extractors.mariadb.extrator_mariadb import (
     ExtratorMariaDB,
 )
@@ -45,10 +46,11 @@ def registrar_extrator(
         registro: Dicionário onde o Extrator é registrado. Usa
             EXTRATORES_REGISTRADOS por padrão.
     """
-    if nome in registro:
-        raise ValueError(f"Extrator '{nome}' já está registrado.")
-    registro[nome] = ExtratorRegistrado(
-        classe_extrator=classe_extrator, construir=construir
+    registrar_ou_falhar(
+        nome,
+        "Extrator",
+        ExtratorRegistrado(classe_extrator=classe_extrator, construir=construir),
+        registro,
     )
 
 
@@ -57,6 +59,7 @@ def _construir_extrator_postgres(configuracao: ConfiguracaoDeExtracao) -> Extrat
     dsn = prompts.texto(
         "Connection string do Postgres:",
         default="postgresql://usuario:senha@host:porta/banco",
+        dica_limpar=True,
     )
     return ExtratorPostgres(dsn=dsn, configuracao=configuracao)
 

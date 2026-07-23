@@ -13,6 +13,7 @@ from ddf.infrastructure.adapters.analyzers.analisador_de_metricas_de_coluna impo
 from ddf.infrastructure.adapters.analyzers.analisador_de_metricas_de_tabela import (
     AnalisadorDeMetricasDeTabela,
 )
+from ddf.infrastructure.adapters.cli.registro.comum import registrar_ou_falhar
 
 ANALISADORES_REGISTRADOS: dict[str, Analisador] = {}
 
@@ -34,9 +35,7 @@ def registrar_analisador(
         registro: Dicionário onde o Analisador é registrado. Usa
             ANALISADORES_REGISTRADOS por padrão.
     """
-    if nome in registro:
-        raise ValueError(f"Analisador '{nome}' já está registrado.")
-    registro[nome] = analisador
+    registrar_ou_falhar(nome, "Analisador", analisador, registro)
 
 
 registrar_analisador("MetricasDeColuna", AnalisadorDeMetricasDeColuna())

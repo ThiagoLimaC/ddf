@@ -5,7 +5,7 @@ import pytest
 from ddf.domain.model.analysis import ContextoDeAnalise, TipoDeMetrica
 from ddf.domain.ports.analisador import Analisador
 from ddf.domain.shared.resultado import Resultado
-from ddf.infrastructure.adapters.cli.analisadores import (
+from ddf.infrastructure.adapters.cli.registro.analisadores import (
     ANALISADORES_REGISTRADOS,
     registrar_analisador,
 )
