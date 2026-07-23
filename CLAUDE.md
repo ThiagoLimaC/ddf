@@ -46,6 +46,6 @@ vermelho.
 ## Convenções de teste
 
 Três categorias obrigatórias por Stage/Adapter: caminho feliz, erro esperado
-e borda. Testes de CLI injetam `Extrator` fake via `FONTES_REGISTRADAS` — nunca
-mockam o driver de baixo nível. Consulte [`docs/engineer_guidelines.md`](docs/engineer_guidelines.md)
+e borda. Testes de CLI injetam `Extrator` fake via `EXTRATORES_REGISTRADOS` —
+nunca mockam o driver de baixo nível. Consulte [`docs/engineer_guidelines.md`](docs/engineer_guidelines.md)
 para a política completa.
