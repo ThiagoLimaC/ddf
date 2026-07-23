@@ -7,6 +7,7 @@ from typing import TypeVar
 from ddf.domain.model.curation import BancoCurado, TabelaCurada
 from ddf.domain.model.extraction import TabelaExtraida
 from ddf.domain.ports.extrator import Extrator
+from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.pipeline.estagio import Estagio
 from ddf.pipeline.seguranca import executar_com_seguranca
@@ -14,26 +15,23 @@ from ddf.pipeline.seguranca import executar_com_seguranca
 _Item = TypeVar("_Item")
 _Saida = TypeVar("_Saida")
 
+_ORIGEM = "OrquestradorParalelo"
 
-def _mensagem_falha_agregada(
-    verbo: str,
-    quantidade_falhas: int,
-    total: int,
-    falhas: list[tuple[str, str]],
-) -> str:
-    """Monta a mensagem agregada de Falha a partir das falhas individuais coletadas.
+
+def _avisos_de_falhas(verbo: str, falhas: list[tuple[str, str]]) -> list[Aviso]:
+    """Converte falhas individuais em Aviso, uma mensagem por item que falhou.
 
     Args:
-        verbo: ação que falhou (ex.: "extrair", "aplicar sobrescritas em").
-        quantidade_falhas: nº de itens que falharam.
-        total: nº total de itens processados nesta fase.
+        verbo: ação que falhou (ex.: "extrair", "aplicar sobrescrita em").
         falhas: pares (identificador, mensagem de erro) de cada falha.
 
     Returns:
-        Mensagem única, com cada falha unida por "; ".
+        Um Aviso por falha, com origem "OrquestradorParalelo".
     """
-    itens = "; ".join(f"{identificador}: {erro}" for identificador, erro in falhas)
-    return f"Falha ao {verbo} {quantidade_falhas} de {total} tabelas: {itens}"
+    return [
+        Aviso(mensagem=f"Falha ao {verbo} '{identificador}': {erro}", origem=_ORIGEM)
+        for identificador, erro in falhas
+    ]
 
 
 class OrquestradorParalelo:
@@ -63,7 +61,8 @@ class OrquestradorParalelo:
         itens: list[_Item],
         funcao: Callable[[_Item], Resultado[_Saida]],
         identificador: Callable[[_Item], str],
-    ) -> tuple[list[_Saida], list[tuple[str, str]]]:
+        progresso: Callable[[str], None] | None = None,
+    ) -> tuple[list[_Saida], list[Aviso], list[tuple[str, str]]]:
         """Executa `funcao` em paralelo sobre `itens`, acumulando sucessos e falhas.
 
         Cada chamada roda dentro de `executar_com_seguranca` — uma exceção
@@ -72,6 +71,11 @@ class OrquestradorParalelo:
         sem essa proteção, quebrando os demais itens do lote em vez de
         virar uma falha isolada, acumulada como as demais.
 
+        `progresso`, se informado, é chamado uma vez por item concluído
+        (sucesso ou falha) — sempre a partir do laço `as_completed` que roda
+        na thread principal, nunca dentro de um worker, por isso dispensa
+        lock: as chamadas já são seriais por construção.
+
         Args:
             nome_estagio: identificador do Estagio chamado por `funcao`
                 (ex.: "Extrator", "Sobrescrita"), usado como prefixo na
@@ -79,12 +83,17 @@ class OrquestradorParalelo:
             itens: itens de entrada, um por chamada de `funcao`.
             funcao: transformação aplicada a cada item, retornando um Resultado.
             identificador: extrai o identificador textual de um item, usado
-                para nomear o item numa falha.
+                para nomear o item numa falha ou numa chamada de progresso.
+            progresso: callback opcional invocado com o identificador de cada
+                item assim que ele termina de processar.
 
         Returns:
-            Tupla (sucessos, falhas) — falhas como (identificador, erro).
+            Tupla (sucessos, avisos, falhas) — avisos de todo Resultado
+            individual (sucesso ou falha) preservados; falhas como
+            (identificador, erro).
         """
         sucessos: list[_Saida] = []
+        avisos: list[Aviso] = []
         falhas: list[tuple[str, str]] = []
 
         def _funcao_segura(item: _Item) -> Resultado[_Saida]:
@@ -97,84 +106,108 @@ class OrquestradorParalelo:
             for futuro in as_completed(futuros):
                 item = futuros[futuro]
                 resultado = futuro.result()
+                avisos.extend(resultado.avisos)
                 if isinstance(resultado, Falha):
                     falhas.append((identificador(item), resultado.erro))
-                    continue
-                sucessos.append(resultado.valor)
+                else:
+                    sucessos.append(resultado.valor)
+                if progresso is not None:
+                    progresso(identificador(item))
 
-        return sucessos, falhas
+        return sucessos, avisos, falhas
 
     def extrair(
-        self, escopos: list[str], extrator: Extrator
+        self,
+        escopos: list[str],
+        extrator: Extrator,
+        /,
+        progresso: Callable[[str], None] | None = None,
     ) -> Resultado[list[TabelaExtraida]]:
         """Lista e extrai, em paralelo, todas as tabelas dos escopos informados.
+
+        Falha ao listar um escopo ou extrair uma tabela nunca aborta o lote
+        inteiro — vira Aviso, e as demais tabelas seguem sendo processadas.
 
         Args:
             escopos: escopos cujas tabelas serão listadas e extraídas.
             extrator: Extrator concreto usado para listar/extrair cada tabela.
+            progresso: callback opcional invocado com "<escopo>.<tabela>" a
+                cada tabela concluída (sucesso ou falha).
 
         Returns:
             Sucesso com list[TabelaExtraida] ordenada por (nome_escopo,
-            nome_tabela), ou Falha agregada se algum escopo/tabela falhou.
+            nome_tabela) — pode ser menor que o total pedido — e um Aviso
+            por escopo/tabela que falhou.
         """
         pares_a_extrair: list[tuple[str, str]] = []
-        falhas_listagem: list[tuple[str, str]] = []
+        avisos_listagem: list[Aviso] = []
 
         for escopo in escopos:
             resultado_listagem = extrator.listar_tabelas(escopo)
             if isinstance(resultado_listagem, Falha):
-                falhas_listagem.append((escopo, resultado_listagem.erro))
+                avisos_listagem.append(
+                    Aviso(
+                        mensagem=(
+                            f"Falha ao listar tabelas de '{escopo}': "
+                            f"{resultado_listagem.erro}"
+                        ),
+                        origem=_ORIGEM,
+                    )
+                )
                 continue
             pares_a_extrair.extend(resultado_listagem.valor)
 
-        total = len(pares_a_extrair) + len(falhas_listagem)
-        tabelas, falhas_extracao = self._executar_em_paralelo(
+        tabelas, avisos_extracao, falhas_extracao = self._executar_em_paralelo(
             "Extrator",
             pares_a_extrair,
             lambda par: extrator.extrair_tabela(*par),
             lambda par: f"{par[0]}.{par[1]}",
+            progresso,
         )
-        falhas = falhas_listagem + falhas_extracao
-
-        if falhas:
-            return Falha(
-                _mensagem_falha_agregada("extrair", len(falhas), total, falhas)
-            )
 
         tabelas.sort(key=lambda tabela: (tabela.nome_escopo, tabela.nome_tabela))
-        return Sucesso(tabelas)
+        avisos = (
+            avisos_listagem
+            + avisos_extracao
+            + _avisos_de_falhas("extrair", falhas_extracao)
+        )
+        return Sucesso(tabelas, avisos=avisos)
 
     def aplicar_sobrescritas(
         self,
         tabelas: list[TabelaExtraida],
         sobrescrita: Estagio[TabelaExtraida, TabelaCurada],
+        progresso: Callable[[str], None] | None = None,
     ) -> Resultado[BancoCurado]:
         """Aplica, em paralelo, a Sobrescrita sobre cada TabelaExtraida.
+
+        Falha ao aplicar a sobrescrita de uma tabela nunca aborta o lote
+        inteiro — vira Aviso, e as demais tabelas seguem sendo processadas.
 
         Args:
             tabelas: tabelas extraídas a curar.
             sobrescrita: Estagio que traduz TabelaExtraida em TabelaCurada.
+            progresso: callback opcional invocado com "<escopo>.<tabela>" a
+                cada tabela concluída (sucesso ou falha).
 
         Returns:
             Sucesso com BancoCurado (tabelas ordenadas por (nome_escopo,
-            nome_tabela)), ou Falha agregada se alguma tabela falhou.
+            nome_tabela) — pode ser menor que o total pedido) e um Aviso por
+            tabela cuja sobrescrita falhou, além dos Avisos que a própria
+            Sobrescrita emitiu (ex.: skeleton criado/atualizado).
         """
-        total = len(tabelas)
-        tabelas_curadas, falhas = self._executar_em_paralelo(
+        tabelas_curadas, avisos_sobrescrita, falhas = self._executar_em_paralelo(
             "Sobrescrita",
             tabelas,
             sobrescrita,
             lambda tabela: f"{tabela.nome_escopo}.{tabela.nome_tabela}",
+            progresso,
         )
-
-        if falhas:
-            return Falha(
-                _mensagem_falha_agregada(
-                    "aplicar sobrescritas em", len(falhas), total, falhas
-                )
-            )
 
         tabelas_curadas.sort(
             key=lambda tabela: (tabela.nome_escopo, tabela.nome_tabela)
         )
-        return Sucesso(BancoCurado(tabelas=tabelas_curadas))
+        avisos = avisos_sobrescrita + _avisos_de_falhas(
+            "aplicar sobrescrita em", falhas
+        )
+        return Sucesso(BancoCurado(tabelas=tabelas_curadas), avisos=avisos)

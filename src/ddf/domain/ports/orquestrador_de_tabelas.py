@@ -1,5 +1,6 @@
 """Port para coordenação paralela de extração e aplicação de sobrescritas."""
 
+from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
 from ddf.domain.model.curation import BancoCurado, TabelaCurada
@@ -18,14 +19,25 @@ class OrquestradorDeTabelas(Protocol):
         escopos: list[str],
         extrator: Extrator,
         /,
+        progresso: Callable[[str], None] | None = None,
     ) -> Resultado[list[TabelaExtraida]]:
-        """Extrai, em paralelo, todas as tabelas dos escopos informados."""
+        """Extrai, em paralelo, todas as tabelas dos escopos informados.
+
+        Falhas individuais (listagem de um escopo ou extração de uma tabela)
+        nunca abortam o lote inteiro — viram Aviso no Sucesso devolvido,
+        junto das tabelas que deram certo.
+        """
         ...
 
     def aplicar_sobrescritas(
         self,
         tabelas: list[TabelaExtraida],
         sobrescrita: Estagio[TabelaExtraida, TabelaCurada],
+        progresso: Callable[[str], None] | None = None,
     ) -> Resultado[BancoCurado]:
-        """Aplica, em paralelo, a Sobrescrita sobre cada TabelaExtraida."""
+        """Aplica, em paralelo, a Sobrescrita sobre cada TabelaExtraida.
+
+        Falhas individuais nunca abortam o lote inteiro — viram Aviso no
+        Sucesso devolvido, junto das tabelas cuja sobrescrita deu certo.
+        """
         ...
