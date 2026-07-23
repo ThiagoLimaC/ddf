@@ -1,6 +1,5 @@
 """Data Dictionary Framework."""
 
+from ddf.infrastructure.adapters.cli.wizard import executar as main
 
-def main() -> None:
-    """Ponto de entrada temporário do CLI (substituído na Task 7)."""
-    print("Hello from ddf!")
+__all__ = ["main"]
