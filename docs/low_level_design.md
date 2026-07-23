@@ -580,25 +580,33 @@ class OrquestradorDeTabelas(Protocol):
         escopos: list[str],
         extrator: Extrator,
         /,
+        progresso: Callable[[str], None] | None = None,
     ) -> Resultado[list[TabelaExtraida]]: ...
 
     def aplicar_sobrescritas(
         self,
         tabelas: list[TabelaExtraida],
         sobrescrita: Estagio[TabelaExtraida, TabelaCurada],
+        progresso: Callable[[str], None] | None = None,
     ) -> Resultado[BancoCurado]: ...
 ```
 
 **Comportamento esperado de `extrair`:**
 - Lista tabelas via `extrator.listar_tabelas()` para cada escopo.
 - Distribui `extrair_tabela()` em workers paralelos.
-- Erros de tabelas individuais são acumulados — não interrompem as demais.
-- Se qualquer tabela falhou: `Falha` com resumo de todas as falhas.
+- **Sucesso parcial (issue #16):** falha ao listar um escopo ou extrair uma
+  tabela nunca aborta o lote inteiro — vira `Aviso` no `Sucesso` devolvido,
+  junto das tabelas que deram certo. O método nunca devolve `Falha`; o
+  chamador decide o que fazer com uma lista vazia (ver `wizard.py`, que sai
+  com código 1 se nenhuma tabela foi extraída).
+- `progresso`, se informado, é chamado uma vez por item concluído (sucesso
+  ou falha) com o identificador `"<escopo>.<tabela>"` — alimenta a barra de
+  progresso do wizard sem acoplar o Port a `questionary`.
 
 **Comportamento esperado de `aplicar_sobrescritas`:**
 - Distribui `sobrescrita()` em workers paralelos sobre a lista recebida.
 - Agrega `list[TabelaCurada]` em `BancoCurado` após todos terminarem.
-- Erros individuais acumulados — mesma política de `extrair`.
+- Mesma política de sucesso parcial e `progresso` de `extrair`.
 
 **Razão da separação:** a CLI precisa pausar entre extração e aplicação de
 sobrescritas para permitir curadoria humana dos skeletons gerados. Expor as
@@ -873,12 +881,15 @@ class OrquestradorParalelo:
         self,
         escopos: list[str],
         extrator: Extrator,
+        /,
+        progresso: Callable[[str], None] | None = None,
     ) -> Resultado[list[TabelaExtraida]]: ...
 
     def aplicar_sobrescritas(
         self,
         tabelas: list[TabelaExtraida],
         sobrescrita: Estagio[TabelaExtraida, TabelaCurada],
+        progresso: Callable[[str], None] | None = None,
     ) -> Resultado[BancoCurado]: ...
 ```
 
@@ -892,22 +903,30 @@ métodos do Port.
 
 **Comportamento de `extrair`:**
 1. Lista tabelas por escopo — sequencial (operação leve). Falha de listagem
-   de um escopo acumula (mesma política do item 3), não aborta os demais.
+   de um escopo vira `Aviso`, não aborta os demais escopos.
 2. Distribui `extrair_tabela(escopo, tabela)` em `ThreadPoolExecutor(max_trabalhadores)`
    para todos os pares `(escopo, tabela)` listados com sucesso.
-3. Acumula erros — de listagem e de extração — sem interromper outros workers.
-4. `Falha("Falha ao extrair N de M tabelas: <escopo.tabela ou escopo>: <erro>; ...")`
-   se qualquer escopo/tabela falhou — sem dado parcial dos que tiveram
-   sucesso na mesma execução. Senão, `Sucesso` com `list[TabelaExtraida]`
-   ordenada por `(nome_escopo, nome_tabela)` (`ThreadPoolExecutor` não
-   garante ordem de conclusão).
+3. **Sucesso parcial (issue #16):** cada falha — de listagem ou de extração —
+   vira um `Aviso` (`"Falha ao extrair '<escopo.tabela>': <erro>"`), nunca
+   aborta o lote. O método sempre devolve `Sucesso`, mesmo que nenhuma
+   tabela tenha sido extraída (lista vazia) — o chamador decide o que fazer
+   com isso.
+4. `Sucesso` com `list[TabelaExtraida]` ordenada por `(nome_escopo,
+   nome_tabela)` (`ThreadPoolExecutor` não garante ordem de conclusão) e os
+   `Aviso`s acumulados.
+5. `progresso`, se informado, é chamado a partir da thread principal (via
+   `as_completed`) uma vez por item concluído — nunca dentro de um worker,
+   por isso dispensa lock.
 
 **Comportamento de `aplicar_sobrescritas`:**
 1. Distribui `sobrescrita(tabela)` em `ThreadPoolExecutor(max_trabalhadores)`.
-2. Acumula erros sem interromper outros workers.
-3. `Falha("Falha ao aplicar sobrescritas em N de M tabelas: <escopo.tabela>: <erro>; ...")`
-   se qualquer tabela falhou; senão `Sucesso` com `BancoCurado` cujas
-   `tabelas` estão ordenadas por `(nome_escopo, nome_tabela)`.
+2. Mesma política de sucesso parcial de `extrair`: cada falha vira `Aviso`
+   (`"Falha ao aplicar sobrescrita em '<escopo.tabela>': <erro>"`), nunca
+   aborta o lote — `Sucesso` sempre, com `BancoCurado` cujas `tabelas` estão
+   ordenadas por `(nome_escopo, nome_tabela)`.
+3. `Aviso`s emitidos pela própria `Sobrescrita` em caminho de sucesso (ex.:
+   `SobrescritaDeTabela` avisando que criou um skeleton) são preservados —
+   não descartados por engano junto com o valor.
 
 **Boundary de exceção (issue #56):** a chamada de `funcao(item)` dentro de
 cada worker do `ThreadPoolExecutor` (`_executar_em_paralelo`) roda dentro
@@ -1182,46 +1201,90 @@ exceção formal à Restrição 5 do PRD e fica para issue separada.
 
 ## CLI (`src/ddf/infrastructure/adapters/cli/`)
 
+### Organização do diretório
+
+```
+cli/
+├── wizard.py          # @click.command executar() — só orquestra as 14 etapas
+├── prompts.py          # único módulo que importa questionary
+├── avisos.py           # ou_sair, exibir_avisos — cross-cutting, sem estado
+├── validacao.py        # validar_dependencias (produz/requer)
+├── etapas/              # uma fase do pipeline por módulo
+│   ├── extracao.py      # etapas 1-5: amostragem, conexão, escopos, extração
+│   ├── curadoria.py     # etapas 6-8: skeletons, pausa, aplicar sobrescritas
+│   ├── analise.py       # etapas 9-11: escolher Geradores, validar, analisar
+│   └── geracao.py       # etapas 12-14: destino, confirmar, executar
+└── registro/            # pontos de extensão (issue #67 constrói descoberta em cima)
+    ├── comum.py          # registrar_ou_falhar — compartilhado pelos 4 abaixo
+    ├── extratores.py      # EXTRATORES_REGISTRADOS
+    ├── estrategias.py      # ESTRATEGIAS_REGISTRADAS
+    ├── analisadores.py      # ANALISADORES_REGISTRADOS (não exposto no wizard)
+    └── geradores.py          # GERADORES_REGISTRADOS
+```
+
+Direção de dependência: `wizard.py` só importa `prompts`, `etapas.*` e o
+orquestrador — nunca `registro.*` diretamente. Cada módulo de `etapas/`
+depende de `avisos`/`prompts`/`registro.*`, nunca o contrário.
+
 ### `wizard.py`
 
 ```python
 @click.command()
-@click.option("--config", type=Path, default=None)
-def executar(config: Path | None) -> None:
-    """Executa o wizard interativo do ddf."""
+def executar() -> None:
+    """Executa o wizard interativo do ddf, da conexão aos artefatos gerados."""
 ```
+
+Modo `--config`/não-interativo ficou fora de escopo da issue #16 — a
+assinatura não reserva esse parâmetro.
 
 **Etapas:**
 
-1. Escolher fonte (`questionary.select` com `FONTES_REGISTRADAS`).
-2. Informar credenciais (DSN ou campos separados).
-3. Testar conexão — retry até 3 tentativas em falha.
-4. Escolher escopo(s) (`questionary.checkbox`).
-5. Extrair em paralelo via `OrquestradorParalelo` — exibe spinner + avisos.
-6. Gerar skeletons de sobrescrita — exibe caminhos gerados.
-7. **Pausa:** `questionary.confirm("Preencheu as sobrescritas? Pressione Enter para continuar.")`.
-8. Aplicar sobrescritas — exibe avisos (colunas adicionadas/removidas).
-9. **Validar dependências** Analisadores + Geradores antes de rodar qualquer um
-    — `validar_dependencias` devolve os Analisadores já na ordem de execução.
-10. Analisar via `compor(*analisadores_ordenados)` sobre `ContextoDeAnalise` —
-    spinner + avisos.
-11. Escolher Geradores (`questionary.checkbox`).
-12. Escolher destino (`questionary.path`).
+1. Escolher estratégia de amostragem (`ESTRATEGIAS_REGISTRADAS`) — escolha
+   explícita mesmo havendo só `PercentualDeLinhas` hoje.
+2. Escolher fonte (`EXTRATORES_REGISTRADOS`) e construir o `Extrator`
+   (`ExtratorRegistrado.construir`, que pergunta credenciais específicas da
+   fonte).
+3. Testar conexão via `listar_escopos()` — retry manual até 3 tentativas,
+   nunca automático com a mesma credencial (risco de lockout de conta).
+4. Escolher escopo(s) — reaproveita a lista de `listar_escopos()` (etapa 3),
+   sem 2ª chamada de rede.
+5. Extrair em paralelo via `OrquestradorParalelo` — spinner de progresso +
+   avisos de sucesso parcial.
+6. Gerar/atualizar skeletons de sobrescrita em disco — conta criados/
+   atualizados vs. preservados sem mudança.
+7. **Pausa:** `prompts.pausar(...)` — usuário edita os YAMLs de overrides
+   manualmente antes de continuar.
+8. Aplicar sobrescritas (2ª passada, já com a curadoria manual) — gera o
+   `BancoCurado`.
+9. Escolher Geradores entre os registrados.
+10. **Validar dependências** de todos os Analisadores registrados (sempre
+    rodam todos, sem seleção do usuário) contra só os Geradores escolhidos
+    na etapa 9 — `validar_dependencias` devolve os Analisadores já na ordem
+    de execução. Não existe etapa de "escolher Analisadores".
+11. Analisar via `compor(*analisadores_ordenados)` sobre `ContextoDeAnalise`
+    — spinner + avisos.
+12. Escolher destino — sugestão específica do Gerador quando só um foi
+    escolhido (`sugerir_destino`), genérica (`artefatos/`) caso contrário.
 13. Confirmar — resumo do que será gerado.
-14. Executar Geradores — progresso por Gerador + caminhos dos artefatos.
+14. Executar Geradores — cada um protegido por `executar_com_seguranca`,
+    avisos e caminho do artefato exibidos por Gerador.
 
-**Exibição de avisos:** após cada etapa, avisos acumulados são exibidos em
-bloco formatado — nunca silenciosamente.
+**Exibição de avisos (`cli/avisos.py::exibir_avisos`):** agrupados por
+origem e por "tipo" (mesma forma, identificador normalizado) — as 3
+primeiras ocorrências de cada tipo aparecem na íntegra, o restante condensa
+numa linha com contagem total. Nunca esconde um tipo diferente.
 
 **Boundary de exceção (issue #56, Decisão 12 do `system_design_doc.md`):**
 a etapa 14 é obrigada a envolver cada chamada de Gerador com
 `executar_com_seguranca` (`pipeline/seguranca.py`) — mesmo padrão já
-aplicado em `compor()` (etapa 10) e no worker de `OrquestradorParalelo`
+aplicado em `compor()` (etapa 11) e no worker de `OrquestradorParalelo`
 (etapas 5 e 8). Sem isso, uma exceção não prevista dentro de um Gerador
 propagaria crua pro usuário final do wizard, violando a NFR4/RF7 do PRD —
 exatamente o risco que motivou a issue #56.
 
-**Código de saída:** `0` em sucesso, `1` em qualquer `Falha`.
+**Código de saída:** `0` em sucesso, `1` em qualquer `Falha` (ou nenhuma
+tabela extraída/curada com sucesso), `0` também se o usuário cancelar um
+prompt (Ctrl+C/Esc) ou recusar a confirmação final.
 
 ### Validação de dependências (`cli/validacao.py`)
 
@@ -1250,23 +1313,69 @@ def validar_dependencias(
    valor diretamente em `compor(*analisadores_ordenados)`, sem recalcular a
    ordem.
 
-### Registro de fontes (`cli/fontes.py`)
+### Registros de extensão (`cli/registro/`)
+
+Quatro registros com o mesmo padrão — um dict `*_REGISTRADOS`, uma função
+`registrar_*` que levanta `ValueError` em nome duplicado, e a população das
+implementações nativas no fim do próprio módulo. A checagem de duplicidade
+e a inserção são idênticas nos 4, então vivem uma vez só em
+`registro/comum.py`:
 
 ```python
-FONTES_REGISTRADAS: dict[str, type[Extrator]] = {
-    "PostgreSQL": ExtratorPostgres,
-}
-
-def registrar_fonte(
+def registrar_ou_falhar(
     nome: str,
-    classe_extrator: type[Extrator],
-    registro: dict[str, type[Extrator]] = FONTES_REGISTRADAS,
+    entidade: str,
+    valor: T,
+    registro: dict[str, T],
+    *,
+    feminino: bool = False,
 ) -> None:
-    """Registra uma nova fonte de dados no wizard."""
+    """Registra `valor` sob `nome` em `registro`; levanta ValueError se já existir."""
 ```
 
-**Comportamento:** ponto de extensão para novas fontes sem editar o wizard.
-`registro` tem `FONTES_REGISTRADAS` como default (uso normal do wizard), mas
-aceita um dict isolado — testes de `registrar_fonte` injetam um registro
-próprio em vez de mutar o dict global entre execuções. `ValueError` se `nome`
-já existir em `registro` — nunca sobrescreve silenciosamente.
+`feminino` só existe para manter a concordância de gênero da mensagem de
+erro (`"Estratégia '...' já está registrada"` vs. `"Extrator '...' já está
+registrado"`).
+
+**`registro/extratores.py`** — o único registro cujo valor carrega também o
+construtor interativo (`ExtratorRegistrado.construir`), porque construir um
+`Extrator` exige perguntar credenciais específicas da fonte:
+
+```python
+@dataclass(frozen=True)
+class ExtratorRegistrado:
+    classe_extrator: type[Extrator]
+    construir: Callable[[ConfiguracaoDeExtracao], Extrator]
+
+EXTRATORES_REGISTRADOS: dict[str, ExtratorRegistrado] = {
+    "PostgreSQL": ExtratorRegistrado(ExtratorPostgres, _construir_extrator_postgres),
+    "MariaDB": ExtratorRegistrado(ExtratorMariaDB, _construir_extrator_mariadb),
+}
+
+def registrar_extrator(
+    nome: str,
+    classe_extrator: type[Extrator],
+    construir: Callable[[ConfiguracaoDeExtracao], Extrator],
+    registro: dict[str, ExtratorRegistrado] = EXTRATORES_REGISTRADOS,
+) -> None: ...
+```
+
+**`registro/estrategias.py`** — mesma forma (`EstrategiaRegistrada` com
+`classe_estrategia` + `construir`), para `EstrategiaDeAmostragem`. Só
+`PercentualDeLinhas` está registrada hoje, mas a escolha é explícita no
+wizard (etapa 1) para não precisar reabrir `wizard.py` quando uma 2ª
+estratégia aparecer.
+
+**`registro/analisadores.py`/`registro/geradores.py`** — mais simples:
+guardam a instância direto (`dict[str, Analisador]`/`dict[str, Gerador]`),
+sem construtor interativo, porque `Analisador`/`Gerador` não recebem
+argumento no construtor. `ANALISADORES_REGISTRADOS` **não é exposto em
+nenhum menu do wizard** — todos os Analisadores registrados sempre rodam
+(ver etapa 10); é um ponto de extensão manipulado só por quem desenvolve o
+ddf, ou por um plugin de terceiro via a descoberta que a issue #67 constrói
+em cima dele. `GERADORES_REGISTRADOS` é o único user-facing (etapa 9).
+
+**Comportamento comum:** todos os 4 são pontos de extensão para novas
+implementações sem editar o wizard. Cada `registro` aceita um dict isolado
+como parâmetro (default é o `*_REGISTRADOS` global) — testes injetam um
+registro próprio em vez de mutar o dict global entre execuções.

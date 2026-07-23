@@ -11,6 +11,6 @@ Saida = TypeVar("Saida")
 class Estagio(Protocol[Entrada, Saida]):
     """Transforma uma Entrada em um Resultado[Saida]."""
 
-    def __call__(self, entrada: Entrada) -> Resultado[Saida]:
+    def __call__(self, entrada: Entrada, /) -> Resultado[Saida]:
         """Executa o estágio sobre a entrada recebida."""
         ...

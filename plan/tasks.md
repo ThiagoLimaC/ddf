@@ -100,11 +100,12 @@
 
 ### Contrato da CLI (`infrastructure/adapters/cli/`)
 
-- [x] `FONTES_REGISTRADAS` + `registrar_fonte()` em `cli/fontes.py` — registro
-      de Extratores disponíveis; define o contrato de extensão desde o início
-- [ ] `wizard.py` — esqueleto do fluxo completo com chamadas aos Ports já
-      assinadas e comentários `# TODO: implementar na Task 7`; permite detectar
-      cedo se o fluxo exige mudanças no modelo (Task 7, ainda não iniciada)
+- [x] `EXTRATORES_REGISTRADOS` + `registrar_extrator()` (renomeado de
+      `FONTES_REGISTRADAS`/`registrar_fonte()` na issue #16, junto de
+      `cli/fontes.py` → `cli/registro/extratores.py`) — registro de
+      Extratores disponíveis; define o contrato de extensão desde o início
+- [x] `wizard.py` — implementado por completo na Task 7/issue #16 (ver
+      seção 7 abaixo)
 - [x] `validar_dependencias(analisadores, geradores) -> Resultado[None]` em
       `cli/validacao.py` — lógica pura, testável sem adapters concretos
 
@@ -314,17 +315,33 @@
     `papel_de_negocio`/`regras_de_negocio` a partir de estatísticas —
     exigiria exceção formal à Restrição 5 do PRD, fica para issue separada
 
-## 7. CLI real wizard
+## 7. CLI real wizard (issue #16) — concluída
 
-- [ ] `FONTES_REGISTRADAS` + `registrar_fonte()` em `cli/fontes.py`
-- [ ] `validar_dependencias(analisadores, geradores) -> Resultado[None]` em
-      `cli/validacao.py` — verifica `produz`/`requer` antes de qualquer execução
-- [ ] Fluxo completo do wizard:
-      escolher fonte → conectar (retry 3x) → escolher escopos →
-      extrair (paralelo) → gerar skeletons → **pausa para curadoria** →
-      aplicar sobrescritas → validar dependências → analisar → escolher
-      geradores → escolher destino → confirmar → executar
-- [ ] `Aviso`s exibidos em streaming por etapa concluída
-- [ ] Código de saída `0`/`1` para uso em scripts e CI
-- [ ] Testes de CLI injetam `Extrator` fake via `FONTES_REGISTRADAS` — nunca
-      mockam o driver de baixo nível direto
+- [x] `cli/registro/` — `EXTRATORES_REGISTRADOS` (Postgres + MariaDB),
+      `ESTRATEGIAS_REGISTRADAS`, `ANALISADORES_REGISTRADOS` (não exposto no
+      wizard), `GERADORES_REGISTRADOS`; `registrar_ou_falhar()` em
+      `comum.py` compartilhado pelos 4 `registrar_*`
+- [x] `validar_dependencias(analisadores, geradores) -> Resultado[list[Analisador]]`
+      em `cli/validacao.py` — verifica `produz`/`requer` antes de qualquer
+      execução, devolve os Analisadores em ordem topológica
+- [x] Fluxo completo do wizard (14 etapas, `wizard.py` só orquestra,
+      implementação por fase em `cli/etapas/`):
+      escolher estratégia de amostragem → escolher fonte e conectar (retry
+      3x) → escolher escopos → extrair (paralelo) → gerar skeletons →
+      **pausa para curadoria** → aplicar sobrescritas → escolher geradores →
+      validar dependências → analisar → escolher destino → confirmar →
+      executar
+- [x] `Aviso`s exibidos em streaming por etapa concluída, agrupados por
+      origem e por "tipo" (`cli/avisos.py`)
+- [x] Código de saída `0`/`1` para uso em scripts e CI
+- [x] Testes de CLI injetam `Extrator` fake via `EXTRATORES_REGISTRADOS` —
+      nunca mockam o driver de baixo nível direto (`test_extracao.py`,
+      `test_curadoria.py`, `test_analise.py`, `test_geracao.py`,
+      `tests/integration/cli/test_wizard_end_to_end.py`)
+- [x] `OrquestradorDeTabelas`/`OrquestradorParalelo` estendidos com sucesso
+      parcial (falha individual vira `Aviso`, nunca aborta o lote) e
+      `progresso: Callable[[str], None] | None` opcional
+- [x] `Estagio.__call__` tornado positional-only — consistente com
+      `Analisador`/`Gerador` (bug encontrado durante a implementação: a
+      primeira combinação real de `compor()` com um `Analisador` em `src/`
+      apareceu só aqui, fora do escopo anterior do `mypy --strict`)
