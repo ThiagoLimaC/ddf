@@ -12,8 +12,16 @@ import questionary
 
 _QUADROS_AMPULHETA = ("⏳", "⌛")
 
+COR_DESTAQUE = "#00d7ff"
+COR_SUCESSO = "#00d700"
 
-def texto(mensagem: str, default: str = "") -> str:
+# Mesmo tom do banner (_BANNER em wizard.py) — resposta do usuário destacada
+# na mesma cor. É um teste de identidade visual; ajustar/reverter é só mudar
+# esta constante.
+_ESTILO = questionary.Style([("answer", f"fg:{COR_DESTAQUE} bold")])
+
+
+def texto(mensagem: str, default: str = "", dica_limpar: bool = False) -> str:
     """Pergunta um texto livre, saindo limpo se o usuário cancelar (Ctrl+C/Esc).
 
     questionary captura o KeyboardInterrupt internamente e devolve None em
@@ -23,8 +31,20 @@ def texto(mensagem: str, default: str = "") -> str:
     Args:
         mensagem: pergunta exibida ao usuário.
         default: valor pré-preenchido no campo.
+        dica_limpar: exibe a dica "(Ctrl+U limpa o valor pré-preenchido)" —
+            só vale a pena quando o default é longo o suficiente pra ser
+            incômodo apagar manualmente (ex.: connection string).
     """
-    resposta = cast("str | None", questionary.text(mensagem, default=default).ask())
+    print()
+    instrucao = (
+        "(Ctrl+U limpa o valor pré-preenchido)" if dica_limpar and default else None
+    )
+    resposta = cast(
+        "str | None",
+        questionary.text(
+            mensagem, default=default, instruction=instrucao, style=_ESTILO
+        ).ask(),
+    )
     if resposta is None:
         sys.exit(0)
     return resposta
@@ -36,7 +56,10 @@ def senha(mensagem: str) -> str:
     Args:
         mensagem: pergunta exibida ao usuário.
     """
-    resposta = cast("str | None", questionary.password(mensagem).ask())
+    print()
+    resposta = cast(
+        "str | None", questionary.password(mensagem, style=_ESTILO).ask()
+    )
     if resposta is None:
         sys.exit(0)
     return resposta
@@ -49,34 +72,40 @@ def selecionar(mensagem: str, escolhas: list[str]) -> str:
         mensagem: pergunta exibida ao usuário.
         escolhas: opções disponíveis para seleção.
     """
+    print()
     resposta = cast(
-        "str | None", questionary.select(mensagem, choices=escolhas).ask()
+        "str | None",
+        questionary.select(mensagem, choices=escolhas, style=_ESTILO).ask(),
     )
     if resposta is None:
         sys.exit(0)
     return resposta
 
 
-def caminho(mensagem: str, default: str = "") -> str:
-    """Pergunta um caminho de arquivo/diretório, com autocompletar do shell.
-
-    Args:
-        mensagem: pergunta exibida ao usuário.
-        default: valor pré-preenchido no campo.
-    """
-    resposta = cast("str | None", questionary.path(mensagem, default=default).ask())
-    if resposta is None:
-        sys.exit(0)
-    return resposta
-
-
 def pausar(mensagem: str) -> None:
-    """Pausa a execução até o usuário apertar uma tecla.
+    """Pausa a execução até o usuário apertar uma tecla, saindo limpo se cancelar.
 
     Args:
         mensagem: texto exibido enquanto aguarda.
     """
-    questionary.press_any_key_to_continue(message=mensagem).ask()
+    print()
+    resposta = cast(
+        "bool | None",
+        questionary.press_any_key_to_continue(message=mensagem, style=_ESTILO).ask(),
+    )
+    if resposta is None:
+        sys.exit(0)
+
+
+def imprimir_destacado(texto_a_exibir: str, cor: str) -> None:
+    """Imprime um texto em negrito com a cor indicada (ex.: banner, confirmação).
+
+    Args:
+        texto_a_exibir: texto a exibir — uma linha ou um bloco ASCII de
+            várias linhas.
+        cor: código hex da cor, tipicamente `COR_DESTAQUE` ou `COR_SUCESSO`.
+    """
+    questionary.print(texto_a_exibir, style=f"bold fg:{cor}")
 
 
 def confirmar(mensagem: str, default: bool = True) -> bool:
@@ -86,8 +115,10 @@ def confirmar(mensagem: str, default: bool = True) -> bool:
         mensagem: pergunta exibida ao usuário.
         default: resposta pré-selecionada quando o usuário só aperta Enter.
     """
+    print()
     resposta = cast(
-        "bool | None", questionary.confirm(mensagem, default=default).ask()
+        "bool | None",
+        questionary.confirm(mensagem, default=default, style=_ESTILO).ask(),
     )
     if resposta is None:
         sys.exit(0)
@@ -105,10 +136,12 @@ def escolher_multiplos(mensagem: str, escolhas: list[str]) -> list[str]:
         mensagem: pergunta exibida ao usuário.
         escolhas: opções disponíveis para seleção.
     """
+    print()
     selecionados = cast(
         "list[str] | None",
         questionary.checkbox(
             mensagem,
+            style=_ESTILO,
             choices=escolhas,
             use_search_filter=True,
             use_jk_keys=False,
@@ -131,6 +164,7 @@ def ampulheta(mensagem: str) -> Generator[None, None, None]:
     Args:
         mensagem: texto exibido ao lado do ícone.
     """
+    print()
     parar = threading.Event()
 
     def _animar() -> None:
@@ -149,25 +183,33 @@ def ampulheta(mensagem: str) -> Generator[None, None, None]:
         thread.join()
 
 
-def progresso_paralelo(mensagem_base: str, total: int) -> Callable[[str], None]:
+def progresso_paralelo(
+    mensagem_base: str, total: int | None = None
+) -> Callable[[str], None]:
     """Devolve um callback de progresso para as fases paralelas do wizard.
 
     Pensado para ser passado como `progresso=` a `OrquestradorDeTabelas.
     extrair`/`aplicar_sobrescritas` — cada chamada já chega serializada pela
     thread principal (ver `_executar_em_paralelo`), sem necessidade de lock
-    aqui.
+    aqui. Não mostra tempo decorrido por item — a duração é do processo
+    inteiro, exibida uma vez ao final pelo chamador.
 
     Args:
         mensagem_base: texto fixo exibido antes da contagem.
-        total: número total de itens esperados, para a fração "N/total".
+        total: número total de itens esperados, exibido como fração
+            "N/total". Omitido quando o total só é conhecido depois de
+            iniciada a chamada (ex.: `extrair`, que lista as tabelas de
+            cada escopo internamente) — nesse caso mostra só "N".
     """
+    print()
     concluidas = 0
 
     def _callback(identificador: str) -> None:
         nonlocal concluidas
         concluidas += 1
+        contagem = f"{concluidas}/{total}" if total is not None else str(concluidas)
         print(
-            f"\r\x1b[K{mensagem_base} ({concluidas}/{total}) — {identificador}",
+            f"\r\x1b[K{mensagem_base} ({contagem}) — {identificador}",
             end="",
             flush=True,
         )
