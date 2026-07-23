@@ -78,9 +78,10 @@ entre reexecuções.
 
 ## Restrições do produto
 
-1. **Fonte de dados suportada na v1: apenas bancos Postgres.** MariaDB é a
-   próxima fonte prevista (ordem de prioridade já definida); suporte a APIs
-   ou arquivos fica para avaliação futura, sem prioridade definida ainda.
+1. **Fontes de dados suportadas na v1: Postgres e MariaDB.** Ambas
+   registradas nativamente no wizard (`EXTRATORES_REGISTRADOS`) desde a
+   issue #16; suporte a APIs ou arquivos fica para avaliação futura, sem
+   prioridade definida ainda.
 2. **Não é uma ferramenta de conexão ao vivo/contínua** — não monitora a fonte
    nem expõe um serviço consultável em tempo real (não é um MCP server); é
    uma ferramenta de análise sob demanda que produz artefatos versionáveis.
@@ -93,7 +94,6 @@ entre reexecuções.
 5. **Sem heurísticas de análise automática avançadas nesta versão** (como
    inferir relacionamentos por convenção de nome ou gerar glossário de
    domínio automaticamente) — fica para avaliação futura.
-6. **Testes de integração contra banco real cobrem apenas a fonte Postgres**
-   nesta fase (via testcontainers) — extensão da mesma prática de teste para
-   novas fontes (ex. MariaDB) acompanha a chegada de cada fonte, não é
-   antecipada.
+6. **Testes de integração contra banco real cobrem Postgres e MariaDB**
+   (via testcontainers) — extensão da mesma prática de teste acompanha a
+   chegada de cada fonte nova, não é antecipada.
