@@ -49,7 +49,7 @@
   - `GeradorContextoDeIA` — `requer=[MetricasBaseColuna]`, JSON compacto
 
 - **CLI real wizard**
-  - `FONTES_REGISTRADAS` + `registrar_fonte()`
+  - `EXTRATORES_REGISTRADOS` + `registrar_extrator()`
   - `validar_dependencias(analisadores, geradores)` — valida `produz`/`requer`
   - Fluxo completo com pausa para curadoria
   - `Aviso`s em streaming por etapa concluída
