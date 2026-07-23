@@ -319,7 +319,10 @@ tests/
 │       ├── analyzers/                   # conftest.py desde o 1º teste
 │       ├── generators/                  # conftest.py desde o 1º teste
 │       ├── overrides/
-│       └── orchestrator/
+│       ├── orchestrator/
+│       └── cli/
+│           ├── registro/                # registrar_extrator/estrategia/analisador/gerador
+│           └── etapas/                  # conftest.py com fabrica_tabela_extraida/curada
 └── integration/
     ├── extractors/
     │   └── postgres/                    # Postgres real ou containerizado
@@ -341,8 +344,8 @@ correspondente com os builders óbvios (ex.: `TabelaExtraida` de fixture,
 
 ## Testes de CLI mockam o `Protocol`, nunca o driver de baixo nível
 
-Testes de CLI injetam `Extrator` fake via `FONTES_REGISTRADAS` — nunca mockam
-`psycopg2.connect` diretamente.
+Testes de CLI injetam `Extrator` fake via `EXTRATORES_REGISTRADOS` — nunca
+mockam `psycopg2.connect` diretamente.
 
 ## Validação de Open/Closed como teste, não só como princípio citado
 
