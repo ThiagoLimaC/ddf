@@ -155,10 +155,16 @@ declarar nos artefatos que as métricas são estimativas sobre amostra.
 distintas — separadas para que a CLI possa pausar entre elas para curadoria
 humana dos skeletons de sobrescrita:
 
-- **`extrair(escopos, extrator)`** — extração paralela, retorna
-  `list[TabelaExtraida]`.
-- **`aplicar_sobrescritas(tabelas, sobrescrita)`** — sobrescrita paralela,
-  retorna `BancoCurado`.
+- **`extrair(escopos, extrator, progresso=None)`** — extração paralela,
+  retorna `list[TabelaExtraida]`.
+- **`aplicar_sobrescritas(tabelas, sobrescrita, progresso=None)`** —
+  sobrescrita paralela, retorna `BancoCurado`.
+
+**Sucesso parcial (issue #16):** falha individual (listar um escopo, extrair
+ou aplicar sobrescrita numa tabela) nunca aborta o lote — vira `Aviso` no
+`Sucesso` devolvido, junto do que deu certo. `progresso`, quando informado,
+é chamado uma vez por item concluído — alimenta a barra de progresso da CLI
+sem acoplar o Port a nenhuma biblioteca de UI.
 
 `OrquestradorParalelo` (v1) implementa as duas fases com `ThreadPoolExecutor`.
 Extensão futura: `OrquestradorDistribuido` com Ray ou Celery — honrando o
@@ -206,11 +212,22 @@ precisa para funcionar. A CLI valida antes de rodar.
 
 ### 8. CLI (wizard)
 
-Conduz: escolher fonte → conectar → extrair (paralelo) → gerar skeletons →
-**pausa para curadoria** → aplicar sobrescritas → validar
-Analisadores+Geradores → analisar → escolher artefatos → confirmar → executar.
+Conduz: escolher estratégia de amostragem → escolher fonte e conectar →
+escolher escopos → extrair (paralelo) → gerar skeletons → **pausa para
+curadoria** → aplicar sobrescritas → escolher Geradores → validar
+Analisadores+Geradores → analisar → escolher destino → confirmar → executar.
+14 etapas ao todo, uma fase do pipeline por módulo em `cli/etapas/`
+(`extracao.py`, `curadoria.py`, `analise.py`, `geracao.py`) — `wizard.py`
+só orquestra a sequência.
 
-Exibe `Aviso`s em streaming por etapa concluída.
+Fontes, Analisadores, Geradores e Estratégias de amostragem são pontos de
+extensão registrados em `cli/registro/` (`EXTRATORES_REGISTRADOS`,
+`ANALISADORES_REGISTRADOS`, `GERADORES_REGISTRADOS`,
+`ESTRATEGIAS_REGISTRADAS`) — a issue #67 constrói descoberta de plugins de
+terceiros em cima desses registros, sem reabrir o wizard.
+
+Exibe `Aviso`s em streaming por etapa concluída, agrupados por origem e por
+"tipo" (`cli/avisos.py`).
 
 ## Fluxo de dados — contratos entre estágios
 
@@ -273,7 +290,12 @@ Exibe `Aviso`s em streaming por etapa concluída.
    mudam — por isso ficam separadas internamente, mas não justificam dois
    componentes distintos.
 8. **`OrquestradorDeTabelas` como `Porta` desde a v1** — trocar
-   `ThreadPoolExecutor` por Ray/Celery não altera nenhum Estagio.
+   `ThreadPoolExecutor` por Ray/Celery não altera nenhum Estagio. Estendida
+   na issue #16 com sucesso parcial (falha individual vira `Aviso`, nunca
+   aborta o lote — corrige uma regressão de resiliência real que era
+   all-or-nothing) e `progresso: Callable[[str], None] | None` opcional, para
+   o wizard mostrar progresso real durante extração/aplicação de
+   sobrescritas em paralelo.
 9. **`EstrategiaDeAmostragem` plugável via `ConfiguracaoDeExtracao`** — mudar
    estratégia de amostragem = trocar objeto injetado; nenhuma outra camada
    muda.
