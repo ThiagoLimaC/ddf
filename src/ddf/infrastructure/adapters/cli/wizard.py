@@ -30,7 +30,9 @@ _BANNER = r"""
 def executar() -> None:
     """Executa o wizard interativo do ddf, da conexão aos artefatos gerados."""
     prompts.imprimir_destacado(_BANNER, prompts.COR_DESTAQUE)
-    avisos.exibir_avisos(descoberta.descobrir_plugins())
+    avisos.exibir_avisos(
+        descoberta.descobrir_extratores() + descoberta.descobrir_geradores()
+    )
     configuracao = extracao.configurar_amostragem()
     extrator, escopos_disponiveis = extracao.conectar(configuracao)
     escopos = prompts.escolher_multiplos(

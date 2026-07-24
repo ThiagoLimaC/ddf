@@ -102,8 +102,3 @@ def descobrir_geradores(
         registrar_gerador(ponto.name, instancia, registro)
 
     return _descobrir("ddf.geradores", carregar, entry_points_fn)
-
-
-def descobrir_plugins() -> list[Aviso]:
-    """Descobre Extratores e Geradores de terceiro registrados via entry points."""
-    return descobrir_extratores() + descobrir_geradores()
