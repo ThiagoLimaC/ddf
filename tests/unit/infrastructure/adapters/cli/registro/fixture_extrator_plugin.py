@@ -1,8 +1,7 @@
 """Fixtures de plugin de Extrator (válido/inválido), usadas só em test_descoberta."""
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
-from ddf.domain.ports.extrator import Extrator
-from ddf.infrastructure.adapters.cli.registro.extratores import ExtratorRegistrado
+from ddf.domain.ports.extrator import Extrator, ExtratorRegistrado
 
 
 class ExtratorPluginFake:

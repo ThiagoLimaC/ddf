@@ -10,15 +10,13 @@ from tests.unit.infrastructure.adapters.cli.registro.fixture_gerador_plugin impo
     GeradorPluginFake,
 )
 
+from ddf.domain.ports.extrator import ExtratorRegistrado
 from ddf.domain.ports.gerador import Gerador
 from ddf.infrastructure.adapters.cli.registro.descoberta import (
     descobrir_extratores,
     descobrir_geradores,
 )
-from ddf.infrastructure.adapters.cli.registro.extratores import (
-    EXTRATORES_REGISTRADOS,
-    ExtratorRegistrado,
-)
+from ddf.infrastructure.adapters.cli.registro.extratores import EXTRATORES_REGISTRADOS
 from ddf.infrastructure.adapters.cli.registro.geradores import GERADORES_REGISTRADOS
 
 _MODULO_FIXTURE_EXTRATOR = (

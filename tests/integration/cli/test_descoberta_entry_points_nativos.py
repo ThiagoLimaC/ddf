@@ -10,9 +10,9 @@ sem o underscore), que quebraria só em runtime — nenhum `mypy`/`ruff`
 pega esse tipo de erro, já que o valor é uma string opaca no TOML.
 """
 
+from ddf.domain.ports.extrator import ExtratorRegistrado
 from ddf.domain.ports.gerador import Gerador
 from ddf.infrastructure.adapters.cli.registro import descoberta
-from ddf.infrastructure.adapters.cli.registro.extratores import ExtratorRegistrado
 
 
 def test_entry_points_nativos_resolvem_sem_avisos() -> None:

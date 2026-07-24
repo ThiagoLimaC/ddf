@@ -510,6 +510,25 @@ class Extrator(Protocol):
   manda mais essa string específica como contrato).
 - `Falha("Não foi possível conectar: <detalhe>")` se conexão recusada.
 
+**`ExtratorRegistrado` (issue #67)** — dataclass frozen, também em
+`domain/ports/extrator.py` e reexportada em `domain/ports/__init__.py`:
+
+```python
+@dataclass(frozen=True)
+class ExtratorRegistrado:
+    classe_extrator: type[Extrator]
+    construir: Callable[[ConfiguracaoDeExtracao], Extrator]
+```
+
+É o alvo do entry point do grupo `ddf.extratores` (`cli/registro/descoberta.py`)
+— um plugin de terceiro expõe uma instância pronta deste tipo, não só a
+classe do Extrator, porque o construtor de um Extrator concreto
+normalmente precisa perguntar credenciais/parâmetros específicos da fonte
+de forma interativa (`construir` encapsula isso). Faz parte do contrato
+público versionado junto de `Extrator` (ver seção de versionamento
+semântico em `docs/engineer_guidelines.md`) — não é um detalhe interno de
+CLI, mesmo sendo consumido primeiro por `cli/registro/extratores.py`.
+
 ---
 
 ### `Analisador`
@@ -1366,19 +1385,12 @@ erro (`"Estratégia '...' já está registrada"` vs. `"Extrator '...' já está
 registrado"`).
 
 **`registro/extratores.py`** — o único registro cujo valor carrega também o
-construtor interativo (`ExtratorRegistrado.construir`), porque construir um
+construtor interativo (`ExtratorRegistrado.construir`, definida em
+`domain/ports/extrator.py`, ver seção Ports acima), porque construir um
 `Extrator` exige perguntar credenciais específicas da fonte:
 
 ```python
-@dataclass(frozen=True)
-class ExtratorRegistrado:
-    classe_extrator: type[Extrator]
-    construir: Callable[[ConfiguracaoDeExtracao], Extrator]
-
-EXTRATORES_REGISTRADOS: dict[str, ExtratorRegistrado] = {
-    "PostgreSQL": ExtratorRegistrado(ExtratorPostgres, _construir_extrator_postgres),
-    "MariaDB": ExtratorRegistrado(ExtratorMariaDB, _construir_extrator_mariadb),
-}
+EXTRATORES_REGISTRADOS: dict[str, ExtratorRegistrado] = {}
 
 def registrar_extrator(
     nome: str,
@@ -1386,7 +1398,16 @@ def registrar_extrator(
     construir: Callable[[ConfiguracaoDeExtracao], Extrator],
     registro: dict[str, ExtratorRegistrado] = EXTRATORES_REGISTRADOS,
 ) -> None: ...
+
+_REGISTRO_POSTGRES = ExtratorRegistrado(ExtratorPostgres, _construir_extrator_postgres)
+_REGISTRO_MARIADB = ExtratorRegistrado(ExtratorMariaDB, _construir_extrator_mariadb)
 ```
+
+Desde a issue #67, `PostgreSQL`/`MariaDB` não populam
+`EXTRATORES_REGISTRADOS` por chamada direta — `_REGISTRO_POSTGRES`/
+`_REGISTRO_MARIADB` só existem como alvo dos entry points declarados em
+`pyproject.toml`; quem popula o dict é `registro/descoberta.py`, chamado
+por `wizard.py` (ver seção "Descoberta de plugins" acima).
 
 **`registro/estrategias.py`** — mesma forma (`EstrategiaRegistrada` com
 `classe_estrategia` + `construir`), para `EstrategiaDeAmostragem`. Só

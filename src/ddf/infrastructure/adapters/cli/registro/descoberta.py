@@ -9,12 +9,11 @@ Analysis.
 from collections.abc import Callable, Iterable
 from importlib.metadata import EntryPoint, entry_points
 
-from ddf.domain.ports.extrator import Extrator
+from ddf.domain.ports.extrator import Extrator, ExtratorRegistrado
 from ddf.domain.ports.gerador import Gerador
 from ddf.domain.shared.aviso import Aviso
 from ddf.infrastructure.adapters.cli.registro.extratores import (
     EXTRATORES_REGISTRADOS,
-    ExtratorRegistrado,
     registrar_extrator,
 )
 from ddf.infrastructure.adapters.cli.registro.geradores import (

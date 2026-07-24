@@ -106,6 +106,22 @@ Analisador de terceiro.
 - [x] **Nice-to-have:** `docs/low_level_design.md` não cobria a mecânica
       de `ExtratorRegistrado`/entry points — nota adicionada na seção CLI.
 
+## Achados da revisão final (banca completa, antes do PR)
+
+- [x] **Sugestão do arquiteto-de-software:** `ExtratorRegistrado` vivia em
+      `cli/registro/extratores.py` (infraestrutura de CLI), não em
+      `domain/ports` — um plugin de terceiro dependia de um tipo não
+      versionado pela política de semver, quebra silenciosa possível.
+      Movida para `domain/ports/extrator.py`, reexportada em
+      `domain/ports/__init__.py`, incluída explicitamente na política de
+      semver (`engineer_guidelines.md`) e documentada em
+      `low_level_design.md`. Todos os imports em testes atualizados para
+      o caminho público (`ddf.domain.ports.extrator`/`ddf.domain.ports`).
+      `mypy --strict`/`ruff` limpos, 351 testes verdes.
+- po-revisor e engenheiro-de-dados: **aprovados sem bloqueantes** na
+  rodada de revisão da banca completa (arquiteto + PO + engenheiro de
+  dados) sobre o diff final contra `development`.
+
 ## Status
 
 Escopo de código, documentação e os 4 achados da revisão arquitetural

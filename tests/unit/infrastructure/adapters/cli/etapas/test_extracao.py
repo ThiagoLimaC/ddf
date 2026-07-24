@@ -6,10 +6,10 @@ import pytest
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.model.extraction import TabelaExtraida
+from ddf.domain.ports.extrator import ExtratorRegistrado
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.cli.etapas import extracao
 from ddf.infrastructure.adapters.cli.registro.estrategias import EstrategiaRegistrada
-from ddf.infrastructure.adapters.cli.registro.extratores import ExtratorRegistrado
 from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
     PercentualDeLinhas,
 )

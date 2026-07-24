@@ -8,10 +8,9 @@ chamada direta — são descobertos via entry points do grupo "ddf.extratores"
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
-from ddf.domain.ports.extrator import Extrator
+from ddf.domain.ports.extrator import Extrator, ExtratorRegistrado
 from ddf.infrastructure.adapters.cli import prompts
 from ddf.infrastructure.adapters.cli.registro.comum import registrar_ou_falhar
 from ddf.infrastructure.adapters.extractors.mariadb.extrator_mariadb import (
@@ -20,15 +19,6 @@ from ddf.infrastructure.adapters.extractors.mariadb.extrator_mariadb import (
 from ddf.infrastructure.adapters.extractors.postgres.extrator_postgres import (
     ExtratorPostgres,
 )
-
-
-@dataclass(frozen=True)
-class ExtratorRegistrado:
-    """Um Extrator registrado, junto da função que sabe construí-lo interativamente."""
-
-    classe_extrator: type[Extrator]
-    construir: Callable[[ConfiguracaoDeExtracao], Extrator]
-
 
 EXTRATORES_REGISTRADOS: dict[str, ExtratorRegistrado] = {}
 
