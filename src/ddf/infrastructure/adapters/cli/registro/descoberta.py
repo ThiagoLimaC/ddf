@@ -12,8 +12,15 @@ from importlib.metadata import EntryPoint, entry_points
 from ddf.domain.ports.extrator import Extrator
 from ddf.domain.ports.gerador import Gerador
 from ddf.domain.shared.aviso import Aviso
-from ddf.infrastructure.adapters.cli.registro.extratores import registrar_extrator
-from ddf.infrastructure.adapters.cli.registro.geradores import registrar_gerador
+from ddf.infrastructure.adapters.cli.registro.extratores import (
+    EXTRATORES_REGISTRADOS,
+    ExtratorRegistrado,
+    registrar_extrator,
+)
+from ddf.infrastructure.adapters.cli.registro.geradores import (
+    GERADORES_REGISTRADOS,
+    registrar_gerador,
+)
 
 _ORIGEM = "descoberta-de-plugins"
 
@@ -47,6 +54,7 @@ def _descobrir(
 
 def descobrir_extratores(
     entry_points_fn: Callable[..., Iterable[EntryPoint]] = entry_points,
+    registro: dict[str, ExtratorRegistrado] = EXTRATORES_REGISTRADOS,
 ) -> list[Aviso]:
     """Descobre Extratores via entry points do grupo "ddf.extratores".
 
@@ -55,6 +63,8 @@ def descobrir_extratores(
 
     Args:
         entry_points_fn: ver `_descobrir`.
+        registro: Dicionário onde o Extrator é registrado. Usa
+            EXTRATORES_REGISTRADOS por padrão.
     """
 
     def carregar(ponto: EntryPoint) -> None:
@@ -63,13 +73,16 @@ def descobrir_extratores(
             raise TypeError(
                 f"'{registrado.classe_extrator}' não satisfaz o Protocol Extrator"
             )
-        registrar_extrator(ponto.name, registrado.classe_extrator, registrado.construir)
+        registrar_extrator(
+            ponto.name, registrado.classe_extrator, registrado.construir, registro
+        )
 
     return _descobrir("ddf.extratores", carregar, entry_points_fn)
 
 
 def descobrir_geradores(
     entry_points_fn: Callable[..., Iterable[EntryPoint]] = entry_points,
+    registro: dict[str, Gerador] = GERADORES_REGISTRADOS,
 ) -> list[Aviso]:
     """Descobre Geradores via entry points do grupo "ddf.geradores".
 
@@ -78,13 +91,15 @@ def descobrir_geradores(
 
     Args:
         entry_points_fn: ver `_descobrir`.
+        registro: Dicionário onde o Gerador é registrado. Usa
+            GERADORES_REGISTRADOS por padrão.
     """
 
     def carregar(ponto: EntryPoint) -> None:
         instancia = ponto.load()()
         if not isinstance(instancia, Gerador):
             raise TypeError(f"'{instancia}' não satisfaz o Protocol Gerador")
-        registrar_gerador(ponto.name, instancia)
+        registrar_gerador(ponto.name, instancia, registro)
 
     return _descobrir("ddf.geradores", carregar, entry_points_fn)
 
