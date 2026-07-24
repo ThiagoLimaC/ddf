@@ -1,12 +1,13 @@
-"""Registro de Geradores disponíveis para o wizard da CLI."""
+"""Registro de Geradores disponíveis para o wizard da CLI.
+
+Os Geradores nativos (Markdown/Dbt/ContextoDeIA) não se registram aqui por
+chamada direta — são descobertos via entry points do grupo "ddf.geradores"
+(declarados em `pyproject.toml`), a mesma via de um plugin de terceiro. Ver
+`cli/registro/descoberta.py`.
+"""
 
 from ddf.domain.ports.gerador import Gerador
 from ddf.infrastructure.adapters.cli.registro.comum import registrar_ou_falhar
-from ddf.infrastructure.adapters.generators.gerador_contexto_de_ia import (
-    GeradorContextoDeIA,
-)
-from ddf.infrastructure.adapters.generators.gerador_dbt import GeradorDbt
-from ddf.infrastructure.adapters.generators.gerador_markdown import GeradorMarkdown
 
 GERADORES_REGISTRADOS: dict[str, Gerador] = {}
 
@@ -28,8 +29,3 @@ def registrar_gerador(
             GERADORES_REGISTRADOS por padrão.
     """
     registrar_ou_falhar(nome, "Gerador", gerador, registro)
-
-
-registrar_gerador("Markdown", GeradorMarkdown())
-registrar_gerador("Dbt", GeradorDbt())
-registrar_gerador("ContextoDeIA", GeradorContextoDeIA())

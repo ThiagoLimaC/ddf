@@ -1,9 +1,13 @@
 """Registro de Analisadores disponíveis para o wizard da CLI.
 
-Ponto de extensão manipulado só por quem desenvolve o ddf (ou por um
-plugin de terceiro, via a descoberta que a issue #67 constrói em cima
-deste registro) — nunca exposto em nenhum menu do wizard, que sempre roda
-todos os Analisadores registrados, sem seleção do usuário.
+Ponto de extensão manipulado só por quem desenvolve o ddf — nunca exposto
+em nenhum menu do wizard, que sempre roda todos os Analisadores
+registrados, sem seleção do usuário. Ao contrário de Extrator/Gerador,
+deliberadamente **não** entra na descoberta via entry points construída na
+issue #67: Analisador é a ACL entre Curation e Analysis (`CLAUDE.md`), e
+abrir descoberta automática de terceiro pra ele rodaria código de qualquer
+pacote instalado no venv em toda execução, sem o usuário ter pedido (ver
+`plan/registry-plan/issue-67-*.md`).
 """
 
 from ddf.domain.ports.analisador import Analisador
@@ -29,8 +33,8 @@ def registrar_analisador(
 
     Args:
         nome: identificador interno do Analisador no registro — nunca
-            exibido em nenhum menu do wizard; existe para descoberta futura
-            via entry points e para mensagens de log/erro.
+            exibido em nenhum menu do wizard; existe para mensagens de
+            log/erro.
         analisador: instância do Analisador (construtor sem argumentos).
         registro: Dicionário onde o Analisador é registrado. Usa
             ANALISADORES_REGISTRADOS por padrão.
