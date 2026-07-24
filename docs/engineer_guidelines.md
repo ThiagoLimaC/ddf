@@ -127,6 +127,28 @@ um tipo ou componente próprio.
 - Um `Estagio` que não implementa o `Protocol` correspondente não compila
   contra `compor()` — verificado por `mypy --strict`.
 
+### Versionamento semântico de `domain/ports/extrator.py`/`gerador.py`
+
+Desde a issue #67, `Extrator` e `Gerador` são reexportados em
+`domain/ports/__init__.py` como caminho de import público — plugins de
+terceiro (`pip install ddf`, descoberta via `importlib.metadata.entry_points`)
+compilam contra esse contrato. Mudanças nesses dois Protocols seguem semver:
+
+- **Major (breaking):** remover/renomear um método ou atributo, mudar
+  assinatura de método existente (tipo de parâmetro, retorno, tornar
+  positional-only um parâmetro que não era) — qualquer coisa que quebre um
+  plugin já compilado contra a versão anterior.
+- **Minor:** adicionar um método/atributo opcional ao Protocol, ou um novo
+  Protocol em `domain/ports/`.
+- **Patch:** correção de docstring, tipo mais preciso que não muda o
+  contrato observável (ex.: `list[X]` → `Sequence[X]` quando só estreita).
+
+`Analisador` fica de fora dessa política — não é reexportado em
+`domain/ports/__init__.py` nem é ponto de extensão de terceiro nesta issue
+(ver `plan/registry-plan/issue-67-*.md`): é a ACL entre Curation e Analysis,
+e todo Analisador registrado roda incondicionalmente em toda execução, sem
+seleção do usuário. Mudá-lo continua sendo refactor interno normal.
+
 ### Parâmetros de Port são positional-only
 
 Todo método de `Protocol` em `domain/ports/` que recebe parâmetros além de
