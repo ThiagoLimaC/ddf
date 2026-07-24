@@ -16,7 +16,8 @@ curva (tempo x percentual), que é o que a hipótese prevê.
 Não roda por padrão (`pytest -m 'not benchmark'` no addopts). Rodar
 explicitamente:
 
-    uv run pytest -m benchmark -s tests/integration/extractors/postgres/test_extrator_postgres_benchmark_1m_linhas.py
+    uv run pytest -m benchmark -s \
+        tests/integration/extractors/postgres/test_extrator_postgres_benchmark_1m_linhas.py
 """
 
 import time
