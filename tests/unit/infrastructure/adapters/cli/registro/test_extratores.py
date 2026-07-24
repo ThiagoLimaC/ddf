@@ -3,10 +3,9 @@
 import pytest
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
-from ddf.domain.ports.extrator import Extrator
+from ddf.domain.ports.extrator import Extrator, ExtratorRegistrado
 from ddf.infrastructure.adapters.cli.registro.extratores import (
     EXTRATORES_REGISTRADOS,
-    ExtratorRegistrado,
     registrar_extrator,
 )
 

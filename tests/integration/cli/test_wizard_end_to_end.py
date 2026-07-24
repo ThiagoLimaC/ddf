@@ -17,9 +17,9 @@ from click.testing import CliRunner
 from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
+from ddf.domain.ports.extrator import ExtratorRegistrado
 from ddf.domain.shared.resultado import Resultado, Sucesso
 from ddf.infrastructure.adapters.cli.etapas import extracao
-from ddf.infrastructure.adapters.cli.registro.extratores import ExtratorRegistrado
 from ddf.infrastructure.adapters.cli.wizard import executar
 
 
