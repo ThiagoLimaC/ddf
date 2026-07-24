@@ -5,8 +5,9 @@ from pathlib import Path
 
 import click
 
-from ddf.infrastructure.adapters.cli import prompts
+from ddf.infrastructure.adapters.cli import avisos, prompts
 from ddf.infrastructure.adapters.cli.etapas import analise, curadoria, extracao, geracao
+from ddf.infrastructure.adapters.cli.registro import descoberta
 from ddf.infrastructure.adapters.orchestrator.orquestrador_paralelo import (
     OrquestradorParalelo,
 )
@@ -29,6 +30,7 @@ _BANNER = r"""
 def executar() -> None:
     """Executa o wizard interativo do ddf, da conexão aos artefatos gerados."""
     prompts.imprimir_destacado(_BANNER, prompts.COR_DESTAQUE)
+    avisos.exibir_avisos(descoberta.descobrir_plugins())
     configuracao = extracao.configurar_amostragem()
     extrator, escopos_disponiveis = extracao.conectar(configuracao)
     escopos = prompts.escolher_multiplos(
