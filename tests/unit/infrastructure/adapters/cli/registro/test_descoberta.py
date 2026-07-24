@@ -1,4 +1,4 @@
-"""Testes de descobrir_extratores/descobrir_geradores/descobrir_plugins."""
+"""Testes de descobrir_extratores/descobrir_geradores."""
 
 from collections.abc import Iterable
 from importlib.metadata import EntryPoint

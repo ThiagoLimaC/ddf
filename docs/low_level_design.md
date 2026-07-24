@@ -1214,17 +1214,45 @@ cli/
 │   ├── curadoria.py     # etapas 6-8: skeletons, pausa, aplicar sobrescritas
 │   ├── analise.py       # etapas 9-11: escolher Geradores, validar, analisar
 │   └── geracao.py       # etapas 12-14: destino, confirmar, executar
-└── registro/            # pontos de extensão (issue #67 constrói descoberta em cima)
+└── registro/            # pontos de extensão
     ├── comum.py          # registrar_ou_falhar — compartilhado pelos 4 abaixo
-    ├── extratores.py      # EXTRATORES_REGISTRADOS
+    ├── extratores.py      # EXTRATORES_REGISTRADOS (registro só via entry point, issue #67)
     ├── estrategias.py      # ESTRATEGIAS_REGISTRADAS
-    ├── analisadores.py      # ANALISADORES_REGISTRADOS (não exposto no wizard)
-    └── geradores.py          # GERADORES_REGISTRADOS
+    ├── analisadores.py      # ANALISADORES_REGISTRADOS (não exposto no wizard, fora de #67)
+    ├── geradores.py          # GERADORES_REGISTRADOS (registro só via entry point, issue #67)
+    └── descoberta.py          # descobrir_extratores/descobrir_geradores (issue #67)
 ```
 
-Direção de dependência: `wizard.py` só importa `prompts`, `etapas.*` e o
-orquestrador — nunca `registro.*` diretamente. Cada módulo de `etapas/`
-depende de `avisos`/`prompts`/`registro.*`, nunca o contrário.
+Direção de dependência: `wizard.py` importa `prompts`, `etapas.*`, o
+orquestrador e `registro.descoberta` (só para disparar a descoberta de
+plugins no início de `executar()`, ver abaixo) — não importa os demais
+módulos de `registro.*` diretamente. Cada módulo de `etapas/` depende de
+`avisos`/`prompts`/`registro.*`, nunca o contrário.
+
+### Descoberta de plugins (`cli/registro/descoberta.py`, issue #67)
+
+`Extrator` e `Gerador` são reexportados em `domain/ports/__init__.py` como
+caminho de import público; plugins de terceiro (`pip install ddf` +
+`entry_points(group="ddf.extratores"/"ddf.geradores")`) e os próprios
+adapters nativos (declarados em `pyproject.toml`, sem distinção) são
+descobertos por `descobrir_extratores`/`descobrir_geradores`, chamadas em
+`wizard.py` antes de qualquer etapa. Cada uma isola falha por entry point
+(import quebrado, classe fora do Protocol, nome duplicado) como `Aviso`,
+sem derrubar a descoberta das demais.
+
+- Entry point de `ddf.extratores` aponta para uma instância pronta de
+  `ExtratorRegistrado` (classe + função `construir` interativa) — não dá
+  pra genericizar o construtor de um Extrator (DSN do Postgres vs.
+  host/porta/usuário/senha do MariaDB).
+- Entry point de `ddf.geradores` aponta direto para a classe (construtor
+  sem argumentos, mesmo padrão de `Analisador`).
+- `Analisador` **não** entra nesse mecanismo — é a ACL entre Curation e
+  Analysis, e todo Analisador registrado roda incondicionalmente em toda
+  execução, sem seleção do usuário (diferente de Extrator/Gerador,
+  escolhidos em menus do wizard). `cli/registro/analisadores.py` continua
+  com registro nativo por chamada direta no import. Ver
+  `plan/registry-plan/issue-67-*.md` e a seção de versionamento semântico
+  em `docs/engineer_guidelines.md`.
 
 ### `wizard.py`
 
