@@ -65,6 +65,6 @@
 {% endif %}
 ---
 
-*Amostragem: estratégia `{{ tabela.metadados_amostra.estrategia }}`, {{ tabela.metadados_amostra.tamanho_amostra }} linhas amostradas de {{ tabela.total_linhas }} no total — métricas de coluna são estimativas sobre a amostra, não o dado completo.*
+*Amostragem: estratégia `{{ tabela.metadados_amostra.estrategia }}`{% if tabela.metadados_amostra.percentual is not none %} ({{ tabela.metadados_amostra.percentual }}%){% endif %}{% if tabela.metadados_amostra.seed is not none %}, seed `{{ tabela.metadados_amostra.seed }}`{% endif %}, {{ tabela.metadados_amostra.tamanho_amostra }} linhas amostradas de {{ tabela.total_linhas }} no total — métricas de coluna são estimativas sobre a amostra, não o dado completo.*
 
 *Gerado em: {{ gerado_em }}*

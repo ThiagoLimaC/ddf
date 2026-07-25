@@ -65,6 +65,47 @@ def test_caminho_feliz_gera_um_md_por_tabela_e_index(
     assert posicao_estoque < posicao_vendas
 
 
+def test_rodape_mostra_percentual_e_seed_quando_presentes(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """percentual/seed efetivos aparecem no rodapé de amostragem do .md."""
+    tabela = construir_tabela(
+        colunas=[construir_coluna()],
+        nome_tabela="pedidos",
+        percentual=10.0,
+        seed=42,
+    )
+    banco = construir_banco([tabela])
+
+    resultado = GeradorMarkdown()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    conteudo = (tmp_path / "escopo" / "pedidos.md").read_text()
+    assert "(10.0%)" in conteudo
+    assert "seed `42`" in conteudo
+
+
+def test_rodape_omite_percentual_e_seed_em_full_scan(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Sem percentual/seed configurados (ex.: full_scan), o rodapé não os menciona."""
+    tabela = construir_tabela(colunas=[construir_coluna()], nome_tabela="pedidos")
+    banco = construir_banco([tabela])
+
+    resultado = GeradorMarkdown()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    conteudo = (tmp_path / "escopo" / "pedidos.md").read_text()
+    assert "seed" not in conteudo
+    assert "%)" not in conteudo
+
+
 def test_index_e_tabela_registram_generated_at(
     tmp_path: Path,
     construir_coluna: Callable[..., ColunaAnalisada],

@@ -120,7 +120,9 @@ def test_wizard_fluxo_completo_com_extrator_fake(
     )
     monkeypatch.setattr(
         "questionary.text",
-        _fila_de_respostas(["10", str(diretorio_overrides), str(destino)]),
+        _fila_de_respostas(
+            ["10", "", str(diretorio_overrides), str(destino)]
+        ),
     )
     monkeypatch.setattr(
         "questionary.checkbox", _fila_de_respostas([["public"], ["Markdown"]])

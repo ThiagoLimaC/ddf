@@ -35,14 +35,10 @@ def test_registrar_estrategia_em_registro_isolado_nao_afeta_o_global() -> None:
     """Caminho feliz: registro isolado recebe a estratégia, o global não muda."""
     registro_de_teste: dict[str, EstrategiaRegistrada] = {}
 
-    registrar_estrategia(
-        "Fake", EstrategiaFake, _construir_fake, registro=registro_de_teste
-    )
+    registrar_estrategia("Fake", _construir_fake, registro=registro_de_teste)
 
     assert registro_de_teste == {
-        "Fake": EstrategiaRegistrada(
-            classe_estrategia=EstrategiaFake, construir=_construir_fake
-        )
+        "Fake": EstrategiaRegistrada(construir=_construir_fake)
     }
     assert "Fake" not in ESTRATEGIAS_REGISTRADAS
 
@@ -51,18 +47,12 @@ def test_registrar_estrategia_em_registro_isolado_nao_afeta_o_global() -> None:
 def test_registrar_estrategia_com_nome_duplicado_falha() -> None:
     """Erro esperado: nome já registrado levanta ValueError, sem sobrescrever."""
     registro_de_teste: dict[str, EstrategiaRegistrada] = {
-        "Fake": EstrategiaRegistrada(
-            classe_estrategia=EstrategiaFake, construir=_construir_fake
-        )
+        "Fake": EstrategiaRegistrada(construir=_construir_fake)
     }
 
     with pytest.raises(ValueError, match="Fake"):
-        registrar_estrategia(
-            "Fake", EstrategiaFake, _construir_fake, registro=registro_de_teste
-        )
+        registrar_estrategia("Fake", _construir_fake, registro=registro_de_teste)
 
     assert registro_de_teste == {
-        "Fake": EstrategiaRegistrada(
-            classe_estrategia=EstrategiaFake, construir=_construir_fake
-        )
+        "Fake": EstrategiaRegistrada(construir=_construir_fake)
     }
