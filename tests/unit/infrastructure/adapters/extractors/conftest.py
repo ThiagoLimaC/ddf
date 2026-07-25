@@ -2,6 +2,7 @@
 
 import pytest
 
+from ddf.domain.model.common.requisicao_de_amostragem import AmostragemIntegral
 from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
     PercentualDeLinhas,
 )
@@ -11,3 +12,27 @@ from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
 def percentual_de_linhas() -> PercentualDeLinhas:
     """Retorna um PercentualDeLinhas com percentual padrão de 10%."""
     return PercentualDeLinhas(percentual=10.0)
+
+
+class _EstrategiaIntegralFake:
+    """EstrategiaDeAmostragem fake que pede AmostragemIntegral.
+
+    Usada só nos testes de Extrator (dispatch exaustivo) — a FullScan
+    pública, registrada no wizard, é implementada e testada à parte.
+    """
+
+    @property
+    def nome(self) -> str:
+        """Retorna o identificador fixo 'fake_integral'."""
+        return "fake_integral"
+
+    @property
+    def requisicao(self) -> AmostragemIntegral:
+        """Retorna AmostragemIntegral() — sem parâmetros."""
+        return AmostragemIntegral()
+
+
+@pytest.fixture
+def estrategia_integral() -> _EstrategiaIntegralFake:
+    """Retorna uma EstrategiaDeAmostragem fake que pede AmostragemIntegral."""
+    return _EstrategiaIntegralFake()

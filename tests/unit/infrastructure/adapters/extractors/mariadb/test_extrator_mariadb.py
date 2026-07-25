@@ -434,6 +434,78 @@ def test_amostra_maior_que_total_linhas_emite_aviso(
     assert "maior que total_linhas" in resultado.avisos[0].mensagem
 
 
+def test_amostragem_integral_usa_tamanho_da_amostra_como_total_linhas(
+    pool_classe_fake: MagicMock, configuracao_integral: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: em AmostragemIntegral, total_linhas vira len(amostra), não TABLE_ROWS.
+
+    A estimativa de catálogo (3, propositalmente diferente do tamanho real
+    da amostra) nunca aparece no resultado nem gera Aviso — em full scan a
+    tabela inteira já foi lida, então a divergência é estruturalmente
+    impossível.
+    """
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.side_effect = [
+        [("id", "int", "int(11)", None, None, None, "NO")],  # colunas
+        [("id",)],  # PK
+        [],  # FK
+        [],  # UNIQUE
+        [],  # JSON
+        [(1,), (2,), (3,), (4,), (5,)],  # amostra — 5 linhas, a tabela inteira
+    ]
+    cursor_fake.fetchone.return_value = (3,)  # total_linhas de catálogo, desatualizado
+    cursor_fake.description = [("id",)]
+    pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+    extrator = ExtratorMariaDB(
+        host="fake", user="root", password="senha", configuracao=configuracao_integral
+    )
+    resultado = extrator.extrair_tabela("vendas", "tabela")
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor.total_linhas == 5
+    assert resultado.valor.metadados_amostra.tamanho_amostra == 5
+    assert resultado.valor.metadados_amostra.percentual is None
+    assert resultado.valor.metadados_amostra.seed is None
+    assert resultado.avisos == []
+    consulta_amostra = cursor_fake.execute.call_args_list[-1].args[0]
+    assert "RAND" not in consulta_amostra
+
+
+def test_percentual_de_linhas_sem_seed_gera_e_registra_um_seed(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: sem seed do usuário, o Extrator gera um e registra em MetadadosDeAmostra.
+
+    Reprodutibilidade não é opt-in silencioso — mesmo sem seed explícito, a
+    amostra usa RAND(seed) com um valor concreto, nunca deixando o MariaDB
+    escolher em silêncio.
+    """
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.side_effect = [
+        [("id", "int", "int(11)", None, None, None, "NO")],  # colunas
+        [("id",)],  # PK
+        [],  # FK
+        [],  # UNIQUE
+        [],  # JSON
+        [(1,)],  # amostra
+    ]
+    cursor_fake.fetchone.return_value = (100,)  # total_linhas
+    cursor_fake.description = [("id",)]
+    pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+    extrator = ExtratorMariaDB(
+        host="fake", user="root", password="senha", configuracao=configuracao
+    )
+    resultado = extrator.extrair_tabela("vendas", "tabela")
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor.metadados_amostra.seed is not None
+    assert isinstance(resultado.valor.metadados_amostra.seed, int)
+
+
 def test_tinyint_um_com_valor_atipico_na_amostra_mantem_integer(
     pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
 ) -> None:
