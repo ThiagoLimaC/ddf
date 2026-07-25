@@ -1,0 +1,88 @@
+"""Testes de construir_metadados_de_amostra."""
+
+from ddf.domain.model.common.requisicao_de_amostragem import (
+    AmostragemIntegral,
+    AmostragemProbabilistica,
+)
+from ddf.infrastructure.adapters.extractors.construir_metadados_de_amostra import (
+    construir_metadados_de_amostra,
+)
+
+# Caminho feliz
+
+
+def test_amostragem_probabilistica_registra_percentual_e_seed() -> None:
+    """Caminho feliz: percentual/seed efetivos ficam em MetadadosDeAmostra."""
+    metadados, avisos = construir_metadados_de_amostra(
+        nome="percentual_de_linhas",
+        requisicao=AmostragemProbabilistica(percentual=10.0, seed=42),
+        tamanho_amostra=1_000,
+        total_linhas=10_000,
+        origem="ExtratorFake",
+        causa_provavel="sem ANALYZE recente",
+    )
+
+    assert metadados.estrategia == "percentual_de_linhas"
+    assert metadados.tamanho_amostra == 1_000
+    assert metadados.percentual == 10.0
+    assert metadados.seed == 42
+    assert avisos == []
+
+
+def test_amostragem_integral_nao_registra_percentual_nem_seed() -> None:
+    """Caminho feliz: full_scan não tem política probabilística — ambos None."""
+    metadados, avisos = construir_metadados_de_amostra(
+        nome="full_scan",
+        requisicao=AmostragemIntegral(),
+        tamanho_amostra=10_000,
+        total_linhas=10_000,
+        origem="ExtratorFake",
+        causa_provavel="sem ANALYZE recente",
+    )
+
+    assert metadados.percentual is None
+    assert metadados.seed is None
+    assert avisos == []
+
+
+# Erro esperado — não se aplica: função pura, sem I/O, sem exceção esperada.
+
+
+# Borda
+
+
+def test_amostra_maior_que_total_linhas_emite_aviso() -> None:
+    """Borda: amostra maior que a estimativa de catálogo gera Aviso não-fatal."""
+    _metadados, avisos = construir_metadados_de_amostra(
+        nome="percentual_de_linhas",
+        requisicao=AmostragemProbabilistica(percentual=100.0),
+        tamanho_amostra=12_000,
+        total_linhas=10_000,
+        origem="ExtratorFake",
+        causa_provavel="sem ANALYZE recente",
+    )
+
+    assert len(avisos) == 1
+    assert avisos[0].origem == "ExtratorFake"
+    assert "12000" in avisos[0].mensagem
+    assert "10000" in avisos[0].mensagem
+    assert "sem ANALYZE recente" in avisos[0].mensagem
+
+
+def test_amostragem_integral_nunca_diverge_de_total_linhas() -> None:
+    """Borda: quando o chamador passa total_linhas=len(amostra), nunca há Aviso.
+
+    Reflete o invariante real do Extrator: em AmostragemIntegral, total_linhas
+    É o tamanho da amostra (mesma variável) — não um caso especial tratado
+    aqui dentro.
+    """
+    _metadados, avisos = construir_metadados_de_amostra(
+        nome="full_scan",
+        requisicao=AmostragemIntegral(),
+        tamanho_amostra=10_000,
+        total_linhas=10_000,
+        origem="ExtratorFake",
+        causa_provavel="sem ANALYZE recente",
+    )
+
+    assert avisos == []

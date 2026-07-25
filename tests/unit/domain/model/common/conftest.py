@@ -3,6 +3,7 @@
 import pytest
 
 from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
+from ddf.domain.model.common.requisicao_de_amostragem import AmostragemProbabilistica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 
 
@@ -27,9 +28,9 @@ class EstrategiaFake:
         return "fake"
 
     @property
-    def percentual(self) -> float:
-        """Retorna um percentual fixo de 1%."""
-        return 1.0
+    def requisicao(self) -> AmostragemProbabilistica:
+        """Retorna uma AmostragemProbabilistica fixa de 1%."""
+        return AmostragemProbabilistica(percentual=1.0)
 
 
 @pytest.fixture

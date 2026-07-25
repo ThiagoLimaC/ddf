@@ -2,6 +2,7 @@
 
 import pytest
 
+from ddf.domain.model.common.requisicao_de_amostragem import AmostragemProbabilistica
 from ddf.domain.ports.estrategia_de_amostragem import EstrategiaDeAmostragem
 from ddf.infrastructure.adapters.cli.registro.estrategias import (
     ESTRATEGIAS_REGISTRADAS,
@@ -19,9 +20,9 @@ class EstrategiaFake:
         return "fake"
 
     @property
-    def percentual(self) -> float:
+    def requisicao(self) -> AmostragemProbabilistica:
         """Não é exercitado por registrar_estrategia — não precisa de corpo real."""
-        return 10.0
+        return AmostragemProbabilistica(percentual=10.0)
 
 
 def _construir_fake() -> EstrategiaDeAmostragem:
