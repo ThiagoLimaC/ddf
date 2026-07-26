@@ -440,7 +440,7 @@ def test_amostragem_integral_usa_tamanho_da_amostra_como_total_linhas(
     """Borda: em AmostragemIntegral, total_linhas vira len(amostra), não TABLE_ROWS.
 
     A estimativa de catálogo (3, propositalmente diferente do tamanho real
-    da amostra) nunca aparece no resultado nem gera Aviso — em full scan a
+    da amostra) nunca aparece no resultado nem gera Aviso — em tabela inteira a
     tabela inteira já foi lida, então a divergência é estruturalmente
     impossível.
     """

@@ -21,7 +21,7 @@ def configuracao() -> ConfiguracaoDeExtracao:
 def configuracao_integral(
     estrategia_integral: EstrategiaDeAmostragem,
 ) -> ConfiguracaoDeExtracao:
-    """Retorna uma ConfiguracaoDeExtracao que pede AmostragemIntegral (full scan)."""
+    """Retorna uma ConfiguracaoDeExtracao que pede AmostragemIntegral."""
     return ConfiguracaoDeExtracao(estrategia=estrategia_integral)
 
 

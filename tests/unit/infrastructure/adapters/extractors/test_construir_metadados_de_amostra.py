@@ -30,9 +30,9 @@ def test_amostragem_probabilistica_registra_percentual_e_seed() -> None:
 
 
 def test_amostragem_integral_nao_registra_percentual_nem_seed() -> None:
-    """Caminho feliz: full_scan não tem política probabilística — ambos None."""
+    """Caminho feliz: tabela_inteira não tem política probabilística — ambos None."""
     metadados, avisos = construir_metadados_de_amostra(
-        nome="full_scan",
+        nome="tabela_inteira",
         requisicao=AmostragemIntegral(),
         tamanho_amostra=10_000,
         total_linhas=10_000,
@@ -77,7 +77,7 @@ def test_amostragem_integral_nunca_diverge_de_total_linhas() -> None:
     aqui dentro.
     """
     _metadados, avisos = construir_metadados_de_amostra(
-        nome="full_scan",
+        nome="tabela_inteira",
         requisicao=AmostragemIntegral(),
         tamanho_amostra=10_000,
         total_linhas=10_000,

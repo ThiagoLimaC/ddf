@@ -272,13 +272,13 @@ def test_metadados_amostra_inclui_percentual_e_seed_efetivos(
     assert chunk["metadados_amostra"]["seed"] == 42
 
 
-def test_metadados_amostra_percentual_e_seed_sao_none_em_full_scan(
+def test_metadados_amostra_percentual_e_seed_sao_none_em_tabela_inteira(
     construir_coluna: Callable[..., ColunaAnalisada],
     construir_tabela: Callable[..., TabelaAnalisada],
     construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
     tmp_path: Path,
 ) -> None:
-    """Sem percentual/seed configurados (ex.: full_scan), o chunk traz null."""
+    """Sem percentual/seed configurados (ex.: tabela_inteira), o chunk traz null."""
     tabela = construir_tabela(colunas=[construir_coluna()], nome_tabela="pedidos")
     banco = construir_banco([tabela])
 

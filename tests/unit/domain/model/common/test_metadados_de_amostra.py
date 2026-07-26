@@ -57,8 +57,8 @@ def test_tamanho_amostra_zero_e_aceito() -> None:
 
 
 def test_percentual_e_seed_sao_opcionais_e_default_para_none() -> None:
-    """Borda: full_scan não tem percentual/seed — ambos None por padrão."""
-    metadados = MetadadosDeAmostra(estrategia="full_scan", tamanho_amostra=10_000)
+    """Borda: tabela_inteira não tem percentual/seed — ambos None por padrão."""
+    metadados = MetadadosDeAmostra(estrategia="tabela_inteira", tamanho_amostra=10_000)
 
     assert metadados.percentual is None
     assert metadados.seed is None

@@ -17,7 +17,7 @@ def percentual_de_linhas() -> PercentualDeLinhas:
 class _EstrategiaIntegralFake:
     """EstrategiaDeAmostragem fake que pede AmostragemIntegral.
 
-    Usada só nos testes de Extrator (dispatch exaustivo) — a FullScan
+    Usada só nos testes de Extrator (dispatch exaustivo) — a TabelaInteira
     pública, registrada no wizard, é implementada e testada à parte.
     """
 
