@@ -123,9 +123,17 @@ Controla a query de amostragem por tabela. Plugável via
 `Extrator` traduz pro dialeto SQL da própria fonte (ver `low_level_design.md`).
 
 - `PercentualDeLinhas` — amostra `percentual`% das linhas de cada tabela
-  (padrão v1). `ExtratorPostgres` usa `TABLESAMPLE BERNOULLI`;
-  `ExtratorMariaDB` usa `WHERE RAND() <= p` (sem `TABLESAMPLE` nesse motor).
-- Extensão futura: estratégia por tabela.
+  (padrão v1), com `seed` opcional para reprodutibilidade (issue #76).
+  `ExtratorPostgres` usa `TABLESAMPLE BERNOULLI ... REPEATABLE`;
+  `ExtratorMariaDB` usa `WHERE RAND(seed) <= p` (sem `TABLESAMPLE` nesse
+  motor).
+- `FullScan` (issue #76) — lê a tabela inteira, sem `TABLESAMPLE`/`RAND()`.
+  `total_linhas` sai exato (`len(amostra)`) nesse caso, em vez da estimativa
+  de catálogo usada por `PercentualDeLinhas`.
+- O Port expõe `requisicao: RequisicaoDeAmostragem` (união fechada
+  `AmostragemProbabilistica | AmostragemIntegral`), não mais `percentual`
+  solto — ver `low_level_design.md` para o raciocínio completo (Interface
+  Segregation + dispatch exaustivo nos Extratores).
 
 **Limitação de custo conhecida (issue #56):** as duas implementações acima
 fazem varredura sequencial completa da tabela, independente do `percentual`
@@ -141,13 +149,21 @@ Value Object que viaja com `TabelaExtraida` e `TabelaCurada`:
 
 ```python
 class MetadadosDeAmostra(BaseModel):
-    estrategia: str      # "random_limit", "tablesample", "full_scan"
-    tamanho_amostra: int # linhas efetivamente amostradas
-    total_linhas: int    # total real da tabela
+    estrategia: str               # "percentual_de_linhas", "full_scan"
+    tamanho_amostra: int          # linhas efetivamente amostradas
+    percentual: float | None = None  # efetivo; None em full_scan (issue #76)
+    seed: int | None = None          # efetivo; None em full_scan (issue #76)
 ```
 
+Sem `total_linhas` próprio (removido na issue #9) — `TabelaExtraida.
+total_linhas`/`TabelaCurada.total_linhas` são a única fonte de verdade para
+"quantas linhas a tabela tem" (ver `low_level_design.md`).
+
 Usado pelo Analisador para normalizar métricas e pelos Geradores para
-declarar nos artefatos que as métricas são estimativas sobre amostra.
+declarar nos artefatos que as métricas são estimativas sobre amostra —
+`percentual`/`seed` aparecem em `GeradorContextoDeIA`/`GeradorMarkdown` para
+que reprodutibilidade seja verificável a partir do próprio artefato, não só
+do código.
 
 ### 4. OrquestradorDeTabelas
 
