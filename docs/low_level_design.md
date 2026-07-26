@@ -109,10 +109,10 @@ faz cast para `VARCHAR` (ver seção do `GeradorDbt`).
 
 ```python
 class MetadadosDeAmostra(BaseModel):
-    estrategia: str               # "percentual_de_linhas", "full_scan"
+    estrategia: str               # "percentual_de_linhas", "tabela_inteira"
     tamanho_amostra: int          # linhas efetivamente amostradas
-    percentual: float | None = None  # None em full_scan
-    seed: int | None = None          # None em full_scan
+    percentual: float | None = None  # None em tabela_inteira
+    seed: int | None = None          # None em tabela_inteira
 ```
 
 **Comportamento:** imutável. Viaja com `TabelaExtraida` e `TabelaCurada`.
@@ -125,7 +125,7 @@ das estimativas.
 Extrator gera um antes de montar a query e é esse valor gerado que aparece
 aqui, nunca `None`. Sem isso, reprodutibilidade não seria verificável a
 partir do artefato gerado (`GeradorContextoDeIA`/`GeradorMarkdown` exibem os
-dois). Ambos ficam `None` em `full_scan`, que não tem política
+dois). Ambos ficam `None` em `tabela_inteira`, que não tem política
 probabilística nenhuma.
 
 **Sem `total_linhas` (removido na issue #9):** a versão original deste modelo
@@ -164,7 +164,7 @@ concorrência, e o `OrquestradorParalelo` nunca a lê.
 **Sem campo de tamanho de amostra:** dimensionar a amostra é responsabilidade
 de cada `EstrategiaDeAmostragem` concreta (ex.:
 `PercentualDeLinhas.requisicao.percentual`), não de `ConfiguracaoDeExtracao` —
-o conceito de "tamanho" não generaliza para todas as estratégias (`FullScan`,
+o conceito de "tamanho" não generaliza para todas as estratégias (`TabelaInteira`,
 implementada na issue #76, não tem tamanho nem percentual — só `nome` e
 `requisicao`, ver `EstrategiaDeAmostragem` abaixo). `ConfiguracaoDeExtracao`
 orquestra concorrência; a estratégia decide como amostrar.
@@ -681,7 +681,7 @@ decidindo como aplicá-lo no próprio dialeto.
 **`requisicao: RequisicaoDeAmostragem` em vez de `percentual: float` solto
 (issue #76, reabertura desta decisão):** a v1 do Port expunha `percentual`
 diretamente — funcionava com uma única estratégia, mas ao introduzir
-`FullScan` (que não tem percentual nenhum) isso forçaria a nova estratégia a
+`TabelaInteira` (que não tem percentual nenhum) isso forçaria a nova estratégia a
 "mentir" um valor fictício só para satisfazer o Protocol, violando
 Interface Segregation. `RequisicaoDeAmostragem` é uma união fechada
 (`AmostragemProbabilistica | AmostragemIntegral`); cada `Extrator` faz
@@ -770,18 +770,28 @@ schemas de sistema do Postgres (`information_schema`, `pg_catalog`,
      AND n.nspname = %s AND t.relname = %s
    ```
 2. Mapeia tipos Postgres → `TipoDeDado` (tabela abaixo).
-3. Lê `total_linhas` via `COALESCE(NULLIF(pg_stat_user_tables.n_live_tup, 0),
-   pg_class.reltuples)` — **estimativa de catálogo**, não `COUNT(*)` exato
-   (`COUNT(*)` exigiria um segundo full-scan além do já pago pela amostragem
-   — issue #76, avaliação do engenheiro-de-dados). `n_live_tup` é contador
+3. Lê `total_linhas` via `COALESCE(NULLIF(n_live_tup, 0), CASE WHEN relkind
+   <> 'p' AND pg_relation_size(oid) = 0 THEN 0 ELSE NULLIF(reltuples, -1)
+   END, 0)` — **estimativa de catálogo**, não `COUNT(*)` exato (`COUNT(*)`
+   exigiria um segundo full-scan além do já pago pela amostragem — issue
+   #76, avaliação do engenheiro-de-dados). `n_live_tup` é contador
    incremental por churn de DML, mais atual que `reltuples` (que só muda no
-   `ANALYZE`) — trocado nesta issue. `NULLIF(..., 0)` cai para `reltuples`
-   quando `n_live_tup` lê 0: o stats collector do Postgres é assíncrono e
-   pode não ter processado um `ANALYZE` recente no instante da leitura,
-   mesmo dentro da mesma transação — confirmado empiricamente contra
-   Postgres real via `testcontainers`, não só suspeita teórica. `reltuples`,
-   por sua vez, é atualizado de forma síncrona na própria transação do
-   `ANALYZE`.
+   `ANALYZE`) — trocado nesta issue. `NULLIF(n_live_tup, 0)` trata "0 sem
+   estatística reportada ainda" (tabela recém-carregada sem `ANALYZE`) como
+   ausência, não zero real — validado contra Postgres real via
+   `testcontainers`; a janela observada foi `INSERT` sem `ANALYZE`, não
+   pós-`ANALYZE` (`ANALYZE` força flush síncrono das próprias stats, então
+   não reproduz "`n_live_tup` desatualizado logo após `ANALYZE`" — suspeita
+   inicial, refutada na validação empírica). O `CASE` cobre o que o
+   `NULLIF` sozinho não cobre e que `reltuples` também erra: `TRUNCATE`
+   zera `n_live_tup` mas deixa `reltuples` com o valor antigo
+   indefinidamente (sem gatilho de autovacuum depois de `TRUNCATE`).
+   `pg_relation_size(oid) = 0` é sinal físico direto (arquivo de dados
+   vazio); `relkind <> 'p'` exclui tabela-mãe particionada, que sempre tem
+   tamanho 0 por não ter storage próprio. **Limitação aceita, não
+   resolvida:** `DELETE` em massa sem `TRUNCATE`, antes do autovacuum
+   truncar as páginas vazias, ainda pode reportar total desatualizado —
+   sem sinal de catálogo barato pra esse caso específico.
 4. Monta e executa a query de amostra a partir de
    `configuracao.estrategia.requisicao` (`match`/`assert_never`, issue #76):
    - `AmostragemProbabilistica(percentual, seed)`: `SELECT * FROM
@@ -794,7 +804,7 @@ schemas de sistema do Postgres (`information_schema`, `pg_catalog`,
      um, o Extrator gera um (`seed_efetivo`) antes de montar a query, para
      reprodutibilidade nunca ser opt-in silencioso.
    - `AmostragemIntegral()`: `SELECT * FROM {schema}.{tabela}` puro, sem
-     `TABLESAMPLE` — a estratégia `FullScan`.
+     `TABLESAMPLE` — a estratégia `TabelaInteira`.
 5. `MetadadosDeAmostra.tamanho_amostra` é o número de linhas efetivamente
    retornadas pela amostra (`len(dataframe)`), não um valor calculado —
    `TABLESAMPLE` decide dinamicamente quantas linhas sorteia.
@@ -893,15 +903,15 @@ BERNOULLI`. `tamanho_amostra=0` (percentual muito baixo numa tabela pequena)
 é aceito como estado real, mesmo critério já usado em `MetadadosDeAmostra`
 desde a #6.
 
-### `FullScan` (issue #76)
+### `TabelaInteira` (issue #76)
 
 ```python
-class FullScan:
+class TabelaInteira:
     """Sem parâmetros — não há o que configurar."""
 
     @property
     def nome(self) -> str:
-        """Retorna 'full_scan'."""
+        """Retorna 'tabela_inteira'."""
 
     @property
     def requisicao(self) -> AmostragemIntegral:
@@ -910,9 +920,9 @@ class FullScan:
 
 **Comportamento:** lê a tabela inteira, sem `TABLESAMPLE`/`RAND()`. Resultado
 prático equivalente a `PercentualDeLinhas(percentual=100)` (`BERNOULLI(100)`/
-`RAND() <= 1` incluem cada linha com probabilidade 1), mas `FullScan` deixa a
+`RAND() <= 1` incluem cada linha com probabilidade 1), mas `TabelaInteira` deixa a
 intenção explícita no artefato gerado (`metadados_amostra.estrategia ==
-"full_scan"`), e `TabelaExtraida.total_linhas` sai exato
+"tabela_inteira"`), e `TabelaExtraida.total_linhas` sai exato
 (`len(amostra)`) em vez de estimativa de catálogo — sem o `Aviso` de
 divergência que soava confuso especificamente nesse caso (motivação original
 da issue #76). Zero mudança nos dois Extratores foi necessária para
@@ -1507,7 +1517,7 @@ por `wizard.py` (ver seção "Descoberta de plugins" acima).
 **`registro/estrategias.py`** — mesma forma, mas `EstrategiaRegistrada` só
 carrega `construir` (sem `classe_estrategia`: nunca foi lido em produção,
 removido na issue #76), para `EstrategiaDeAmostragem`. `PercentualDeLinhas`
-e `FullScan` estão registradas — a 2ª estratégia antecipada desde a #9/#16
+e `TabelaInteira` estão registradas — a 2ª estratégia antecipada desde a #9/#16
 chegou na #76, sem precisar reabrir `wizard.py`: a escolha já era explícita
 no wizard (etapa 1) mesmo quando só havia uma opção.
 

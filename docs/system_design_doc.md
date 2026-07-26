@@ -127,7 +127,7 @@ Controla a query de amostragem por tabela. Plugável via
   `ExtratorPostgres` usa `TABLESAMPLE BERNOULLI ... REPEATABLE`;
   `ExtratorMariaDB` usa `WHERE RAND(seed) <= p` (sem `TABLESAMPLE` nesse
   motor).
-- `FullScan` (issue #76) — lê a tabela inteira, sem `TABLESAMPLE`/`RAND()`.
+- `TabelaInteira` (issue #76) — lê a tabela inteira, sem `TABLESAMPLE`/`RAND()`.
   `total_linhas` sai exato (`len(amostra)`) nesse caso, em vez da estimativa
   de catálogo usada por `PercentualDeLinhas`.
 - O Port expõe `requisicao: RequisicaoDeAmostragem` (união fechada
@@ -149,10 +149,10 @@ Value Object que viaja com `TabelaExtraida` e `TabelaCurada`:
 
 ```python
 class MetadadosDeAmostra(BaseModel):
-    estrategia: str               # "percentual_de_linhas", "full_scan"
+    estrategia: str               # "percentual_de_linhas", "tabela_inteira"
     tamanho_amostra: int          # linhas efetivamente amostradas
-    percentual: float | None = None  # efetivo; None em full_scan (issue #76)
-    seed: int | None = None          # efetivo; None em full_scan (issue #76)
+    percentual: float | None = None  # efetivo; None em tabela_inteira (issue #76)
+    seed: int | None = None          # efetivo; None em tabela_inteira (issue #76)
 ```
 
 Sem `total_linhas` próprio (removido na issue #9) — `TabelaExtraida.
