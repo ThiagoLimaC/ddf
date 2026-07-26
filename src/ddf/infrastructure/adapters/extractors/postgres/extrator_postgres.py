@@ -90,20 +90,31 @@ _CHAVES_ESTRANGEIRAS_SCHEMA_SQL = """
 # mesmo schema); o filtro é defesa explícita do tipo de relação, não
 # correção de uma colisão observada.
 #
-# COALESCE(NULLIF(s.n_live_tup, 0), c.reltuples) — n_live_tup é contador
-# incremental (ajustado por INSERT/UPDATE/DELETE reportados ao stats
-# collector entre ANALYZEs), mais atual que reltuples na maioria dos casos,
-# sem custo adicional (mesma leitura de catálogo). O NULLIF(..., 0) é
-# necessário porque o stats collector é assíncrono: mesmo logo após um
-# ANALYZE, n_live_tup pode não ter sido flushado ainda e ler 0 numa tabela
-# não-vazia (reproduzido empiricamente contra Postgres real via
-# testcontainers, não só suspeita teórica) — reltuples, por outro lado, é
-# atualizado de forma síncrona na própria transação do ANALYZE. Tratar
-# n_live_tup=0 como "ainda não reportado" e cair pra reltuples não perde
-# nada em tabela genuinamente vazia (reltuples também mostra 0 ali).
+# n_live_tup: contador incremental, mais atual que reltuples entre
+# ANALYZEs, sem custo adicional. NULLIF(s.n_live_tup, 0) trata "sem
+# estatística reportada ainda" como ausência, não zero real.
+#
+# CASE cobre o que reltuples também erra: TRUNCATE zera n_live_tup mas
+# deixa reltuples com o valor antigo indefinidamente (sem gatilho de
+# autovacuum depois de TRUNCATE). pg_relation_size(oid) = 0 é sinal físico
+# (arquivo vazio) — relkind <> 'p' exclui tabela-mãe particionada, que
+# sempre tem tamanho 0 por não ter storage próprio. NULLIF(reltuples, -1)
+# trata "nunca analisada" como ausência, não zero.
+#
+# Limitação aceita: DELETE em massa sem TRUNCATE, antes do autovacuum
+# truncar páginas vazias, ainda pode reportar total desatualizado — sem
+# sinal de catálogo barato pra esse caso (issue #76).
 _TOTAL_LINHAS_SCHEMA_SQL = """
     SELECT c.relname,
-           COALESCE(NULLIF(s.n_live_tup, 0), c.reltuples) AS linhas_estimadas
+           COALESCE(
+               NULLIF(s.n_live_tup, 0),
+               CASE
+                   WHEN c.relkind <> 'p' AND pg_relation_size(c.oid) = 0
+                       THEN 0
+                   ELSE NULLIF(c.reltuples, -1)
+               END,
+               0
+           ) AS linhas_estimadas
     FROM pg_catalog.pg_class c
     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
     LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
