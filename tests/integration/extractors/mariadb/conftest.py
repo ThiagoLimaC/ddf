@@ -115,6 +115,21 @@ _SETUP_STATEMENTS = [
     "ANALYZE TABLE restricoes.pedidos",
     "ANALYZE TABLE restricoes.clientes",
     "ANALYZE TABLE restricoes.enderecos",
+    # Massa suficiente pra reprodutibilidade de seed fazer sentido
+    # estatisticamente (issue #76). seq_1_to_500 é a engine SEQUENCE nativa
+    # do MariaDB — evita tabela auxiliar só pra gerar linhas.
+    "CREATE DATABASE reprodutibilidade",
+    """
+    CREATE TABLE reprodutibilidade.itens (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        nome VARCHAR(50) NOT NULL
+    ) ENGINE=InnoDB
+    """,
+    """
+    INSERT INTO reprodutibilidade.itens (nome)
+        SELECT CONCAT('item_', seq) FROM reprodutibilidade.seq_1_to_500
+    """,
+    "ANALYZE TABLE reprodutibilidade.itens",
 ]
 
 
