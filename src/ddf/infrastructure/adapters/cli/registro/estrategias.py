@@ -76,13 +76,13 @@ def _construir_tabela_inteira() -> EstrategiaDeAmostragem:
     """Confirma o custo de memória e monta TabelaInteira.
 
     Sem percentual pra limitar o tamanho (ao contrário de
-    `PercentualDeLinhas`, cujo default 10 protege por acidente), full scan
-    carrega a tabela inteira em memória de uma vez — risco real de OOM em
-    tabelas muito grandes. A confirmação existe pra essa escolha nunca ser
-    silenciosa.
+    `PercentualDeLinhas`, cujo default 10 protege por acidente), essa
+    estratégia carrega a tabela inteira em memória de uma vez — risco real
+    de OOM em tabelas muito grandes. A confirmação existe pra essa escolha
+    nunca ser silenciosa.
     """
     prosseguir = prompts.confirmar(
-        "Full scan carrega a tabela inteira em memória de uma vez "
+        "Tabela inteira carrega tudo em memória de uma vez "
         "(sem limite de tamanho) — pode causar falta de memória em tabelas "
         "muito grandes. Continuar?",
         default=True,
@@ -93,4 +93,4 @@ def _construir_tabela_inteira() -> EstrategiaDeAmostragem:
 
 
 registrar_estrategia("Percentual de linhas", _construir_percentual_de_linhas)
-registrar_estrategia("Tabela inteira (full scan)", _construir_tabela_inteira)
+registrar_estrategia("Tabela inteira", _construir_tabela_inteira)
