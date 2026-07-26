@@ -77,7 +77,6 @@ def test_configurar_amostragem_usa_a_estrategia_escolhida(
     """Caminho feliz: monta a ConfiguracaoDeExtracao com a estratégia escolhida."""
     registro = {
         "Percentual de linhas": EstrategiaRegistrada(
-            classe_estrategia=PercentualDeLinhas,
             construir=lambda: PercentualDeLinhas(percentual=10.0),
         )
     }

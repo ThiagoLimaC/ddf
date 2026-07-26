@@ -65,6 +65,57 @@ def test_caminho_feliz_gera_um_md_por_tabela_e_index(
     assert posicao_estoque < posicao_vendas
 
 
+def test_rodape_mostra_percentual_e_seed_quando_presentes(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """percentual/seed efetivos aparecem no rodapé de amostragem do .md."""
+    tabela = construir_tabela(
+        colunas=[construir_coluna()],
+        nome_tabela="pedidos",
+        percentual=10.0,
+        seed=42,
+    )
+    banco = construir_banco([tabela])
+
+    resultado = GeradorMarkdown()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    conteudo = (tmp_path / "escopo" / "pedidos.md").read_text()
+    assert "(10.0%)" in conteudo
+    assert "seed `42`" in conteudo
+    assert "métricas de coluna são estimativas sobre a amostra" in conteudo
+
+
+def test_rodape_omite_percentual_e_seed_em_tabela_inteira(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Sem percentual/seed, o rodapé não os menciona nem mente sobre estimativa.
+
+    Sem essa condicional, o rodapé afirmaria "métricas são estimativas
+    sobre a amostra, não o dado completo" mesmo quando a amostra JÁ é o
+    dado completo (tabela_inteira) — achado da banca de revisão da #76.
+    """
+    tabela = construir_tabela(colunas=[construir_coluna()], nome_tabela="pedidos")
+    banco = construir_banco([tabela])
+
+    resultado = GeradorMarkdown()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    conteudo = (tmp_path / "escopo" / "pedidos.md").read_text()
+    assert "seed" not in conteudo
+    assert "%)" not in conteudo
+    assert "estimativas sobre a amostra" not in conteudo
+    assert "leitura completa da tabela, métricas de coluna refletem o dado real" in (
+        conteudo
+    )
+
+
 def test_index_e_tabela_registram_generated_at(
     tmp_path: Path,
     construir_coluna: Callable[..., ColunaAnalisada],

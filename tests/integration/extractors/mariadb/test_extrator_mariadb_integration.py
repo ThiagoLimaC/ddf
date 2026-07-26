@@ -7,6 +7,10 @@ from ddf.domain.shared.resultado import Falha, Sucesso
 from ddf.infrastructure.adapters.extractors.mariadb.extrator_mariadb import (
     ExtratorMariaDB,
 )
+from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
+    PercentualDeLinhas,
+)
+from ddf.infrastructure.adapters.extractors.tabela_inteira import TabelaInteira
 
 # Caminho feliz
 
@@ -153,7 +157,9 @@ def test_listar_escopos_retorna_escopos_semeados(
 
     resultado = extrator.listar_escopos()
 
-    assert resultado == Sucesso(["pessoa", "restricoes", "rh", "vazio", "vendas"])
+    assert resultado == Sucesso(
+        ["pessoa", "reprodutibilidade", "restricoes", "rh", "vazio", "vendas"]
+    )
 
 
 # Erro esperado
@@ -290,3 +296,101 @@ def test_listar_tabelas_escopo_vazio_retorna_lista_vazia(
     resultado = extrator.listar_tabelas("vazio")
 
     assert resultado == Sucesso([])
+
+
+def test_mesma_seed_produz_a_mesma_amostra(
+    conexao: tuple[str, int, str, str],
+) -> None:
+    """Borda: duas extrações com o mesmo seed retornam exatamente as mesmas linhas.
+
+    Prova a reprodutibilidade real via RAND(seed) contra MariaDB de
+    verdade — não só que o seed chega na query (isso os testes unitários
+    com cursor mockado já cobrem), mas que o determinismo documentado se
+    sustenta. Achado da banca de revisão da issue #76: nenhum teste
+    anterior provava isso.
+    """
+    host, port, user, password = conexao
+    configuracao = ConfiguracaoDeExtracao(
+        estrategia=PercentualDeLinhas(percentual=20, seed=12345)
+    )
+    extrator_a = ExtratorMariaDB(
+        host=host, port=port, user=user, password=password, configuracao=configuracao
+    )
+    extrator_b = ExtratorMariaDB(
+        host=host, port=port, user=user, password=password, configuracao=configuracao
+    )
+
+    resultado_a = extrator_a.extrair_tabela("reprodutibilidade", "itens")
+    resultado_b = extrator_b.extrair_tabela("reprodutibilidade", "itens")
+
+    assert isinstance(resultado_a, Sucesso)
+    assert isinstance(resultado_b, Sucesso)
+    ids_a = sorted(resultado_a.valor.amostra["id"].to_list())
+    ids_b = sorted(resultado_b.valor.amostra["id"].to_list())
+    assert len(ids_a) > 0
+    assert ids_a == ids_b
+
+
+def test_seeds_diferentes_produzem_amostras_diferentes(
+    conexao: tuple[str, int, str, str],
+) -> None:
+    """Borda: seeds diferentes não convergem pra mesma amostra por acidente.
+
+    Complementa o teste de reprodutibilidade — sem isso, uma implementação
+    que ignorasse o seed por completo (bug) passaria no teste de
+    "mesma seed, mesma amostra" só por coincidência de sempre montar a
+    mesma query.
+    """
+    host, port, user, password = conexao
+    extrator_seed_1 = ExtratorMariaDB(
+        host=host,
+        port=port,
+        user=user,
+        password=password,
+        configuracao=ConfiguracaoDeExtracao(
+            estrategia=PercentualDeLinhas(percentual=20, seed=1)
+        ),
+    )
+    extrator_seed_2 = ExtratorMariaDB(
+        host=host,
+        port=port,
+        user=user,
+        password=password,
+        configuracao=ConfiguracaoDeExtracao(
+            estrategia=PercentualDeLinhas(percentual=20, seed=2)
+        ),
+    )
+
+    resultado_1 = extrator_seed_1.extrair_tabela("reprodutibilidade", "itens")
+    resultado_2 = extrator_seed_2.extrair_tabela("reprodutibilidade", "itens")
+
+    assert isinstance(resultado_1, Sucesso)
+    assert isinstance(resultado_2, Sucesso)
+    ids_1 = sorted(resultado_1.valor.amostra["id"].to_list())
+    ids_2 = sorted(resultado_2.valor.amostra["id"].to_list())
+    assert ids_1 != ids_2
+
+
+def test_tabela_inteira_le_a_tabela_toda_sem_rand(
+    conexao: tuple[str, int, str, str],
+) -> None:
+    """Caminho feliz: TabelaInteira contra MariaDB real lê 100% das linhas.
+
+    total_linhas exato (len(amostra)) e sem Aviso, mesmo a tabela tendo
+    500 linhas reais — prova ponta a ponta que o dispatch AmostragemIntegral
+    não depende de RAND()/percentual pra ler tudo.
+    """
+    host, port, user, password = conexao
+    configuracao = ConfiguracaoDeExtracao(estrategia=TabelaInteira())
+    extrator = ExtratorMariaDB(
+        host=host, port=port, user=user, password=password, configuracao=configuracao
+    )
+
+    resultado = extrator.extrair_tabela("reprodutibilidade", "itens")
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor.total_linhas == 500
+    assert resultado.valor.metadados_amostra.tamanho_amostra == 500
+    assert resultado.valor.metadados_amostra.percentual is None
+    assert resultado.valor.metadados_amostra.seed is None
+    assert resultado.avisos == []

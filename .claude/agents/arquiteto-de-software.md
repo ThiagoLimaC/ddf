@@ -98,6 +98,38 @@ Leia, nesta ordem:
   que não usa) e Dependency Inversion (módulo de domínio depende de
   abstração, não de detalhe de infraestrutura)? Cite o princípio específico
   quando apontar violação, não só "fere SOLID" genérico.
+- **Tamanho de arquivo como sintoma, não veredito:** rode `wc -l` nos
+  arquivos tocados (ou, em auditoria geral do repositório, nos maiores de
+  `src/` via `find src -name "*.py" | xargs wc -l | sort -rn`). Arquivo
+  grande é gatilho pra investigar SRP de verdade, nunca motivo automático
+  pra split — pergunte por quantos motivos diferentes cada parte dele
+  mudaria. Só reporte como achado se conseguir nomear pelo menos duas
+  responsabilidades genuinamente distintas (razões de mudança diferentes)
+  misturadas no mesmo arquivo/classe, com proposta concreta de separação;
+  "está grande" ou "tem muitas linhas" sozinho não é um achado válido — um
+  Adapter extenso mas coeso (muitos métodos privados a serviço de uma única
+  responsabilidade) não é violação.
+- **Convenção de categoria em testes (comentário + docstring):** toda
+  função de teste segue o padrão do repositório — comentário de categoria
+  imediatamente acima (`# Caminho feliz`, `# Erro esperado`, `# Caso de
+  borda`/`# Borda`) e docstring de uma linha começando com o mesmo rótulo
+  (`"""Caminho feliz: ...""".`, `"""Erro esperado: ...""".`, `"""Borda:
+  ...""".`). Teste sem essa marcação dupla, ou cuja categoria declarada não
+  bate com o que ele de fato verifica (ex.: comentário diz "Caminho feliz"
+  mas o corpo força uma condição de erro), é inconsistência a reportar —
+  cite arquivo e nome do teste.
+- **Teste genuíno vs. teste decorativo:** aplique a pergunta já documentada
+  em `docs/engineer_guidelines.md` — "Que bug real ou regra de negócio este
+  teste pegaria, que não seria pego de outra forma (tipo, lint, teste já
+  existente)?". Teste que só afirma `is not None`/`isinstance(...,
+  Sucesso)` sem checar o valor computado, teste de "erro esperado" que só
+  repete o que `mypy --strict` já rejeitaria estaticamente (o próprio
+  `engineer_guidelines.md` já exclui isso de "borda", mesma lógica vale
+  para "erro esperado"), teste de "borda" que não é caso limite real do
+  domínio, ou teste com mock/fake montado de forma que a lógica real sob
+  teste nunca roda de verdade, é candidato a remover ou reescrever — cite
+  arquivo:linha, o que o teste alega verificar e o que de fato faltou
+  verificar.
 - **Acoplamento e escalabilidade:** essa decisão aumenta o número de lugares
   que precisam mudar juntos quando um deles muda (acoplamento temporal/de
   conhecimento)? Se o volume de dados, número de fontes ou número de

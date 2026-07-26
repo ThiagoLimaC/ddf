@@ -249,6 +249,47 @@ def test_chave_primaria_nunca_vira_sugestao_de_enum(
     assert "esquema_de_consulta" not in chunk
 
 
+def test_metadados_amostra_inclui_percentual_e_seed_efetivos(
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    tmp_path: Path,
+) -> None:
+    """Caminho feliz: percentual/seed efetivos aparecem no chunk gerado."""
+    tabela = construir_tabela(
+        colunas=[construir_coluna()],
+        nome_tabela="pedidos",
+        percentual=10.0,
+        seed=42,
+    )
+    banco = construir_banco([tabela])
+
+    resultado = GeradorContextoDeIA()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    chunk = _ler_json(tmp_path / "tabelas" / "escopo__pedidos.json")
+    assert chunk["metadados_amostra"]["percentual"] == 10.0
+    assert chunk["metadados_amostra"]["seed"] == 42
+
+
+def test_metadados_amostra_percentual_e_seed_sao_none_em_tabela_inteira(
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    tmp_path: Path,
+) -> None:
+    """Sem percentual/seed configurados (ex.: tabela_inteira), o chunk traz null."""
+    tabela = construir_tabela(colunas=[construir_coluna()], nome_tabela="pedidos")
+    banco = construir_banco([tabela])
+
+    resultado = GeradorContextoDeIA()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    chunk = _ler_json(tmp_path / "tabelas" / "escopo__pedidos.json")
+    assert chunk["metadados_amostra"]["percentual"] is None
+    assert chunk["metadados_amostra"]["seed"] is None
+
+
 def test_tabela_sem_metricas_base_tabela_nao_inclui_secao(
     construir_coluna: Callable[..., ColunaAnalisada],
     construir_tabela: Callable[..., TabelaAnalisada],

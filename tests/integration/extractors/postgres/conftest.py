@@ -124,6 +124,40 @@ _SETUP_SQL = """
         (NULL, NULL);
 
     ANALYZE arrays.colunas_array;
+
+    -- Reproduz o achado da issue #76 (revisão da banca): TRUNCATE zera
+    -- n_live_tup mas deixa reltuples com o valor antigo indefinidamente
+    -- (sem gatilho de autovacuum depois de TRUNCATE) — prova que a query
+    -- de total_linhas usa pg_relation_size(oid) = 0 como sinal físico,
+    -- não só estatística de catálogo.
+    CREATE SCHEMA truncamento;
+
+    CREATE TABLE truncamento.tabela_truncada (
+        id SERIAL PRIMARY KEY,
+        nome VARCHAR(50) NOT NULL
+    );
+
+    INSERT INTO truncamento.tabela_truncada (nome)
+        SELECT 'linha_' || gs FROM generate_series(1, 100) gs;
+
+    ANALYZE truncamento.tabela_truncada;
+
+    TRUNCATE truncamento.tabela_truncada;
+
+    -- Tabela com massa suficiente pra amostragem percentual/seed fazerem
+    -- sentido estatisticamente (issue #76) — as tabelas de 3 linhas acima
+    -- são pequenas demais pra provar reprodutibilidade com confiança.
+    CREATE SCHEMA reprodutibilidade;
+
+    CREATE TABLE reprodutibilidade.itens (
+        id SERIAL PRIMARY KEY,
+        nome VARCHAR(50) NOT NULL
+    );
+
+    INSERT INTO reprodutibilidade.itens (nome)
+        SELECT 'item_' || gs FROM generate_series(1, 500) gs;
+
+    ANALYZE reprodutibilidade.itens;
 """
 
 

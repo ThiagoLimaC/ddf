@@ -2,24 +2,31 @@
 
 import threading
 from collections import defaultdict
-from typing import NamedTuple
+from typing import NamedTuple, assert_never
 
 import polars as pl
 from psycopg2 import OperationalError, sql
 from psycopg2.pool import ThreadedConnectionPool
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
-from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.requisicao_de_amostragem import (
+    AmostragemIntegral,
+    AmostragemProbabilistica,
+    RequisicaoDeAmostragem,
+)
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
-from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.extractors.construir_colunas_fk import (
     construir_colunas_fk,
 )
+from ddf.infrastructure.adapters.extractors.construir_metadados_de_amostra import (
+    construir_metadados_de_amostra,
+)
 from ddf.infrastructure.adapters.extractors.postgres.mapeamento_de_tipos import (
     mapear_tipo_postgres,
 )
+from ddf.infrastructure.adapters.extractors.seed_efetivo import seed_efetivo
 
 _LISTAR_ESCOPOS_SQL = """
     SELECT schema_name
@@ -82,10 +89,35 @@ _CHAVES_ESTRANGEIRAS_SCHEMA_SQL = """
 # errada (Postgres não permite colisão de nome entre tabela/view/sequence no
 # mesmo schema); o filtro é defesa explícita do tipo de relação, não
 # correção de uma colisão observada.
+#
+# n_live_tup: contador incremental, mais atual que reltuples entre
+# ANALYZEs, sem custo adicional. NULLIF(s.n_live_tup, 0) trata "sem
+# estatística reportada ainda" como ausência, não zero real.
+#
+# CASE cobre o que reltuples também erra: TRUNCATE zera n_live_tup mas
+# deixa reltuples com o valor antigo indefinidamente (sem gatilho de
+# autovacuum depois de TRUNCATE). pg_relation_size(oid) = 0 é sinal físico
+# (arquivo vazio) — relkind <> 'p' exclui tabela-mãe particionada, que
+# sempre tem tamanho 0 por não ter storage próprio. NULLIF(reltuples, -1)
+# trata "nunca analisada" como ausência, não zero.
+#
+# Limitação aceita: DELETE em massa sem TRUNCATE, antes do autovacuum
+# truncar páginas vazias, ainda pode reportar total desatualizado — sem
+# sinal de catálogo barato pra esse caso (issue #76).
 _TOTAL_LINHAS_SCHEMA_SQL = """
-    SELECT c.relname, c.reltuples
+    SELECT c.relname,
+           COALESCE(
+               NULLIF(s.n_live_tup, 0),
+               CASE
+                   WHEN c.relkind <> 'p' AND pg_relation_size(c.oid) = 0
+                       THEN 0
+                   ELSE NULLIF(c.reltuples, -1)
+               END,
+               0
+           ) AS linhas_estimadas
     FROM pg_catalog.pg_class c
     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
     WHERE n.nspname = %s AND c.relkind IN ('r', 'p')
 """
 
@@ -328,8 +360,10 @@ class ExtratorPostgres:
 
                     cursor.execute(_TOTAL_LINHAS_SCHEMA_SQL, (schema,))
                     total_linhas_por_tabela: dict[str, int] = {}
-                    for nome_tabela, reltuples in cursor.fetchall():
-                        total_linhas_por_tabela[nome_tabela] = max(0, round(reltuples))
+                    for nome_tabela, linhas_estimadas in cursor.fetchall():
+                        total_linhas_por_tabela[nome_tabela] = max(
+                            0, round(linhas_estimadas)
+                        )
             finally:
                 pool.putconn(conexao)
                 self._semaforo.release()
@@ -378,16 +412,34 @@ class ExtratorPostgres:
         except OperationalError as erro:
             self._semaforo.release()
             return Falha(f"Não foi possível conectar: {erro}")
+        requisicao = self._configuracao.estrategia.requisicao
         try:
             conexao.autocommit = True
             with conexao.cursor() as cursor:
-                consulta_amostra = sql.SQL(
-                    "SELECT * FROM {}.{} TABLESAMPLE BERNOULLI ({})"
-                ).format(
-                    sql.Identifier(schema),
-                    sql.Identifier(tabela),
-                    sql.Literal(self._configuracao.estrategia.percentual),
-                )
+                requisicao_efetiva: RequisicaoDeAmostragem
+                match requisicao:
+                    case AmostragemProbabilistica(percentual=percentual, seed=seed):
+                        seed_usado = seed_efetivo(seed)
+                        requisicao_efetiva = AmostragemProbabilistica(
+                            percentual=percentual, seed=seed_usado
+                        )
+                        consulta_amostra = sql.SQL(
+                            "SELECT * FROM {}.{} TABLESAMPLE BERNOULLI ({}) "
+                            "REPEATABLE ({})"
+                        ).format(
+                            sql.Identifier(schema),
+                            sql.Identifier(tabela),
+                            sql.Literal(percentual),
+                            sql.Literal(seed_usado),
+                        )
+                    case AmostragemIntegral():
+                        requisicao_efetiva = requisicao
+                        consulta_amostra = sql.SQL("SELECT * FROM {}.{}").format(
+                            sql.Identifier(schema), sql.Identifier(tabela)
+                        )
+                    case _ as nunca:
+                        assert_never(nunca)
+
                 cursor.execute(consulta_amostra)
                 nomes_colunas: list[str] = []
                 for coluna_amostra in cursor.description or ():
@@ -404,27 +456,29 @@ class ExtratorPostgres:
                     else pl.DataFrame(schema=nomes_colunas)
                 )
 
-            metadados_amostra = MetadadosDeAmostra(
-                estrategia=self._configuracao.estrategia.nome,
+            match requisicao_efetiva:
+                case AmostragemIntegral():
+                    total_linhas_final = len(amostra)
+                case AmostragemProbabilistica():
+                    total_linhas_final = total_linhas
+                case _ as nunca:
+                    assert_never(nunca)
+
+            metadados_amostra, avisos_amostra = construir_metadados_de_amostra(
+                nome=self._configuracao.estrategia.nome,
+                requisicao=requisicao_efetiva,
                 tamanho_amostra=len(amostra),
+                total_linhas=total_linhas_final,
+                origem="ExtratorPostgres",
+                causa_provavel="sem ANALYZE recente",
             )
-            if metadados_amostra.tamanho_amostra > total_linhas:
-                avisos.append(
-                    Aviso(
-                        mensagem=(
-                            f"Amostra ({metadados_amostra.tamanho_amostra} linhas) "
-                            f"maior que total_linhas ({total_linhas}) — total_linhas "
-                            "pode estar desatualizado (sem ANALYZE recente)."
-                        ),
-                        origem="ExtratorPostgres",
-                    )
-                )
+            avisos.extend(avisos_amostra)
             return Sucesso(
                 TabelaExtraida(
                     nome_tabela=tabela,
                     nome_escopo=schema,
                     colunas=colunas,
-                    total_linhas=total_linhas,
+                    total_linhas=total_linhas_final,
                     amostra=amostra,
                     metadados_amostra=metadados_amostra,
                 ),
