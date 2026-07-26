@@ -1,26 +1,33 @@
 """Extrator concreto para bancos MariaDB."""
 
 import threading
-from typing import NamedTuple
+from typing import NamedTuple, assert_never
 
 import polars as pl
 import pymysql
 from dbutils.pooled_db import PooledDB
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
-from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.requisicao_de_amostragem import (
+    AmostragemIntegral,
+    AmostragemProbabilistica,
+    RequisicaoDeAmostragem,
+)
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
-from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.extractors.construir_colunas_fk import (
     construir_colunas_fk,
+)
+from ddf.infrastructure.adapters.extractors.construir_metadados_de_amostra import (
+    construir_metadados_de_amostra,
 )
 from ddf.infrastructure.adapters.extractors.mariadb.mapeamento_de_tipos import (
     _extrair_coluna_json_valid,
     mapear_tipo_mariadb,
 )
+from ddf.infrastructure.adapters.extractors.seed_efetivo import seed_efetivo
 
 _LISTAR_ESCOPOS_SQL = """
     SELECT schema_name
@@ -422,14 +429,30 @@ class ExtratorMariaDB:
                     else 0
                 )
 
-                consulta_amostra = (
-                    f"SELECT * FROM {_quotar_identificador(escopo)}."
-                    f"{_quotar_identificador(tabela)} WHERE RAND() <= %s"
+                requisicao = self._configuracao.estrategia.requisicao
+                requisicao_efetiva: RequisicaoDeAmostragem
+                identificador_tabela = (
+                    f"{_quotar_identificador(escopo)}.{_quotar_identificador(tabela)}"
                 )
-                cursor.execute(
-                    consulta_amostra,
-                    (self._configuracao.estrategia.percentual / 100,),
-                )
+                match requisicao:
+                    case AmostragemProbabilistica(percentual=percentual, seed=seed):
+                        seed_usado = seed_efetivo(seed)
+                        requisicao_efetiva = AmostragemProbabilistica(
+                            percentual=percentual, seed=seed_usado
+                        )
+                        consulta_amostra = (
+                            f"SELECT * FROM {identificador_tabela} "
+                            "WHERE RAND(%s) <= %s"
+                        )
+                        cursor.execute(
+                            consulta_amostra, (seed_usado, percentual / 100)
+                        )
+                    case AmostragemIntegral():
+                        requisicao_efetiva = requisicao
+                        cursor.execute(f"SELECT * FROM {identificador_tabela}")
+                    case _ as nunca:
+                        assert_never(nunca)
+
                 nomes_colunas: list[str] = []
                 for coluna_amostra in cursor.description or ():
                     nomes_colunas.append(coluna_amostra[0])
@@ -449,27 +472,29 @@ class ExtratorMariaDB:
                     colunas, amostra, candidatos_booleanos
                 )
 
-            metadados_amostra = MetadadosDeAmostra(
-                estrategia=self._configuracao.estrategia.nome,
+            match requisicao_efetiva:
+                case AmostragemIntegral():
+                    total_linhas_final = len(amostra)
+                case AmostragemProbabilistica():
+                    total_linhas_final = total_linhas
+                case _ as nunca:
+                    assert_never(nunca)
+
+            metadados_amostra, avisos_amostra = construir_metadados_de_amostra(
+                nome=self._configuracao.estrategia.nome,
+                requisicao=requisicao_efetiva,
                 tamanho_amostra=len(amostra),
+                total_linhas=total_linhas_final,
+                origem="ExtratorMariaDB",
+                causa_provavel="sem ANALYZE TABLE recente",
             )
-            if metadados_amostra.tamanho_amostra > total_linhas:
-                avisos.append(
-                    Aviso(
-                        mensagem=(
-                            f"Amostra ({metadados_amostra.tamanho_amostra} linhas) "
-                            f"maior que total_linhas ({total_linhas}) — total_linhas "
-                            "pode estar desatualizado (sem ANALYZE TABLE recente)."
-                        ),
-                        origem="ExtratorMariaDB",
-                    )
-                )
+            avisos.extend(avisos_amostra)
             return Sucesso(
                 TabelaExtraida(
                     nome_tabela=tabela,
                     nome_escopo=escopo,
                     colunas=colunas,
-                    total_linhas=total_linhas,
+                    total_linhas=total_linhas_final,
                     amostra=amostra,
                     metadados_amostra=metadados_amostra,
                 ),

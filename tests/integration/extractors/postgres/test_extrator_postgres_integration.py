@@ -13,9 +13,13 @@ from ddf.domain.shared.resultado import Falha, Sucesso
 from ddf.infrastructure.adapters.analyzers.analisador_de_metricas_de_coluna import (
     AnalisadorDeMetricasDeColuna,
 )
+from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
+    PercentualDeLinhas,
+)
 from ddf.infrastructure.adapters.extractors.postgres.extrator_postgres import (
     ExtratorPostgres,
 )
+from ddf.infrastructure.adapters.extractors.tabela_inteira import TabelaInteira
 from ddf.infrastructure.adapters.orchestrator.orquestrador_paralelo import (
     OrquestradorParalelo,
 )
@@ -113,7 +117,17 @@ def test_listar_escopos_retorna_escopos_semeados(
     resultado = extrator.listar_escopos()
 
     assert resultado == Sucesso(
-        ["arrays", "geografia", "pessoa", "public", "restricoes", "rh", "vazio"]
+        [
+            "arrays",
+            "geografia",
+            "pessoa",
+            "public",
+            "reprodutibilidade",
+            "restricoes",
+            "rh",
+            "truncamento",
+            "vazio",
+        ]
     )
 
 
@@ -355,3 +369,100 @@ def test_extracao_paralela_de_tabelas_do_mesmo_schema_via_orquestrador(
     assert coluna_fk.referencia == ReferenciaDeColuna(
         nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
     )
+
+
+def test_total_linhas_apos_truncate_nao_usa_reltuples_desatualizado(
+    dsn: str, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: TRUNCATE sem novo ANALYZE não deixa total_linhas reportar valor antigo.
+
+    Achado da banca de revisão da issue #76: reltuples (ou até n_live_tup
+    sozinho) retém o valor pré-TRUNCATE indefinidamente, sem gatilho de
+    autovacuum depois de um TRUNCATE — a query precisa do sinal físico
+    (pg_relation_size) pra não mentir aqui. Tabela semeada com 100 linhas,
+    ANALYZE, TRUNCATE (setup em conftest.py) — sem isso, reltuples
+    reportaria 100 aqui.
+    """
+    extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+
+    resultado = extrator.extrair_tabela("truncamento", "tabela_truncada")
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor.total_linhas == 0
+
+
+def test_mesma_seed_produz_a_mesma_amostra(dsn: str) -> None:
+    """Borda: duas extrações com o mesmo seed retornam exatamente as mesmas linhas.
+
+    Prova a reprodutibilidade real via TABLESAMPLE ... REPEATABLE contra
+    Postgres de verdade — não só que o seed chega na query (isso os testes
+    unitários com cursor mockado já cobrem), mas que a garantia documentada
+    do Postgres realmente se sustenta. Achado da banca de revisão da issue
+    #76: nenhum teste anterior provava isso.
+    """
+    configuracao = ConfiguracaoDeExtracao(
+        estrategia=PercentualDeLinhas(percentual=20, seed=12345)
+    )
+    extrator_a = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+    extrator_b = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+
+    resultado_a = extrator_a.extrair_tabela("reprodutibilidade", "itens")
+    resultado_b = extrator_b.extrair_tabela("reprodutibilidade", "itens")
+
+    assert isinstance(resultado_a, Sucesso)
+    assert isinstance(resultado_b, Sucesso)
+    ids_a = sorted(resultado_a.valor.amostra["id"].to_list())
+    ids_b = sorted(resultado_b.valor.amostra["id"].to_list())
+    assert len(ids_a) > 0
+    assert ids_a == ids_b
+
+
+def test_seeds_diferentes_produzem_amostras_diferentes(dsn: str) -> None:
+    """Borda: seeds diferentes não convergem pra mesma amostra por acidente.
+
+    Complementa o teste de reprodutibilidade — sem isso, uma implementação
+    que ignorasse o seed por completo (bug) passaria no teste de
+    "mesma seed, mesma amostra" só por coincidência de sempre montar a
+    mesma query.
+    """
+    extrator_seed_1 = ExtratorPostgres(
+        dsn=dsn,
+        configuracao=ConfiguracaoDeExtracao(
+            estrategia=PercentualDeLinhas(percentual=20, seed=1)
+        ),
+    )
+    extrator_seed_2 = ExtratorPostgres(
+        dsn=dsn,
+        configuracao=ConfiguracaoDeExtracao(
+            estrategia=PercentualDeLinhas(percentual=20, seed=2)
+        ),
+    )
+
+    resultado_1 = extrator_seed_1.extrair_tabela("reprodutibilidade", "itens")
+    resultado_2 = extrator_seed_2.extrair_tabela("reprodutibilidade", "itens")
+
+    assert isinstance(resultado_1, Sucesso)
+    assert isinstance(resultado_2, Sucesso)
+    ids_1 = sorted(resultado_1.valor.amostra["id"].to_list())
+    ids_2 = sorted(resultado_2.valor.amostra["id"].to_list())
+    assert ids_1 != ids_2
+
+
+def test_tabela_inteira_le_a_tabela_toda_sem_tablesample(dsn: str) -> None:
+    """Caminho feliz: TabelaInteira contra Postgres real lê 100% das linhas.
+
+    total_linhas exato (len(amostra)) e sem Aviso, mesmo a tabela tendo
+    500 linhas reais — prova ponta a ponta que o dispatch AmostragemIntegral
+    não depende de TABLESAMPLE/percentual pra ler tudo.
+    """
+    configuracao = ConfiguracaoDeExtracao(estrategia=TabelaInteira())
+    extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+
+    resultado = extrator.extrair_tabela("reprodutibilidade", "itens")
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor.total_linhas == 500
+    assert resultado.valor.metadados_amostra.tamanho_amostra == 500
+    assert resultado.valor.metadados_amostra.percentual is None
+    assert resultado.valor.metadados_amostra.seed is None
+    assert resultado.avisos == []

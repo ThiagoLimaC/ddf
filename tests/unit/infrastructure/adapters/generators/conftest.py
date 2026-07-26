@@ -56,6 +56,8 @@ def construir_tabela() -> Callable[..., TabelaAnalisada]:
         nome_escopo: str = "escopo",
         total_linhas: int = 100,
         tamanho_amostra: int = 100,
+        percentual: float | None = None,
+        seed: int | None = None,
         papel_de_negocio: str | None = None,
         regras_de_negocio: list[str] | None = None,
         metricas: list[MetricasBaseTabela] | None = None,
@@ -68,7 +70,10 @@ def construir_tabela() -> Callable[..., TabelaAnalisada]:
             papel_de_negocio=papel_de_negocio,
             regras_de_negocio=regras_de_negocio or [],
             metadados_amostra=MetadadosDeAmostra(
-                estrategia="percentual_de_linhas", tamanho_amostra=tamanho_amostra
+                estrategia="percentual_de_linhas",
+                tamanho_amostra=tamanho_amostra,
+                percentual=percentual,
+                seed=seed,
             ),
             metricas=list(metricas) if metricas is not None else [],
         )

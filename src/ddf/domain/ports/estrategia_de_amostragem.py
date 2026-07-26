@@ -2,6 +2,8 @@
 
 from typing import Protocol, runtime_checkable
 
+from ddf.domain.model.common.requisicao_de_amostragem import RequisicaoDeAmostragem
+
 
 @runtime_checkable
 class EstrategiaDeAmostragem(Protocol):
@@ -24,6 +26,6 @@ class EstrategiaDeAmostragem(Protocol):
         ...
 
     @property
-    def percentual(self) -> float:
-        """Retorna a fração da tabela a amostrar, em porcentagem (0, 100]."""
+    def requisicao(self) -> RequisicaoDeAmostragem:
+        """Retorna o que amostrar — cada Extrator decide como, no dialeto próprio."""
         ...

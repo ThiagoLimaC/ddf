@@ -1,7 +1,10 @@
 """Registro de Estratégias de amostragem disponíveis para o wizard da CLI."""
 
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+
+from pydantic import ValidationError
 
 from ddf.domain.ports.estrategia_de_amostragem import EstrategiaDeAmostragem
 from ddf.infrastructure.adapters.cli import prompts
@@ -9,13 +12,13 @@ from ddf.infrastructure.adapters.cli.registro.comum import registrar_ou_falhar
 from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
     PercentualDeLinhas,
 )
+from ddf.infrastructure.adapters.extractors.tabela_inteira import TabelaInteira
 
 
 @dataclass(frozen=True)
 class EstrategiaRegistrada:
     """Uma EstrategiaDeAmostragem registrada, junto da função que a constrói."""
 
-    classe_estrategia: type[EstrategiaDeAmostragem]
     construir: Callable[[], EstrategiaDeAmostragem]
 
 
@@ -24,7 +27,6 @@ ESTRATEGIAS_REGISTRADAS: dict[str, EstrategiaRegistrada] = {}
 
 def registrar_estrategia(
     nome: str,
-    classe_estrategia: type[EstrategiaDeAmostragem],
     construir: Callable[[], EstrategiaDeAmostragem],
     registro: dict[str, EstrategiaRegistrada] = ESTRATEGIAS_REGISTRADAS,
 ) -> None:
@@ -34,7 +36,6 @@ def registrar_estrategia(
 
     Args:
         nome: Identificador da estratégia exibido ao usuário no wizard.
-        classe_estrategia: Classe de EstrategiaDeAmostragem associada.
         construir: Função que constrói uma instância da estratégia,
             perguntando interativamente os parâmetros que ela precisa.
         registro: Dicionário onde a estratégia é registrada. Usa
@@ -43,20 +44,53 @@ def registrar_estrategia(
     registrar_ou_falhar(
         nome,
         "Estratégia",
-        EstrategiaRegistrada(classe_estrategia=classe_estrategia, construir=construir),
+        EstrategiaRegistrada(construir=construir),
         registro,
         feminino=True,
     )
 
 
 def _construir_percentual_de_linhas() -> EstrategiaDeAmostragem:
-    """Pergunta o percentual de amostragem e monta o PercentualDeLinhas."""
+    """Pergunta percentual e seed opcional, monta o PercentualDeLinhas.
+
+    Percentual fora de (0, 100] levanta ValidationError (Pydantic, mensagem
+    em inglês) dentro de AmostragemProbabilistica — capturado aqui pra sair
+    com mensagem em português, mesmo padrão de `ou_sair` (avisos.py).
+    """
     percentual = float(
         prompts.texto("Percentual de amostragem (0-100]:", default="10")
     )
-    return PercentualDeLinhas(percentual=percentual)
+    seed_texto = prompts.texto(
+        "Seed para reprodutibilidade (opcional, deixe em branco para aleatório):",
+        default="",
+    )
+    seed = int(seed_texto) if seed_texto else None
+    try:
+        return PercentualDeLinhas(percentual=percentual, seed=seed)
+    except ValidationError:
+        print(f"Erro: percentual deve estar em (0, 100] ({percentual}).")
+        sys.exit(1)
 
 
-registrar_estrategia(
-    "Percentual de linhas", PercentualDeLinhas, _construir_percentual_de_linhas
-)
+def _construir_tabela_inteira() -> EstrategiaDeAmostragem:
+    """Confirma o custo de memória e monta TabelaInteira.
+
+    Sem percentual pra limitar o tamanho (ao contrário de
+    `PercentualDeLinhas`, cujo default 10 protege por acidente), essa
+    estratégia carrega a tabela inteira em memória de uma vez — risco real
+    de OOM em tabelas muito grandes. A confirmação existe pra essa escolha
+    nunca ser silenciosa.
+    """
+    prosseguir = prompts.confirmar(
+        "Tabela inteira carrega tudo em memória de uma vez "
+        "(sem limite de tamanho) — pode causar falta de memória em tabelas "
+        "muito grandes. Continuar?",
+        default=True,
+    )
+    if not prosseguir:
+        sys.exit(0)
+    return TabelaInteira()
+
+
+registrar_estrategia("Percentual de linhas", _construir_percentual_de_linhas)
+registrar_estrategia("Tabela inteira", _construir_tabela_inteira)

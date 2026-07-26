@@ -523,6 +523,74 @@ def test_amostra_maior_que_total_linhas_emite_aviso(
     assert "maior que total_linhas" in resultado.avisos[0].mensagem
 
 
+def test_amostragem_integral_usa_tamanho_da_amostra_como_total_linhas(
+    pool_classe_fake: MagicMock, configuracao_integral: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: em AmostragemIntegral, total_linhas vira len(amostra), não catálogo.
+
+    A estimativa de catálogo (3, propositalmente diferente do tamanho real
+    da amostra) nunca aparece no resultado nem gera Aviso — em tabela inteira a
+    tabela inteira já foi lida, então a divergência é estruturalmente
+    impossível.
+    """
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.side_effect = [
+        [("tabela", "id", "int4", None, None, None, "NO")],  # colunas
+        [("tabela", "id")],  # PK
+        [],  # FK
+        [],  # UNIQUE
+        [("tabela", 3.0)],  # total_linhas de catálogo, desatualizado de propósito
+        [(1,), (2,), (3,), (4,), (5,)],  # amostra — 5 linhas, a tabela inteira
+    ]
+    cursor_fake.description = [SimpleNamespace(name="id")]
+    pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+    extrator = ExtratorPostgres(
+        dsn="postgresql://fake", configuracao=configuracao_integral
+    )
+    resultado = extrator.extrair_tabela("public", "tabela")
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor.total_linhas == 5
+    assert resultado.valor.metadados_amostra.tamanho_amostra == 5
+    assert resultado.valor.metadados_amostra.percentual is None
+    assert resultado.valor.metadados_amostra.seed is None
+    assert resultado.avisos == []
+    consulta_amostra = cursor_fake.execute.call_args_list[-1].args[0]
+    assert "TABLESAMPLE" not in str(consulta_amostra)
+
+
+def test_percentual_de_linhas_sem_seed_gera_e_registra_um_seed(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: sem seed do usuário, o Extrator gera um e registra em MetadadosDeAmostra.
+
+    Reprodutibilidade não é opt-in silencioso — mesmo sem seed explícito, a
+    amostra usa REPEATABLE com um seed concreto, nunca deixando o Postgres
+    escolher em silêncio.
+    """
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.side_effect = [
+        [("tabela", "id", "int4", None, None, None, "NO")],  # colunas
+        [("tabela", "id")],  # PK
+        [],  # FK
+        [],  # UNIQUE
+        [("tabela", 100.0)],  # total_linhas
+        [(1,)],  # amostra
+    ]
+    cursor_fake.description = [SimpleNamespace(name="id")]
+    pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+    extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
+    resultado = extrator.extrair_tabela("public", "tabela")
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor.metadados_amostra.seed is not None
+    assert isinstance(resultado.valor.metadados_amostra.seed, int)
+
+
 def test_max_conexoes_um_faz_segunda_chamada_concorrente_esperar(
     pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
 ) -> None:

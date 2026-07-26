@@ -252,6 +252,8 @@ def _montar_tabela_json(tabela: TabelaAnalisada) -> dict[str, Any]:
         "metadados_amostra": {
             "estrategia": tabela.metadados_amostra.estrategia,
             "tamanho_amostra": tamanho_amostra,
+            "percentual": tabela.metadados_amostra.percentual,
+            "seed": tabela.metadados_amostra.seed,
         },
     }
 
