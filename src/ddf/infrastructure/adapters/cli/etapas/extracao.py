@@ -23,9 +23,9 @@ _MAXIMO_TENTATIVAS_CONEXAO = 3
 def configurar_amostragem() -> ConfiguracaoDeExtracao:
     """Etapa 1: escolhe a estratégia de amostragem, monta a ConfiguracaoDeExtracao.
 
-    Escolha explícita mesmo havendo só uma estratégia registrada hoje —
-    `EstrategiaDeAmostragem` é um Port, o registro existe para crescer sem
-    precisar editar o wizard quando uma segunda estratégia aparecer.
+    `EstrategiaDeAmostragem` é um Port — `PercentualDeLinhas` e
+    `TabelaInteira` (issue #76) já provam que o registro cresce sem
+    precisar editar este wizard.
     """
     nome_estrategia = prompts.selecionar(
         "Qual estratégia de amostragem?", list(ESTRATEGIAS_REGISTRADAS.keys())

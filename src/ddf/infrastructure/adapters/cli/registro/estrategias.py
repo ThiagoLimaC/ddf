@@ -1,15 +1,18 @@
 """Registro de Estratégias de amostragem disponíveis para o wizard da CLI."""
 
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+
+from pydantic import ValidationError
 
 from ddf.domain.ports.estrategia_de_amostragem import EstrategiaDeAmostragem
 from ddf.infrastructure.adapters.cli import prompts
 from ddf.infrastructure.adapters.cli.registro.comum import registrar_ou_falhar
-from ddf.infrastructure.adapters.extractors.full_scan import FullScan
 from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
     PercentualDeLinhas,
 )
+from ddf.infrastructure.adapters.extractors.tabela_inteira import TabelaInteira
 
 
 @dataclass(frozen=True)
@@ -48,7 +51,12 @@ def registrar_estrategia(
 
 
 def _construir_percentual_de_linhas() -> EstrategiaDeAmostragem:
-    """Pergunta percentual e seed opcional, monta o PercentualDeLinhas."""
+    """Pergunta percentual e seed opcional, monta o PercentualDeLinhas.
+
+    Percentual fora de (0, 100] levanta ValidationError (Pydantic, mensagem
+    em inglês) dentro de AmostragemProbabilistica — capturado aqui pra sair
+    com mensagem em português, mesmo padrão de `ou_sair` (avisos.py).
+    """
     percentual = float(
         prompts.texto("Percentual de amostragem (0-100]:", default="10")
     )
@@ -57,13 +65,32 @@ def _construir_percentual_de_linhas() -> EstrategiaDeAmostragem:
         default="",
     )
     seed = int(seed_texto) if seed_texto else None
-    return PercentualDeLinhas(percentual=percentual, seed=seed)
+    try:
+        return PercentualDeLinhas(percentual=percentual, seed=seed)
+    except ValidationError:
+        print(f"Erro: percentual deve estar em (0, 100] ({percentual}).")
+        sys.exit(1)
 
 
-def _construir_full_scan() -> EstrategiaDeAmostragem:
-    """Constrói FullScan — sem parâmetro nenhum a perguntar."""
-    return FullScan()
+def _construir_tabela_inteira() -> EstrategiaDeAmostragem:
+    """Confirma o custo de memória e monta TabelaInteira.
+
+    Sem percentual pra limitar o tamanho (ao contrário de
+    `PercentualDeLinhas`, cujo default 10 protege por acidente), full scan
+    carrega a tabela inteira em memória de uma vez — risco real de OOM em
+    tabelas muito grandes. A confirmação existe pra essa escolha nunca ser
+    silenciosa.
+    """
+    prosseguir = prompts.confirmar(
+        "Full scan carrega a tabela inteira em memória de uma vez "
+        "(sem limite de tamanho) — pode causar falta de memória em tabelas "
+        "muito grandes. Continuar?",
+        default=True,
+    )
+    if not prosseguir:
+        sys.exit(0)
+    return TabelaInteira()
 
 
 registrar_estrategia("Percentual de linhas", _construir_percentual_de_linhas)
-registrar_estrategia("Tabela inteira (full scan)", _construir_full_scan)
+registrar_estrategia("Tabela inteira (full scan)", _construir_tabela_inteira)
