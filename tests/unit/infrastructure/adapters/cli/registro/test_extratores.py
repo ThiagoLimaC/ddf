@@ -119,7 +119,7 @@ def test_construir_extrator_postgres_pede_senha_mascarada(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Caminho feliz: senha passa por prompts.senha() (mascarada), não texto()."""
-    respostas_texto = iter(["host1", "5433", "banco1", "user1"])
+    respostas_texto = iter(["host1", "5433", "banco1", "user1", ""])
     monkeypatch.setattr(
         "questionary.text",
         lambda *args, **kwargs: _RespostaFake(next(respostas_texto)),
@@ -139,7 +139,7 @@ def test_construir_extrator_postgres_com_caracteres_especiais_faz_url_encode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Borda: senha/usuário/banco com caracteres especiais de URL são escapados."""
-    respostas_texto = iter(["host1", "5432", "banco/dev", "user@dev"])
+    respostas_texto = iter(["host1", "5432", "banco/dev", "user@dev", ""])
     monkeypatch.setattr(
         "questionary.text",
         lambda *args, **kwargs: _RespostaFake(next(respostas_texto)),
@@ -154,4 +154,32 @@ def test_construir_extrator_postgres_com_caracteres_especiais_faz_url_encode(
     assert isinstance(extrator, ExtratorPostgres)
     assert extrator._dsn == (
         "postgresql://user%40dev:senha%3A1%402@host1:5432/banco%2Fdev"
+    )
+
+
+def test_construir_extrator_postgres_com_parametros_extra_anexa_na_dsn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Borda: parâmetros extra (ex.: sslmode) são anexados como query string.
+
+    Cobre Postgres gerenciado (RDS/Azure Database/PgBouncer) que exige
+    sslmode=require — campos fixos sozinhos não têm como expressar isso.
+    """
+    respostas_texto = iter(
+        ["host1", "5432", "banco1", "user1", "sslmode=require"]
+    )
+    monkeypatch.setattr(
+        "questionary.text",
+        lambda *args, **kwargs: _RespostaFake(next(respostas_texto)),
+    )
+    monkeypatch.setattr(
+        "questionary.password", lambda *args, **kwargs: _RespostaFake("senha1")
+    )
+    configuracao = ConfiguracaoDeExtracao(estrategia=PercentualDeLinhas(percentual=10))
+
+    extrator = _construir_extrator_postgres(configuracao)
+
+    assert isinstance(extrator, ExtratorPostgres)
+    assert extrator._dsn == (
+        "postgresql://user1:senha1@host1:5432/banco1?sslmode=require"
     )

@@ -61,16 +61,27 @@ def _construir_extrator_postgres(configuracao: ConfiguracaoDeExtracao) -> Extrat
     Usuário/senha/banco passam por `quote` antes de compor a DSN: qualquer
     um pode conter caracteres especiais de URL (`@`, `:`, `/`, `%`) que
     quebrariam o formato se inseridos crus.
+
+    Parâmetros extra (opcional) cobrem o que campos fixos não expressam —
+    principalmente `sslmode`, comum/exigido por Postgres gerenciado em
+    produção (RDS, Azure Database, PgBouncer na frente) — sem voltar a
+    pedir a connection string inteira em texto claro.
     """
     host = prompts.texto("Host do Postgres:")
     porta = prompts.numero("Porta:", int, default="5432")
     banco = prompts.texto("Banco de dados:")
     usuario = prompts.texto("Usuário:")
     senha_conexao = prompts.senha("Senha:")
+    parametros_extra = prompts.texto(
+        "Parâmetros extra de conexão (opcional, ex.: sslmode=require):",
+        default="",
+    )
     dsn = (
         f"postgresql://{quote(usuario, safe='')}:{quote(senha_conexao, safe='')}"
         f"@{host}:{porta}/{quote(banco, safe='')}"
     )
+    if parametros_extra:
+        dsn += f"?{parametros_extra}"
     return ExtratorPostgres(dsn=dsn, configuracao=configuracao)
 
 
