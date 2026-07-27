@@ -8,6 +8,7 @@ chamada direta — são descobertos via entry points do grupo "ddf.extratores"
 """
 
 from collections.abc import Callable
+from urllib.parse import quote
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.ports.extrator import Extrator, ExtratorRegistrado
@@ -52,11 +53,23 @@ def registrar_extrator(
 
 
 def _construir_extrator_postgres(configuracao: ConfiguracaoDeExtracao) -> Extrator:
-    """Pergunta a connection string do Postgres e monta o ExtratorPostgres."""
-    dsn = prompts.texto(
-        "Connection string do Postgres:",
-        default="postgresql://usuario:senha@host:porta/banco",
-        dica_limpar=True,
+    """Pergunta host/porta/credenciais do Postgres e monta o ExtratorPostgres.
+
+    Campos separados (não uma connection string inteira) para que a senha
+    passe por `prompts.senha()` — mascarada, mesmo tratamento do MariaDB —
+    em vez de aparecer em texto claro na tela/scrollback do terminal.
+    Usuário/senha/banco passam por `quote` antes de compor a DSN: qualquer
+    um pode conter caracteres especiais de URL (`@`, `:`, `/`, `%`) que
+    quebrariam o formato se inseridos crus.
+    """
+    host = prompts.texto("Host do Postgres:")
+    porta = prompts.numero("Porta:", int, default="5432")
+    banco = prompts.texto("Banco de dados:")
+    usuario = prompts.texto("Usuário:")
+    senha_conexao = prompts.senha("Senha:")
+    dsn = (
+        f"postgresql://{quote(usuario, safe='')}:{quote(senha_conexao, safe='')}"
+        f"@{host}:{porta}/{quote(banco, safe='')}"
     )
     return ExtratorPostgres(dsn=dsn, configuracao=configuracao)
 

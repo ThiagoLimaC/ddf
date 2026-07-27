@@ -7,6 +7,7 @@ from ddf.domain.ports.extrator import Extrator, ExtratorRegistrado
 from ddf.infrastructure.adapters.cli.registro.extratores import (
     EXTRATORES_REGISTRADOS,
     _construir_extrator_mariadb,
+    _construir_extrator_postgres,
     registrar_extrator,
 )
 from ddf.infrastructure.adapters.extractors.mariadb.extrator_mariadb import (
@@ -14,6 +15,9 @@ from ddf.infrastructure.adapters.extractors.mariadb.extrator_mariadb import (
 )
 from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
     PercentualDeLinhas,
+)
+from ddf.infrastructure.adapters.extractors.postgres.extrator_postgres import (
+    ExtratorPostgres,
 )
 
 
@@ -108,3 +112,46 @@ def test_construir_extrator_mariadb_com_porta_invalida_reprompt(
     extrator = _construir_extrator_mariadb(configuracao)
 
     assert isinstance(extrator, ExtratorMariaDB)
+
+
+# _construir_extrator_postgres() — caminho feliz, borda
+def test_construir_extrator_postgres_pede_senha_mascarada(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Caminho feliz: senha passa por prompts.senha() (mascarada), não texto()."""
+    respostas_texto = iter(["host1", "5433", "banco1", "user1"])
+    monkeypatch.setattr(
+        "questionary.text",
+        lambda *args, **kwargs: _RespostaFake(next(respostas_texto)),
+    )
+    monkeypatch.setattr(
+        "questionary.password", lambda *args, **kwargs: _RespostaFake("senha1")
+    )
+    configuracao = ConfiguracaoDeExtracao(estrategia=PercentualDeLinhas(percentual=10))
+
+    extrator = _construir_extrator_postgres(configuracao)
+
+    assert isinstance(extrator, ExtratorPostgres)
+    assert extrator._dsn == "postgresql://user1:senha1@host1:5433/banco1"
+
+
+def test_construir_extrator_postgres_com_caracteres_especiais_faz_url_encode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Borda: senha/usuário/banco com caracteres especiais de URL são escapados."""
+    respostas_texto = iter(["host1", "5432", "banco/dev", "user@dev"])
+    monkeypatch.setattr(
+        "questionary.text",
+        lambda *args, **kwargs: _RespostaFake(next(respostas_texto)),
+    )
+    monkeypatch.setattr(
+        "questionary.password", lambda *args, **kwargs: _RespostaFake("senha:1@2")
+    )
+    configuracao = ConfiguracaoDeExtracao(estrategia=PercentualDeLinhas(percentual=10))
+
+    extrator = _construir_extrator_postgres(configuracao)
+
+    assert isinstance(extrator, ExtratorPostgres)
+    assert extrator._dsn == (
+        "postgresql://user%40dev:senha%3A1%402@host1:5432/banco%2Fdev"
+    )
