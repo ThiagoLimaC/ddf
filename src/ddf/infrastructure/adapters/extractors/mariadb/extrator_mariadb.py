@@ -312,6 +312,10 @@ class ExtratorMariaDB:
 
     def extrair_tabela(self, escopo: str, tabela: str) -> Resultado[TabelaExtraida]:
         """Extrai estrutura, amostra e metadados de uma tabela específica."""
+        estrategia = self._configuracao.estrategia
+        if estrategia is None:
+            return Falha("Extrator usado sem estratégia de amostragem configurada.")
+
         with self._conexao() as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
@@ -378,7 +382,7 @@ class ExtratorMariaDB:
                     else 0
                 )
 
-                requisicao = self._configuracao.estrategia.requisicao
+                requisicao = estrategia.requisicao
                 requisicao_efetiva: RequisicaoDeAmostragem
                 identificador_tabela = (
                     f"{_quotar_identificador(escopo)}.{_quotar_identificador(tabela)}"
@@ -430,7 +434,7 @@ class ExtratorMariaDB:
                     assert_never(nunca)
 
             metadados_amostra, avisos_amostra = construir_metadados_de_amostra(
-                nome=self._configuracao.estrategia.nome,
+                nome=estrategia.nome,
                 requisicao=requisicao_efetiva,
                 tamanho_amostra=len(amostra),
                 total_linhas=total_linhas_final,

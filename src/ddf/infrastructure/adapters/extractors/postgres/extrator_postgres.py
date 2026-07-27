@@ -277,6 +277,10 @@ class ExtratorPostgres:
 
     def extrair_tabela(self, schema: str, tabela: str) -> Resultado[TabelaExtraida]:
         """Extrai estrutura, amostra e metadados de uma tabela específica."""
+        estrategia = self._configuracao.estrategia
+        if estrategia is None:
+            return Falha("Extrator usado sem estratégia de amostragem configurada.")
+
         resultado_metadados = self._obter_metadados_schema(schema)
         if isinstance(resultado_metadados, Falha):
             return resultado_metadados
@@ -299,7 +303,7 @@ class ExtratorPostgres:
                 _construir_coluna(linha_coluna, colunas_pk, colunas_fk, colunas_unicas)
             )
 
-        requisicao = self._configuracao.estrategia.requisicao
+        requisicao = estrategia.requisicao
         with self._conexao() as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
@@ -354,7 +358,7 @@ class ExtratorPostgres:
                     assert_never(nunca)
 
             metadados_amostra, avisos_amostra = construir_metadados_de_amostra(
-                nome=self._configuracao.estrategia.nome,
+                nome=estrategia.nome,
                 requisicao=requisicao_efetiva,
                 tamanho_amostra=len(amostra),
                 total_linhas=total_linhas_final,
