@@ -285,9 +285,10 @@ class ExtratorPostgres:
 
     def extrair_tabela(self, schema: str, tabela: str) -> Resultado[TabelaExtraida]:
         """Extrai estrutura, amostra e metadados de uma tabela específica."""
-        estrategia = self._configuracao.estrategia
-        if estrategia is None:
-            return Falha("Extrator usado sem estratégia de amostragem configurada.")
+        resultado_estrategia = self._configuracao.estrategia_obrigatoria()
+        if isinstance(resultado_estrategia, Falha):
+            return resultado_estrategia
+        estrategia = resultado_estrategia.valor
 
         resultado_metadados = self._obter_metadados_schema(schema)
         if isinstance(resultado_metadados, Falha):
@@ -372,6 +373,7 @@ class ExtratorPostgres:
                 total_linhas=total_linhas_final,
                 origem="ExtratorPostgres",
                 causa_provavel="sem ANALYZE recente",
+                identificador_tabela=f"{schema}.{tabela}",
             )
             avisos.extend(avisos_amostra)
             return Sucesso(

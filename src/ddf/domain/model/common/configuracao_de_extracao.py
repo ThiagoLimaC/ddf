@@ -3,6 +3,7 @@
 from pydantic import BaseModel, InstanceOf
 
 from ddf.domain.ports.estrategia_de_amostragem import EstrategiaDeAmostragem
+from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 
 
 class ConfiguracaoDeExtracao(BaseModel):
@@ -16,3 +17,16 @@ class ConfiguracaoDeExtracao(BaseModel):
     """
 
     estrategia: InstanceOf[EstrategiaDeAmostragem] | None = None
+
+    def estrategia_obrigatoria(self) -> Resultado[EstrategiaDeAmostragem]:
+        """Devolve `estrategia` ou `Falha` se ainda não foi configurada.
+
+        Centraliza a checagem que todo `Extrator.extrair_tabela` precisa
+        fazer — sem isso, cada Adapter concreto (Postgres, MariaDB, e
+        futuros plugins de terceiro) precisaria copiar o mesmo `if
+        estrategia is None` manualmente, sem nada que force um novo
+        Extrator a lembrar de replicar a checagem (issue #75).
+        """
+        if self.estrategia is None:
+            return Falha("Extrator usado sem estratégia de amostragem configurada.")
+        return Sucesso(self.estrategia)

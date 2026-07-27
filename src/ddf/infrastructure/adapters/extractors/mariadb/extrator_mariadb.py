@@ -203,6 +203,7 @@ class ExtratorMariaDB:
         configuracao: ConfiguracaoDeExtracao,
         port: int = 3306,
         max_conexoes: int = 8,
+        connect_timeout: int = 10,
     ) -> None:
         """Guarda os parâmetros de conexão — o pool só é criado no primeiro uso.
 
@@ -214,6 +215,12 @@ class ExtratorMariaDB:
             port: porta do servidor MariaDB.
             max_conexoes: nº máximo de conexões simultâneas que este MariaDB
                 aguenta com segurança — dimensiona o pool.
+            connect_timeout: segundos até desistir de abrir a conexão TCP
+                inicial. Declarado explicitamente pelo mesmo motivo do
+                `connect_timeout` de `ExtratorPostgres` (host inacessível
+                não pode travar indefinidamente) — o valor já era o default
+                do `pymysql`, então isso não muda o comportamento atual, só
+                deixa de depender implicitamente do driver.
 
         Raises:
             ValueError: se `max_conexoes` não for positivo.
@@ -226,6 +233,7 @@ class ExtratorMariaDB:
         self._configuracao = configuracao
         self._port = port
         self._max_conexoes = max_conexoes
+        self._connect_timeout = connect_timeout
         self._pool: PooledDB | None = None
         self._lock_pool = threading.Lock()
 
@@ -246,6 +254,7 @@ class ExtratorMariaDB:
                             user=self._user,
                             password=self._password,
                             autocommit=True,
+                            connect_timeout=self._connect_timeout,
                         )
                     except pymysql.err.OperationalError as erro:
                         return Falha(f"Não foi possível conectar: {erro}")
@@ -312,9 +321,10 @@ class ExtratorMariaDB:
 
     def extrair_tabela(self, escopo: str, tabela: str) -> Resultado[TabelaExtraida]:
         """Extrai estrutura, amostra e metadados de uma tabela específica."""
-        estrategia = self._configuracao.estrategia
-        if estrategia is None:
-            return Falha("Extrator usado sem estratégia de amostragem configurada.")
+        resultado_estrategia = self._configuracao.estrategia_obrigatoria()
+        if isinstance(resultado_estrategia, Falha):
+            return resultado_estrategia
+        estrategia = resultado_estrategia.valor
 
         with self._conexao() as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
@@ -440,6 +450,7 @@ class ExtratorMariaDB:
                 total_linhas=total_linhas_final,
                 origem="ExtratorMariaDB",
                 causa_provavel="sem ANALYZE TABLE recente",
+                identificador_tabela=f"{escopo}.{tabela}",
             )
             avisos.extend(avisos_amostra)
             return Sucesso(

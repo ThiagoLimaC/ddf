@@ -256,6 +256,28 @@ def test_max_conexoes_zero_levanta_value_error(
         )
 
 
+def test_extrair_tabela_sem_estrategia_configurada_retorna_falha(
+    pool_classe_fake: MagicMock,
+) -> None:
+    """Erro esperado: extrair_tabela sem estratégia configurada vira Falha.
+
+    Reproduz o cenário real do wizard reordenado (issue #75): o Extrator é
+    construído por `conectar()` antes de `configurar_amostragem()` atribuir
+    a estratégia — se algo chamar extrair_tabela nesse meio-tempo, precisa
+    de uma Falha explícita, não um AttributeError sobre None.
+    """
+    configuracao_sem_estrategia = ConfiguracaoDeExtracao()
+    extrator = ExtratorPostgres(
+        dsn="postgresql://fake", configuracao=configuracao_sem_estrategia
+    )
+
+    resultado = extrator.extrair_tabela("public", "clientes")
+
+    assert isinstance(resultado, Falha)
+    assert "sem estratégia" in resultado.erro
+    pool_classe_fake.assert_not_called()
+
+
 def test_listar_escopos_com_conexao_recusada_retorna_falha(
     pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
 ) -> None:

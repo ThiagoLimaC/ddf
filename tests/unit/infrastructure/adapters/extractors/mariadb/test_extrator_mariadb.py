@@ -70,6 +70,40 @@ def test_primeiro_uso_cria_pool_com_parametros_corretos(
         user="root",
         password="senha",
         autocommit=True,
+        connect_timeout=10,
+    )
+
+
+def test_connect_timeout_customizado_e_repassado_ao_pool(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: connect_timeout customizado é repassado ao PooledDB."""
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.return_value = []
+    pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+    extrator = ExtratorMariaDB(
+        host="fake",
+        user="root",
+        password="senha",
+        configuracao=configuracao,
+        connect_timeout=3,
+    )
+    extrator.listar_tabelas("vendas")
+
+    pool_classe_fake.assert_called_once_with(
+        creator=pymysql,
+        mincached=1,
+        maxcached=8,
+        maxconnections=8,
+        blocking=True,
+        host="fake",
+        port=3306,
+        user="root",
+        password="senha",
+        autocommit=True,
+        connect_timeout=3,
     )
 
 
@@ -265,6 +299,31 @@ def test_max_conexoes_zero_levanta_value_error(
             configuracao=configuracao,
             max_conexoes=0,
         )
+
+
+def test_extrair_tabela_sem_estrategia_configurada_retorna_falha(
+    pool_classe_fake: MagicMock,
+) -> None:
+    """Erro esperado: extrair_tabela sem estratégia configurada vira Falha.
+
+    Reproduz o cenário real do wizard reordenado (issue #75): o Extrator é
+    construído por `conectar()` antes de `configurar_amostragem()` atribuir
+    a estratégia — se algo chamar extrair_tabela nesse meio-tempo, precisa
+    de uma Falha explícita, não um AttributeError sobre None.
+    """
+    configuracao_sem_estrategia = ConfiguracaoDeExtracao()
+    extrator = ExtratorMariaDB(
+        host="fake",
+        user="root",
+        password="senha",
+        configuracao=configuracao_sem_estrategia,
+    )
+
+    resultado = extrator.extrair_tabela("public", "clientes")
+
+    assert isinstance(resultado, Falha)
+    assert "sem estratégia" in resultado.erro
+    pool_classe_fake.assert_not_called()
 
 
 def test_listar_escopos_com_pool_indisponivel_retorna_falha(

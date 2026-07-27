@@ -18,6 +18,7 @@ def construir_metadados_de_amostra(
     total_linhas: int,
     origem: str,
     causa_provavel: str,
+    identificador_tabela: str,
 ) -> tuple[MetadadosDeAmostra, list[Aviso]]:
     """Monta MetadadosDeAmostra e emite os Avisos de custo associados à estratégia.
 
@@ -26,7 +27,10 @@ def construir_metadados_de_amostra(
     independente do percentual pedido — limitação estrutural da estratégia
     (ver docstring de `PercentualDeLinhas`), não uma condição de erro; (2)
     quando a amostra excede `total_linhas`, sintoma de estimativa de
-    catálogo desatualizada.
+    catálogo desatualizada. Ambos citam `identificador_tabela`, mesmo padrão
+    de `construir_colunas_fk` — sem isso, os exemplos que `avisos.py` mostra
+    antes de colapsar por contagem ficam anônimos, sem dizer qual tabela
+    específica paga o custo (issue #75).
 
     Args:
         nome: identificador da EstrategiaDeAmostragem (MetadadosDeAmostra.estrategia).
@@ -42,6 +46,7 @@ def construir_metadados_de_amostra(
         causa_provavel: explicação, específica do motor, de por que
             total_linhas pode estar desatualizado (ex.: "sem ANALYZE
             recente" no Postgres, "sem ANALYZE TABLE recente" no MariaDB).
+        identificador_tabela: "escopo.tabela", citado nas mensagens de Aviso.
     """
     avisos: list[Aviso] = []
     match requisicao:
@@ -55,10 +60,11 @@ def construir_metadados_de_amostra(
             avisos.append(
                 Aviso(
                     mensagem=(
-                        "Amostragem por percentual faz varredura sequencial "
-                        f"completa da tabela ({total_linhas} linhas), "
-                        "independente do percentual pedido — custo de I/O "
-                        "não escala com o tamanho da amostra resultante."
+                        f"'{identificador_tabela}': amostragem por percentual "
+                        f"faz varredura sequencial completa da tabela "
+                        f"({total_linhas} linhas), independente do percentual "
+                        "pedido — custo de I/O não escala com o tamanho da "
+                        "amostra resultante."
                     ),
                     origem=origem,
                 )
@@ -74,9 +80,9 @@ def construir_metadados_de_amostra(
         avisos.append(
             Aviso(
                 mensagem=(
-                    f"Amostra ({tamanho_amostra} linhas) maior que total_linhas "
-                    f"({total_linhas}) — total_linhas pode estar desatualizado "
-                    f"({causa_provavel})."
+                    f"'{identificador_tabela}': amostra ({tamanho_amostra} "
+                    f"linhas) maior que total_linhas ({total_linhas}) — "
+                    f"total_linhas pode estar desatualizado ({causa_provavel})."
                 ),
                 origem=origem,
             )
