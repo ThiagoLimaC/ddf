@@ -2,10 +2,13 @@
 
 import threading
 from collections import defaultdict
+from collections.abc import Generator
+from contextlib import contextmanager
 from typing import NamedTuple, assert_never
 
 import polars as pl
 from psycopg2 import OperationalError, sql
+from psycopg2.extensions import connection as conexao_postgres
 from psycopg2.pool import ThreadedConnectionPool
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
@@ -23,122 +26,19 @@ from ddf.infrastructure.adapters.extractors.construir_colunas_fk import (
 from ddf.infrastructure.adapters.extractors.construir_metadados_de_amostra import (
     construir_metadados_de_amostra,
 )
+from ddf.infrastructure.adapters.extractors.postgres._queries import (
+    _CHAVES_ESTRANGEIRAS_SCHEMA_SQL,
+    _CHAVES_PRIMARIAS_SCHEMA_SQL,
+    _COLUNAS_SCHEMA_SQL,
+    _COLUNAS_UNICAS_SCHEMA_SQL,
+    _LISTAR_ESCOPOS_SQL,
+    _LISTAR_TABELAS_SQL,
+    _TOTAL_LINHAS_SCHEMA_SQL,
+)
 from ddf.infrastructure.adapters.extractors.postgres.mapeamento_de_tipos import (
     mapear_tipo_postgres,
 )
 from ddf.infrastructure.adapters.extractors.seed_efetivo import seed_efetivo
-
-_LISTAR_ESCOPOS_SQL = """
-    SELECT schema_name
-    FROM information_schema.schemata
-    WHERE schema_name NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
-      AND schema_name NOT LIKE 'pg_temp_%'
-      AND schema_name NOT LIKE 'pg_toast_temp_%'
-    ORDER BY schema_name
-"""
-
-_LISTAR_TABELAS_SQL = """
-    SELECT table_schema, table_name
-    FROM information_schema.tables
-    WHERE table_schema = %s AND table_type = 'BASE TABLE'
-    ORDER BY table_name
-"""
-
-_COLUNAS_SCHEMA_SQL = """
-    SELECT table_name, column_name, udt_name, character_maximum_length,
-           numeric_precision, numeric_scale, is_nullable
-    FROM information_schema.columns
-    WHERE table_schema = %s
-    ORDER BY table_name, ordinal_position
-"""
-
-_CHAVES_PRIMARIAS_SCHEMA_SQL = """
-    SELECT tc.table_name, kcu.column_name
-    FROM information_schema.table_constraints tc
-    JOIN information_schema.key_column_usage kcu
-        ON tc.constraint_name = kcu.constraint_name
-        AND tc.table_schema = kcu.table_schema
-    WHERE tc.constraint_type = 'PRIMARY KEY'
-        AND tc.table_schema = %s
-"""
-
-_CHAVES_ESTRANGEIRAS_SCHEMA_SQL = """
-    SELECT tc.table_name AS tabela_de_origem, kcu.column_name,
-           ccu.table_schema, ccu.table_name, ccu.column_name
-    FROM information_schema.table_constraints tc
-    JOIN information_schema.key_column_usage kcu
-        ON tc.constraint_name = kcu.constraint_name
-        AND tc.table_schema = kcu.table_schema
-    JOIN information_schema.referential_constraints rc
-        ON tc.constraint_name = rc.constraint_name
-        AND tc.constraint_schema = rc.constraint_schema
-    JOIN information_schema.key_column_usage ccu
-        ON rc.unique_constraint_name = ccu.constraint_name
-        AND rc.unique_constraint_schema = ccu.constraint_schema
-        AND kcu.position_in_unique_constraint = ccu.ordinal_position
-    WHERE tc.constraint_type = 'FOREIGN KEY'
-        AND tc.table_schema = %s
-"""
-
-# relkind IN ('r', 'p') — bug pré-existente encontrado no desenho da issue
-# #66 (não introduzido aqui): sem o filtro, information_schema.tables já
-# classifica tabela particionada (relkind='p') como BASE TABLE normalmente,
-# mas reltuples do pai particionado só agrega os filhos a partir do PG14 —
-# podia ficar em 0 mesmo com dado real nas partições em versões anteriores.
-# O join por nome contra pg_namespace já blindava contra pegar a relação
-# errada (Postgres não permite colisão de nome entre tabela/view/sequence no
-# mesmo schema); o filtro é defesa explícita do tipo de relação, não
-# correção de uma colisão observada.
-#
-# n_live_tup: contador incremental, mais atual que reltuples entre
-# ANALYZEs, sem custo adicional. NULLIF(s.n_live_tup, 0) trata "sem
-# estatística reportada ainda" como ausência, não zero real.
-#
-# CASE cobre o que reltuples também erra: TRUNCATE zera n_live_tup mas
-# deixa reltuples com o valor antigo indefinidamente (sem gatilho de
-# autovacuum depois de TRUNCATE). pg_relation_size(oid) = 0 é sinal físico
-# (arquivo vazio) — relkind <> 'p' exclui tabela-mãe particionada, que
-# sempre tem tamanho 0 por não ter storage próprio. NULLIF(reltuples, -1)
-# trata "nunca analisada" como ausência, não zero.
-#
-# Limitação aceita: DELETE em massa sem TRUNCATE, antes do autovacuum
-# truncar páginas vazias, ainda pode reportar total desatualizado — sem
-# sinal de catálogo barato pra esse caso (issue #76).
-_TOTAL_LINHAS_SCHEMA_SQL = """
-    SELECT c.relname,
-           COALESCE(
-               NULLIF(s.n_live_tup, 0),
-               CASE
-                   WHEN c.relkind <> 'p' AND pg_relation_size(c.oid) = 0
-                       THEN 0
-                   ELSE NULLIF(c.reltuples, -1)
-               END,
-               0
-           ) AS linhas_estimadas
-    FROM pg_catalog.pg_class c
-    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-    LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
-    WHERE n.nspname = %s AND c.relkind IN ('r', 'p')
-"""
-
-# Via pg_index (catálogo), não information_schema.table_constraints como
-# PK/FK acima: todo UNIQUE constraint no Postgres é backed por um índice em
-# pg_index, então esta única query cobre tanto constraint UNIQUE nomeada
-# quanto CREATE UNIQUE INDEX solto (sem ADD CONSTRAINT) — o segundo caso não
-# aparece em information_schema.table_constraints de jeito nenhum.
-# NOT i.indisprimary exclui PK sem lógica extra: o índice de suporte de uma
-# PK nunca aparece como uma segunda entrada indisunique "solta".
-_COLUNAS_UNICAS_SCHEMA_SQL = """
-    SELECT t.relname, a.attname
-    FROM pg_catalog.pg_index i
-    JOIN pg_catalog.pg_class t ON t.oid = i.indrelid
-    JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
-    JOIN pg_catalog.pg_attribute a
-        ON a.attrelid = t.oid AND a.attnum = i.indkey[0]
-    WHERE i.indisunique AND NOT i.indisprimary
-        AND array_length(i.indkey, 1) = 1
-        AND n.nspname = %s
-"""
 
 
 class _LinhaColuna(NamedTuple):
@@ -248,20 +148,42 @@ class ExtratorPostgres:
                         return Falha(f"Não foi possível conectar: {erro}")
         return Sucesso(self._pool)
 
-    def listar_escopos(self) -> Resultado[list[str]]:
-        """Lista os escopos (schemas) disponíveis, ordenados por nome."""
+    @contextmanager
+    def _conexao(self) -> Generator[Resultado[conexao_postgres], None, None]:
+        """Empresta uma conexão do pool, sob o semáforo, com release garantido.
+
+        `yield`a um `Falha` cedo, sem entrar no bloco `try`/`finally` de
+        conexão, quando o próprio pool não pode ser obtido ou o
+        `getconn()` falha — nesses casos não há conexão nem posse do
+        semáforo a devolver. Quando a conexão é obtida com sucesso, o
+        `finally` garante `putconn` + liberação do semáforo mesmo se o
+        corpo do `with` levantar uma exceção não tratada.
+        """
         resultado_pool = self._obter_pool()
         if isinstance(resultado_pool, Falha):
-            return resultado_pool
+            yield resultado_pool
+            return
         pool = resultado_pool.valor
         self._semaforo.acquire()
         try:
             conexao = pool.getconn()
         except OperationalError as erro:
             self._semaforo.release()
-            return Falha(f"Não foi possível conectar: {erro}")
+            yield Falha(f"Não foi possível conectar: {erro}")
+            return
         try:
             conexao.autocommit = True
+            yield Sucesso(conexao)
+        finally:
+            pool.putconn(conexao)
+            self._semaforo.release()
+
+    def listar_escopos(self) -> Resultado[list[str]]:
+        """Lista os escopos (schemas) disponíveis, ordenados por nome."""
+        with self._conexao() as resultado_conexao:
+            if isinstance(resultado_conexao, Falha):
+                return resultado_conexao
+            conexao = resultado_conexao.valor
             with conexao.cursor() as cursor:
                 cursor.execute(_LISTAR_ESCOPOS_SQL)
                 escopos: list[str] = []
@@ -269,24 +191,13 @@ class ExtratorPostgres:
                     nome_schema = linha_escopo[0]
                     escopos.append(nome_schema)
             return Sucesso(escopos)
-        finally:
-            pool.putconn(conexao)
-            self._semaforo.release()
 
     def listar_tabelas(self, schema: str) -> Resultado[list[tuple[str, str]]]:
         """Lista (schema, nome_tabela) do schema informado, ordenado por nome_tabela."""
-        resultado_pool = self._obter_pool()
-        if isinstance(resultado_pool, Falha):
-            return resultado_pool
-        pool = resultado_pool.valor
-        self._semaforo.acquire()
-        try:
-            conexao = pool.getconn()
-        except OperationalError as erro:
-            self._semaforo.release()
-            return Falha(f"Não foi possível conectar: {erro}")
-        try:
-            conexao.autocommit = True
+        with self._conexao() as resultado_conexao:
+            if isinstance(resultado_conexao, Falha):
+                return resultado_conexao
+            conexao = resultado_conexao.valor
             with conexao.cursor() as cursor:
                 cursor.execute(_LISTAR_TABELAS_SQL, (schema,))
                 tabelas: list[tuple[str, str]] = []
@@ -294,9 +205,6 @@ class ExtratorPostgres:
                     nome_schema, nome_tabela = linha_tabela
                     tabelas.append((nome_schema, nome_tabela))
             return Sucesso(tabelas)
-        finally:
-            pool.putconn(conexao)
-            self._semaforo.release()
 
     def _obter_metadados_schema(self, schema: str) -> Resultado[_MetadadosDoSchema]:
         """Cacheia os metadados de catálogo de um schema inteiro, por schema.
@@ -317,18 +225,10 @@ class ExtratorPostgres:
             if metadados is not None:
                 return Sucesso(metadados)
 
-            resultado_pool = self._obter_pool()
-            if isinstance(resultado_pool, Falha):
-                return resultado_pool
-            pool = resultado_pool.valor
-            self._semaforo.acquire()
-            try:
-                conexao = pool.getconn()
-            except OperationalError as erro:
-                self._semaforo.release()
-                return Falha(f"Não foi possível conectar: {erro}")
-            try:
-                conexao.autocommit = True
+            with self._conexao() as resultado_conexao:
+                if isinstance(resultado_conexao, Falha):
+                    return resultado_conexao
+                conexao = resultado_conexao.valor
                 with conexao.cursor() as cursor:
                     cursor.execute(_COLUNAS_SCHEMA_SQL, (schema,))
                     colunas_por_tabela: dict[str, list[_LinhaColuna]] = defaultdict(
@@ -364,9 +264,6 @@ class ExtratorPostgres:
                         total_linhas_por_tabela[nome_tabela] = max(
                             0, round(linhas_estimadas)
                         )
-            finally:
-                pool.putconn(conexao)
-                self._semaforo.release()
 
             metadados = _MetadadosDoSchema(
                 colunas_por_tabela=dict(colunas_por_tabela),
@@ -402,19 +299,11 @@ class ExtratorPostgres:
                 _construir_coluna(linha_coluna, colunas_pk, colunas_fk, colunas_unicas)
             )
 
-        resultado_pool = self._obter_pool()
-        if isinstance(resultado_pool, Falha):
-            return resultado_pool
-        pool = resultado_pool.valor
-        self._semaforo.acquire()
-        try:
-            conexao = pool.getconn()
-        except OperationalError as erro:
-            self._semaforo.release()
-            return Falha(f"Não foi possível conectar: {erro}")
         requisicao = self._configuracao.estrategia.requisicao
-        try:
-            conexao.autocommit = True
+        with self._conexao() as resultado_conexao:
+            if isinstance(resultado_conexao, Falha):
+                return resultado_conexao
+            conexao = resultado_conexao.valor
             with conexao.cursor() as cursor:
                 requisicao_efetiva: RequisicaoDeAmostragem
                 match requisicao:
@@ -484,6 +373,3 @@ class ExtratorPostgres:
                 ),
                 avisos=avisos,
             )
-        finally:
-            pool.putconn(conexao)
-            self._semaforo.release()
