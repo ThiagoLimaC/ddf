@@ -71,7 +71,7 @@ entre reexecuções.
    necessidade de ler documentação extensa.
 8. **Usabilidade**: A CLI deve ter a capacidade de operar com warnings a cada etapa
    e aguardar resposta do usuário para determinadas ações (confirmar escrita de overrides,
-   e teste de string de conexão)
+   e teste de conexão com a fonte)
 9. **Desempenho:** a extração processa as tabelas da fonte em paralelo (não
    sequencialmente), para que fontes com dezenas ou centenas de tabelas sejam
    extraídas em tempo razoável.
