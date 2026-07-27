@@ -18,7 +18,7 @@ from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
 from ddf.domain.ports.extrator import ExtratorRegistrado
-from ddf.domain.shared.resultado import Resultado, Sucesso
+from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.cli.etapas import extracao
 from ddf.infrastructure.adapters.cli.wizard import executar
 
@@ -116,7 +116,7 @@ def test_wizard_fluxo_completo_com_extrator_fake(
     )
     monkeypatch.setattr(
         "questionary.select",
-        _fila_de_respostas(["Percentual de linhas", "Fake"]),
+        _fila_de_respostas(["Fake", "Percentual de linhas"]),
     )
     monkeypatch.setattr(
         "questionary.text",
@@ -137,3 +137,45 @@ def test_wizard_fluxo_completo_com_extrator_fake(
     assert resultado.exit_code == 0, resultado.output
     assert (destino / "public" / "clientes.md").exists()
     assert (diretorio_overrides / "public" / "clientes.yaml").exists()
+
+
+class ExtratorFakeSemExtracao(ExtratorFake):
+    """Como ExtratorFake, mas extrair_tabela sempre falha — lote fica vazio."""
+
+    def extrair_tabela(
+        self, escopo: str, tabela: str
+    ) -> Resultado[TabelaExtraida]:
+        """Falha sempre, simulando um problema real na extração de cada tabela."""
+        return Falha(erro="falha simulada de extração")
+
+
+def test_wizard_sem_tabela_extraida_sai_com_codigo_1(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Erro esperado: nenhuma tabela extraída com sucesso sai com código 1.
+
+    `OrquestradorParalelo.extrair` nunca devolve Falha (falha por tabela vira
+    Aviso) — `_sair_se_vazio` em wizard.py é o único ponto que barra o lote
+    vazio antes de seguir para curadoria/análise/geração.
+    """
+    monkeypatch.setattr(
+        extracao,
+        "EXTRATORES_REGISTRADOS",
+        {
+            "Fake": ExtratorRegistrado(
+                classe_extrator=ExtratorFakeSemExtracao,
+                construir=lambda cfg: ExtratorFakeSemExtracao(),
+            )
+        },
+    )
+    monkeypatch.setattr(
+        "questionary.select",
+        _fila_de_respostas(["Fake", "Percentual de linhas"]),
+    )
+    monkeypatch.setattr("questionary.text", _fila_de_respostas(["10", ""]))
+    monkeypatch.setattr("questionary.checkbox", _fila_de_respostas([["public"]]))
+
+    resultado = CliRunner().invoke(executar)
+
+    assert resultado.exit_code == 1
+    assert "Nenhuma tabela extraída com sucesso." in resultado.output

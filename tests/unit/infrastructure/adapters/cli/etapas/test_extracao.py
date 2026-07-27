@@ -1,4 +1,4 @@
-"""Testes das etapas 1-5 do wizard: amostragem, conexão, escopos e extração."""
+"""Testes das etapas 1-5 do wizard: conexão, escopos, amostragem e extração."""
 
 from collections.abc import Callable
 
@@ -74,7 +74,7 @@ class OrquestradorFake:
 def test_configurar_amostragem_usa_a_estrategia_escolhida(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Caminho feliz: monta a ConfiguracaoDeExtracao com a estratégia escolhida."""
+    """Caminho feliz: atribui a estratégia escolhida à configuração recebida."""
     registro = {
         "Percentual de linhas": EstrategiaRegistrada(
             construir=lambda: PercentualDeLinhas(percentual=10.0),
@@ -85,10 +85,10 @@ def test_configurar_amostragem_usa_a_estrategia_escolhida(
         "ddf.infrastructure.adapters.cli.prompts.selecionar",
         lambda mensagem, escolhas: "Percentual de linhas",
     )
+    configuracao = ConfiguracaoDeExtracao()
 
-    configuracao = extracao.configurar_amostragem()
+    extracao.configurar_amostragem(configuracao)
 
-    assert isinstance(configuracao, ConfiguracaoDeExtracao)
     assert isinstance(configuracao.estrategia, PercentualDeLinhas)
 
 
@@ -98,7 +98,7 @@ def test_configurar_amostragem_usa_a_estrategia_escolhida(
 def test_conectar_com_sucesso_na_primeira_tentativa(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Caminho feliz: conecta e devolve os escopos já na 1ª tentativa."""
+    """Caminho feliz: conecta e devolve escopos na 1ª tentativa, sem estratégia."""
     extrator_fake = ExtratorFake([Sucesso(valor=["public", "vendas"])])
     registro = {
         "Fake": ExtratorRegistrado(
@@ -109,11 +109,11 @@ def test_conectar_com_sucesso_na_primeira_tentativa(
     monkeypatch.setattr(
         "ddf.infrastructure.adapters.cli.prompts.selecionar", lambda *a: "Fake"
     )
-    configuracao = ConfiguracaoDeExtracao(estrategia=PercentualDeLinhas(percentual=10))
 
-    extrator, escopos = extracao.conectar(configuracao)
+    extrator, configuracao, escopos = extracao.conectar()
 
     assert extrator is extrator_fake
+    assert configuracao.estrategia is None
     assert escopos == ["public", "vendas"]
 
 
