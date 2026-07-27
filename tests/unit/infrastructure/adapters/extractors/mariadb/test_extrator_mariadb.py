@@ -1,5 +1,6 @@
 """Testes de ExtratorMariaDB."""
 
+import threading
 from unittest.mock import MagicMock
 
 import pymysql
@@ -644,3 +645,63 @@ def test_listar_tabelas_sem_tabelas_retorna_lista_vazia(
     resultado = extrator.listar_tabelas("vendas")
 
     assert resultado == Sucesso([])
+
+
+# Borda
+
+
+def test_max_conexoes_um_faz_segunda_chamada_concorrente_esperar(
+    monkeypatch: pytest.MonkeyPatch, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: max_conexoes=1 serializa chamadas concorrentes em vez de falhar.
+
+    Diferente do ExtratorPostgres (semáforo próprio), o ExtratorMariaDB não
+    implementa nenhuma sincronização — depende inteiramente de
+    `PooledDB(blocking=True)` bloquear internamente quando o pool está
+    saturado. Por isso este teste não usa `pool_classe_fake` (que mocka
+    `PooledDB` inteiro, escondendo justamente o comportamento sob teste) —
+    só substitui `pymysql.connect`, o `creator` que o `PooledDB` real chama
+    por baixo, mantendo a lógica de bloqueio real da biblioteca em jogo.
+    """
+    primeira_em_andamento = threading.Event()
+    pode_liberar_primeira = threading.Event()
+
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value
+
+    def fetchall_bloqueante() -> list[tuple[str, str]]:
+        primeira_em_andamento.set()
+        pode_liberar_primeira.wait(timeout=1)
+        return []
+
+    cursor_fake.fetchall.side_effect = fetchall_bloqueante
+    monkeypatch.setattr(pymysql, "connect", lambda *args, **kwargs: conexao_fake)
+
+    extrator = ExtratorMariaDB(
+        host="fake",
+        user="root",
+        password="senha",
+        configuracao=configuracao,
+        max_conexoes=1,
+    )
+
+    thread_primeira = threading.Thread(target=lambda: extrator.listar_tabelas("public"))
+    thread_primeira.start()
+    assert primeira_em_andamento.wait(timeout=1) is True
+
+    segunda_terminou = threading.Event()
+
+    def alvo_segunda() -> None:
+        extrator.listar_tabelas("public")
+        segunda_terminou.set()
+
+    thread_segunda = threading.Thread(target=alvo_segunda)
+    thread_segunda.start()
+
+    segunda_terminou_cedo = segunda_terminou.wait(timeout=0.2)
+    assert segunda_terminou_cedo is False
+
+    pode_liberar_primeira.set()
+    thread_primeira.join(timeout=1)
+    thread_segunda.join(timeout=1)
+    assert segunda_terminou.is_set() is True
