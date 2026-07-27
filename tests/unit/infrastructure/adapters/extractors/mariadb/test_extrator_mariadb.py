@@ -351,8 +351,9 @@ def test_extrair_tabela_com_duas_fks_na_mesma_coluna_emite_aviso(
     assert resultado.valor.colunas[0].referencia == ReferenciaDeColuna(
         nome_escopo="vendas", nome_tabela="fornecedores", nome_coluna="id"
     )
-    assert len(resultado.avisos) == 1
+    assert len(resultado.avisos) == 2
     assert resultado.avisos[0].origem == "ExtratorMariaDB"
+    assert "mais de uma FK" in resultado.avisos[0].mensagem
 
 
 def test_listar_escopos_sem_databases_de_usuario_retorna_lista_vazia(
@@ -430,9 +431,9 @@ def test_amostra_maior_que_total_linhas_emite_aviso(
     assert isinstance(resultado, Sucesso)
     assert resultado.valor.total_linhas == 1
     assert resultado.valor.metadados_amostra.tamanho_amostra == 2
-    assert len(resultado.avisos) == 1
-    assert resultado.avisos[0].origem == "ExtratorMariaDB"
-    assert "maior que total_linhas" in resultado.avisos[0].mensagem
+    assert len(resultado.avisos) == 2
+    assert resultado.avisos[1].origem == "ExtratorMariaDB"
+    assert "maior que total_linhas" in resultado.avisos[1].mensagem
 
 
 def test_amostragem_integral_usa_tamanho_da_amostra_como_total_linhas(

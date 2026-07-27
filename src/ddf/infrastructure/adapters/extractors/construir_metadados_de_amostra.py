@@ -1,4 +1,4 @@
-"""Helper agnóstico de fonte pra montar MetadadosDeAmostra e o Aviso de divergência."""
+"""Helper agnóstico de fonte pra montar MetadadosDeAmostra e os Avisos de custo."""
 
 from typing import assert_never
 
@@ -19,7 +19,14 @@ def construir_metadados_de_amostra(
     origem: str,
     causa_provavel: str,
 ) -> tuple[MetadadosDeAmostra, list[Aviso]]:
-    """Monta MetadadosDeAmostra e emite Aviso quando a amostra diverge de total_linhas.
+    """Monta MetadadosDeAmostra e emite os Avisos de custo associados à estratégia.
+
+    Dois Avisos independentes, nenhum fatal: (1) toda vez que a requisição é
+    AmostragemProbabilistica, documenta que a leitura varre a tabela inteira
+    independente do percentual pedido — limitação estrutural da estratégia
+    (ver docstring de `PercentualDeLinhas`), não uma condição de erro; (2)
+    quando a amostra excede `total_linhas`, sintoma de estimativa de
+    catálogo desatualizada.
 
     Args:
         nome: identificador da EstrategiaDeAmostragem (MetadadosDeAmostra.estrategia).
@@ -36,6 +43,7 @@ def construir_metadados_de_amostra(
             total_linhas pode estar desatualizado (ex.: "sem ANALYZE
             recente" no Postgres, "sem ANALYZE TABLE recente" no MariaDB).
     """
+    avisos: list[Aviso] = []
     match requisicao:
         case AmostragemProbabilistica(percentual=percentual, seed=seed):
             metadados = MetadadosDeAmostra(
@@ -44,6 +52,17 @@ def construir_metadados_de_amostra(
                 percentual=percentual,
                 seed=seed,
             )
+            avisos.append(
+                Aviso(
+                    mensagem=(
+                        "Amostragem por percentual faz varredura sequencial "
+                        f"completa da tabela ({total_linhas} linhas), "
+                        "independente do percentual pedido — custo de I/O "
+                        "não escala com o tamanho da amostra resultante."
+                    ),
+                    origem=origem,
+                )
+            )
         case AmostragemIntegral():
             metadados = MetadadosDeAmostra(
                 estrategia=nome, tamanho_amostra=tamanho_amostra
@@ -51,7 +70,6 @@ def construir_metadados_de_amostra(
         case _ as nunca:
             assert_never(nunca)
 
-    avisos: list[Aviso] = []
     if tamanho_amostra > total_linhas:
         avisos.append(
             Aviso(

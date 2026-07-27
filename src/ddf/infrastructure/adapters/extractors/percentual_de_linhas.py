@@ -15,7 +15,10 @@ class PercentualDeLinhas:
     descarta a maioria após ler. Relevante pra NFR9 do PRD ("dezenas ou
     centenas de tabelas... tempo razoável") em bancos com tabelas muito
     grandes — não há forma de amostrar sem varredura completa nesses dois
-    motores sem um índice específico para isso.
+    motores sem um índice específico para isso. Surfaced como `Aviso`
+    não-fatal em toda extração via `construir_metadados_de_amostra` (issue
+    #75) — nunca só documentação estática, o usuário é avisado no
+    momento real.
     """
 
     def __init__(self, percentual: float, seed: int | None = None) -> None:
