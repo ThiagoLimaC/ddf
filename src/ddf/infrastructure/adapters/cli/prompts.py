@@ -6,7 +6,7 @@ import threading
 import time
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import TypeVar, cast
+from typing import NamedTuple, TypeVar, cast
 
 import questionary
 
@@ -228,23 +228,34 @@ def ampulheta(mensagem: str) -> Generator[None, None, None]:
         thread.join()
 
 
-def progresso_paralelo(
-    mensagem_base: str, total: int | None = None
-) -> tuple[Callable[[str], None], Callable[[int], None]]:
+class Progresso(NamedTuple):
+    """Par de callbacks devolvido por `progresso_paralelo`.
+
+    `NamedTuple`, não uma tupla posicional crua — os dois campos têm
+    papéis bem diferentes (um alimenta `progresso=`, o outro
+    `ao_conhecer_total=`); nomear evita que um 3º callback futuro precise
+    de desempacotamento por posição em `tuple[Callable, Callable, Callable]`.
+    """
+
+    callback: Callable[[str], None]
+    definir_total: Callable[[int], None]
+
+
+def progresso_paralelo(mensagem_base: str, total: int | None = None) -> Progresso:
     """Devolve (callback de progresso, callback para definir o total depois).
 
-    Pensado para o 1º elemento ser passado como `progresso=` a
+    Pensado para `.callback` ser passado como `progresso=` a
     `OrquestradorDeTabelas.extrair`/`aplicar_sobrescritas` — cada chamada já
     chega serializada pela thread principal (ver `_executar_em_paralelo`),
     sem necessidade de lock aqui. Não mostra tempo decorrido por item — a
     duração é do processo inteiro, exibida uma vez ao final pelo chamador.
 
-    O 2º elemento existe para os casos em que o total só é conhecido depois
-    de iniciada a chamada (ex.: `extrair`, que lista as tabelas de cada
-    escopo internamente) — nesse caso, passe-o como `ao_conhecer_total=` e
-    a fração "N/total" passa a valer a partir da 1ª chamada de progresso
+    `.definir_total` existe para os casos em que o total só é conhecido
+    depois de iniciada a chamada (ex.: `extrair`, que lista as tabelas de
+    cada escopo internamente) — nesse caso, passe-o como `ao_conhecer_total=`
+    e a fração "N/total" passa a valer a partir da 1ª chamada de progresso
     seguinte. Chamadores que já sabem o total (ex.: `aplicar_sobrescritas`,
-    com `len(tabelas)` em mãos) simplesmente não usam o 2º elemento.
+    com `len(tabelas)` em mãos) simplesmente não usam `.definir_total`.
 
     Args:
         mensagem_base: texto fixo exibido antes da contagem.
@@ -273,4 +284,4 @@ def progresso_paralelo(
             flush=True,
         )
 
-    return _callback, _definir_total
+    return Progresso(callback=_callback, definir_total=_definir_total)

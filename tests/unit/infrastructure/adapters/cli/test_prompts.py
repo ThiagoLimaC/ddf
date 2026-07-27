@@ -310,6 +310,14 @@ def test_progresso_paralelo_definir_total_depois_passa_a_mostrar_fracao(
     assert "(2/2) — public.pedidos" in saida
 
 
+def test_progresso_paralelo_devolve_named_tuple_com_campos_nomeados() -> None:
+    """Borda: acesso por nome (.callback/.definir_total), não só por posição."""
+    resultado = prompts.progresso_paralelo("Extraindo...")
+
+    assert resultado.callback is resultado[0]
+    assert resultado.definir_total is resultado[1]
+
+
 # ampulheta()
 
 

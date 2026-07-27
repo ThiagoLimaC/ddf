@@ -8,6 +8,7 @@ chamada direta — são descobertos via entry points do grupo "ddf.extratores"
 """
 
 from collections.abc import Callable
+from ipaddress import AddressValueError, IPv6Address
 from urllib.parse import quote
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
@@ -52,6 +53,22 @@ def registrar_extrator(
     )
 
 
+def _formatar_host(host: str) -> str:
+    """Envolve um host IPv6 literal entre colchetes, exigido pelo formato de DSN.
+
+    Sem isso, `host:porta` fica ambíguo/inválido para IPv6 (`::1:5432` não
+    tem como saber onde o endereço termina e a porta começa) — a URI
+    padrão exige `[::1]:5432`. Hostname/IPv4 (o caso comum, incluindo
+    endpoints da AWS RDS — sempre hostname, nunca IPv6 bruto) passam
+    intactos.
+    """
+    try:
+        IPv6Address(host)
+    except AddressValueError:
+        return host
+    return f"[{host}]"
+
+
 def _construir_extrator_postgres(configuracao: ConfiguracaoDeExtracao) -> Extrator:
     """Pergunta host/porta/credenciais do Postgres e monta o ExtratorPostgres.
 
@@ -78,7 +95,7 @@ def _construir_extrator_postgres(configuracao: ConfiguracaoDeExtracao) -> Extrat
     )
     dsn = (
         f"postgresql://{quote(usuario, safe='')}:{quote(senha_conexao, safe='')}"
-        f"@{host}:{porta}/{quote(banco, safe='')}"
+        f"@{_formatar_host(host)}:{porta}/{quote(banco, safe='')}"
     )
     if parametros_extra:
         dsn += f"?{parametros_extra}"
