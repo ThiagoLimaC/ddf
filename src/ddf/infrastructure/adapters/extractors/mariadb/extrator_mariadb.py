@@ -1,7 +1,9 @@
 """Extrator concreto para bancos MariaDB."""
 
 import threading
-from typing import NamedTuple, assert_never
+from collections.abc import Generator
+from contextlib import contextmanager
+from typing import Any, NamedTuple, assert_never
 
 import polars as pl
 import pymysql
@@ -23,86 +25,21 @@ from ddf.infrastructure.adapters.extractors.construir_colunas_fk import (
 from ddf.infrastructure.adapters.extractors.construir_metadados_de_amostra import (
     construir_metadados_de_amostra,
 )
+from ddf.infrastructure.adapters.extractors.mariadb._queries import (
+    _CHAVES_ESTRANGEIRAS_SQL,
+    _CHAVES_PRIMARIAS_SQL,
+    _COLUNAS_JSON_SQL,
+    _COLUNAS_SQL,
+    _COLUNAS_UNICAS_SQL,
+    _LISTAR_ESCOPOS_SQL,
+    _LISTAR_TABELAS_SQL,
+    _TOTAL_LINHAS_SQL,
+)
 from ddf.infrastructure.adapters.extractors.mariadb.mapeamento_de_tipos import (
     _extrair_coluna_json_valid,
     mapear_tipo_mariadb,
 )
 from ddf.infrastructure.adapters.extractors.seed_efetivo import seed_efetivo
-
-_LISTAR_ESCOPOS_SQL = """
-    SELECT schema_name
-    FROM information_schema.schemata
-    WHERE schema_name NOT IN
-        ('information_schema', 'mysql', 'performance_schema', 'sys')
-    ORDER BY schema_name
-"""
-
-_LISTAR_TABELAS_SQL = """
-    SELECT table_schema, table_name
-    FROM information_schema.tables
-    WHERE table_schema = %s AND table_type = 'BASE TABLE'
-    ORDER BY table_name
-"""
-
-_COLUNAS_SQL = """
-    SELECT column_name, data_type, column_type, character_maximum_length,
-           numeric_precision, numeric_scale, is_nullable
-    FROM information_schema.columns
-    WHERE table_schema = %s AND table_name = %s
-    ORDER BY ordinal_position
-"""
-
-_CHAVES_PRIMARIAS_SQL = """
-    SELECT column_name
-    FROM information_schema.key_column_usage
-    WHERE table_schema = %s AND table_name = %s AND constraint_name = 'PRIMARY'
-    ORDER BY ordinal_position
-"""
-
-_CHAVES_ESTRANGEIRAS_SQL = """
-    SELECT column_name, referenced_table_schema, referenced_table_name,
-           referenced_column_name
-    FROM information_schema.key_column_usage
-    WHERE table_schema = %s AND table_name = %s
-      AND referenced_table_name IS NOT NULL
-"""
-
-_TOTAL_LINHAS_SQL = """
-    SELECT table_rows
-    FROM information_schema.tables
-    WHERE table_schema = %s AND table_name = %s
-"""
-
-# AND kcu.table_name = %s nos dois lados do JOIN: nomes de constraint no
-# MariaDB são escopados por TABELA, não por schema — duas tabelas do mesmo
-# schema podem ter uma UNIQUE KEY com nome idêntico (ex.: "email" gerado por
-# UNIQUE(email) em tabelas diferentes). Sem esse filtro, o JOIN por
-# constraint_name+table_schema cruza linhas de tabelas diferentes e classifica
-# colunas UNIQUE reais como não-únicas por acidente (validado empiricamente
-# contra MariaDB 11 real durante a revisão desta issue).
-_COLUNAS_UNICAS_SQL = """
-    SELECT kcu.constraint_name, kcu.column_name
-    FROM information_schema.table_constraints tc
-    JOIN information_schema.key_column_usage kcu
-        ON tc.constraint_name = kcu.constraint_name
-        AND tc.table_schema = kcu.table_schema
-        AND tc.table_name = kcu.table_name
-    WHERE tc.constraint_type = 'UNIQUE'
-        AND tc.table_schema = %s AND tc.table_name = %s
-"""
-# `_construir_coluna` só aceita um match de `_extrair_coluna_json_valid`
-# se o nome extraído também existir entre as colunas reais desta tabela
-# (`linhas_colunas`) — a validação cruzada é o que torna este SELECT sem
-# filtro de tabela seguro de usar.
-_COLUNAS_JSON_SQL = """
-    SELECT cc.check_clause
-    FROM information_schema.table_constraints tc
-    JOIN information_schema.check_constraints cc
-        ON tc.constraint_schema = cc.constraint_schema
-        AND tc.constraint_name = cc.constraint_name
-    WHERE tc.constraint_type = 'CHECK'
-        AND tc.table_schema = %s AND tc.table_name = %s
-"""
 
 
 class _LinhaColuna(NamedTuple):
@@ -314,17 +251,43 @@ class ExtratorMariaDB:
                         return Falha(f"Não foi possível conectar: {erro}")
         return Sucesso(self._pool)
 
-    def listar_escopos(self) -> Resultado[list[str]]:
-        """Lista os escopos (databases) disponíveis, ordenados por nome."""
+    @contextmanager
+    def _conexao(self) -> Generator[Resultado[Any], None, None]:
+        """Empresta uma conexão do pool, com devolução (`close`) garantida.
+
+        Sem semáforo próprio — diferente do `ExtratorPostgres`, o `PooledDB`
+        já foi criado com `blocking=True` (`_obter_pool`), então
+        `pool.connection()` bloqueia internamente quando o pool está
+        saturado, em vez de levantar erro como o `ThreadedConnectionPool`
+        do psycopg2 faria.
+
+        `yield`a um `Falha` cedo, sem entrar no `try`/`finally` de conexão,
+        quando o pool não pode ser obtido ou `pool.connection()` falha —
+        nesses casos não há conexão a devolver. Tipo `Any` porque
+        `dbutils.pooled_db` não tem stubs (`ignore_missing_imports` em
+        `pyproject.toml`).
+        """
         resultado_pool = self._obter_pool()
         if isinstance(resultado_pool, Falha):
-            return resultado_pool
+            yield resultado_pool
+            return
         pool = resultado_pool.valor
         try:
             conexao = pool.connection()
         except pymysql.err.OperationalError as erro:
-            return Falha(f"Não foi possível conectar: {erro}")
+            yield Falha(f"Não foi possível conectar: {erro}")
+            return
         try:
+            yield Sucesso(conexao)
+        finally:
+            conexao.close()
+
+    def listar_escopos(self) -> Resultado[list[str]]:
+        """Lista os escopos (databases) disponíveis, ordenados por nome."""
+        with self._conexao() as resultado_conexao:
+            if isinstance(resultado_conexao, Falha):
+                return resultado_conexao
+            conexao = resultado_conexao.valor
             with conexao.cursor() as cursor:
                 cursor.execute(_LISTAR_ESCOPOS_SQL)
                 escopos: list[str] = []
@@ -332,20 +295,13 @@ class ExtratorMariaDB:
                     nome_escopo = linha_escopo[0]
                     escopos.append(nome_escopo)
             return Sucesso(escopos)
-        finally:
-            conexao.close()
 
     def listar_tabelas(self, escopo: str) -> Resultado[list[tuple[str, str]]]:
         """Lista (escopo, nome_tabela) do escopo informado, ordenado por nome_tabela."""
-        resultado_pool = self._obter_pool()
-        if isinstance(resultado_pool, Falha):
-            return resultado_pool
-        pool = resultado_pool.valor
-        try:
-            conexao = pool.connection()
-        except pymysql.err.OperationalError as erro:
-            return Falha(f"Não foi possível conectar: {erro}")
-        try:
+        with self._conexao() as resultado_conexao:
+            if isinstance(resultado_conexao, Falha):
+                return resultado_conexao
+            conexao = resultado_conexao.valor
             with conexao.cursor() as cursor:
                 cursor.execute(_LISTAR_TABELAS_SQL, (escopo,))
                 tabelas: list[tuple[str, str]] = []
@@ -353,20 +309,13 @@ class ExtratorMariaDB:
                     nome_escopo, nome_tabela = linha_tabela
                     tabelas.append((nome_escopo, nome_tabela))
             return Sucesso(tabelas)
-        finally:
-            conexao.close()
 
     def extrair_tabela(self, escopo: str, tabela: str) -> Resultado[TabelaExtraida]:
         """Extrai estrutura, amostra e metadados de uma tabela específica."""
-        resultado_pool = self._obter_pool()
-        if isinstance(resultado_pool, Falha):
-            return resultado_pool
-        pool = resultado_pool.valor
-        try:
-            conexao = pool.connection()
-        except pymysql.err.OperationalError as erro:
-            return Falha(f"Não foi possível conectar: {erro}")
-        try:
+        with self._conexao() as resultado_conexao:
+            if isinstance(resultado_conexao, Falha):
+                return resultado_conexao
+            conexao = resultado_conexao.valor
             with conexao.cursor() as cursor:
                 cursor.execute(_COLUNAS_SQL, (escopo, tabela))
                 linhas_colunas: list[_LinhaColuna] = []
@@ -500,5 +449,3 @@ class ExtratorMariaDB:
                 ),
                 avisos=avisos,
             )
-        finally:
-            conexao.close()
