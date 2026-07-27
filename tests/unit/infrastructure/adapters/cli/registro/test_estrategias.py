@@ -1,4 +1,4 @@
-"""Testes de registrar_estrategia."""
+"""Testes de registrar_estrategia e dos construtores privados de estratégia."""
 
 import pytest
 
@@ -7,8 +7,26 @@ from ddf.domain.ports.estrategia_de_amostragem import EstrategiaDeAmostragem
 from ddf.infrastructure.adapters.cli.registro.estrategias import (
     ESTRATEGIAS_REGISTRADAS,
     EstrategiaRegistrada,
+    _construir_percentual_de_linhas,
     registrar_estrategia,
 )
+from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
+    PercentualDeLinhas,
+)
+
+
+class _RespostaFake:
+    """Substitui o objeto que `questionary.text(...)` devolve."""
+
+    def __init__(self, valor: object) -> None:
+        self.valor = valor
+
+    def __call__(self, *args: object, **kwargs: object) -> "_RespostaFake":
+        return self
+
+    def ask(self) -> object:
+        """Devolve o valor pré-configurado, como `.ask()` do questionary faria."""
+        return self.valor
 
 
 class EstrategiaFake:
@@ -56,3 +74,37 @@ def test_registrar_estrategia_com_nome_duplicado_falha() -> None:
     assert registro_de_teste == {
         "Fake": EstrategiaRegistrada(construir=_construir_fake)
     }
+
+
+# _construir_percentual_de_linhas() — erro esperado, borda
+def test_construir_percentual_de_linhas_com_entrada_invalida_reprompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Erro esperado: percentual não numérico não crasha, reprompt até funcionar."""
+    respostas = iter(["abc", "10", ""])
+    monkeypatch.setattr(
+        "questionary.text",
+        lambda *args, **kwargs: _RespostaFake(next(respostas)),
+    )
+
+    estrategia = _construir_percentual_de_linhas()
+
+    assert isinstance(estrategia, PercentualDeLinhas)
+    assert estrategia.requisicao.percentual == 10.0
+    assert estrategia.requisicao.seed is None
+
+
+def test_construir_percentual_de_linhas_com_seed_devolve_seed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Borda: seed preenchida (não em branco) é convertida e repassada."""
+    respostas = iter(["5", "42"])
+    monkeypatch.setattr(
+        "questionary.text",
+        lambda *args, **kwargs: _RespostaFake(next(respostas)),
+    )
+
+    estrategia = _construir_percentual_de_linhas()
+
+    assert isinstance(estrategia, PercentualDeLinhas)
+    assert estrategia.requisicao.seed == 42

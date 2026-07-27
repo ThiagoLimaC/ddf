@@ -109,6 +109,7 @@ class ExtratorPostgres:
         dsn: str,
         configuracao: ConfiguracaoDeExtracao,
         max_conexoes: int = 8,
+        connect_timeout: int = 50,
     ) -> None:
         """Guarda os parâmetros de conexão — o pool só é criado no primeiro uso.
 
@@ -118,6 +119,11 @@ class ExtratorPostgres:
             max_conexoes: nº máximo de conexões simultâneas que este Postgres
                 aguenta com segurança — dimensiona o pool e o semáforo interno
                 que impede o esgotamento do pool sob chamadas concorrentes.
+            connect_timeout: segundos até desistir de abrir a conexão TCP
+                inicial (parâmetro `connect_timeout` do libpq). Sem isso, um
+                host inacessível por firewall (pacote descartado, não
+                recusado) trava por um timeout de TCP do SO que pode passar
+                de um minuto, antes de qualquer mensagem de erro aparecer.
 
         Raises:
             ValueError: se `max_conexoes` não for positivo.
@@ -127,6 +133,7 @@ class ExtratorPostgres:
         self._dsn = dsn
         self._configuracao = configuracao
         self._max_conexoes = max_conexoes
+        self._connect_timeout = connect_timeout
         self._pool: ThreadedConnectionPool | None = None
         self._semaforo = threading.Semaphore(max_conexoes)
         self._lock_pool = threading.Lock()
@@ -143,6 +150,7 @@ class ExtratorPostgres:
                             minconn=1,
                             maxconn=self._max_conexoes,
                             dsn=self._dsn,
+                            connect_timeout=self._connect_timeout,
                         )
                     except OperationalError as erro:
                         return Falha(f"Não foi possível conectar: {erro}")
@@ -277,6 +285,11 @@ class ExtratorPostgres:
 
     def extrair_tabela(self, schema: str, tabela: str) -> Resultado[TabelaExtraida]:
         """Extrai estrutura, amostra e metadados de uma tabela específica."""
+        resultado_estrategia = self._configuracao.estrategia_obrigatoria()
+        if isinstance(resultado_estrategia, Falha):
+            return resultado_estrategia
+        estrategia = resultado_estrategia.valor
+
         resultado_metadados = self._obter_metadados_schema(schema)
         if isinstance(resultado_metadados, Falha):
             return resultado_metadados
@@ -299,7 +312,7 @@ class ExtratorPostgres:
                 _construir_coluna(linha_coluna, colunas_pk, colunas_fk, colunas_unicas)
             )
 
-        requisicao = self._configuracao.estrategia.requisicao
+        requisicao = estrategia.requisicao
         with self._conexao() as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
@@ -354,12 +367,13 @@ class ExtratorPostgres:
                     assert_never(nunca)
 
             metadados_amostra, avisos_amostra = construir_metadados_de_amostra(
-                nome=self._configuracao.estrategia.nome,
+                nome=estrategia.nome,
                 requisicao=requisicao_efetiva,
                 tamanho_amostra=len(amostra),
                 total_linhas=total_linhas_final,
                 origem="ExtratorPostgres",
                 causa_provavel="sem ANALYZE recente",
+                identificador_tabela=f"{schema}.{tabela}",
             )
             avisos.extend(avisos_amostra)
             return Sucesso(

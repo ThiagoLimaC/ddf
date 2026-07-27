@@ -41,9 +41,15 @@ def test_sugerir_destino_com_varios_geradores_usa_destino_generico() -> None:
     assert geracao.sugerir_destino(["Markdown", "Dbt"]) == "artefatos"
 
 
-def test_sugerir_destino_sem_sugestao_conhecida_usa_nome_em_minusculo() -> None:
-    """Borda: Gerador sem sugestão cadastrada cai no fallback nome.lower()."""
-    assert geracao.sugerir_destino(["GeradorNovo"]) == "artefatos/geradornovo"
+def test_sugerir_destino_com_nome_camel_case_vira_snake_case() -> None:
+    """Borda: nome de registro sem entrada cadastrada é convertido genericamente.
+
+    Não há dicionário de exceções por nome — "ContextoDeIA" vira
+    "contexto_de_ia" pela mesma regra usada para qualquer outro nome,
+    Gerador nativo ou de plugin de terceiro.
+    """
+    assert geracao.sugerir_destino(["ContextoDeIA"]) == "artefatos/contexto_de_ia"
+    assert geracao.sugerir_destino(["GeradorNovo"]) == "artefatos/gerador_novo"
 
 
 # confirmar_execucao() — caminho feliz e erro esperado

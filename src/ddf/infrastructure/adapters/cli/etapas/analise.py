@@ -27,9 +27,10 @@ def validar_selecao(nomes_geradores_escolhidos: list[str]) -> list[Analisador]:
     sem seleção do usuário) e só os Geradores que o usuário escolheu — um
     Gerador registrado mas não escolhido nunca bloqueia a validação.
     """
-    analisadores = list(ANALISADORES_REGISTRADOS.values())
-    geradores = [GERADORES_REGISTRADOS[nome] for nome in nomes_geradores_escolhidos]
-    resultado = validar_dependencias(analisadores, geradores)
+    geradores = {
+        nome: GERADORES_REGISTRADOS[nome] for nome in nomes_geradores_escolhidos
+    }
+    resultado = validar_dependencias(ANALISADORES_REGISTRADOS, geradores)
     return ou_sair(resultado)
 
 

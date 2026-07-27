@@ -311,7 +311,11 @@ def test_extrair_tabela_com_fk_composta_pareia_colunas_corretamente(
     assert coluna_estado.referencia == ReferenciaDeColuna(
         nome_escopo="geografia", nome_tabela="pais", nome_coluna="estado"
     )
-    assert resultado.avisos == []
+    # Não gera Aviso de FK composta espúrio — só o Aviso de custo, esperado
+    # para qualquer extração via PercentualDeLinhas (ver
+    # construir_metadados_de_amostra).
+    assert len(resultado.avisos) == 1
+    assert "varredura sequencial completa" in resultado.avisos[0].mensagem
 
 
 def test_coluna_array_com_valores_vazios_e_nulos_nao_quebra_analisador(
