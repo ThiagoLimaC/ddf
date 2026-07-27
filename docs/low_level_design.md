@@ -143,12 +143,25 @@ verdade para "quantas linhas a tabela tem".
 
 ```python
 class ConfiguracaoDeExtracao(BaseModel):
-    estrategia: EstrategiaDeAmostragem
+    estrategia: EstrategiaDeAmostragem | None = None
+
+    def estrategia_obrigatoria(self) -> Resultado[EstrategiaDeAmostragem]:
+        """Falha explícita se `estrategia` ainda for None."""
 ```
 
 **Comportamento:** lida de `ddf.toml` ou flags CLI (`--sample-percent`) —
 único campo genuinamente compartilhável entre qualquer `Extrator` futuro,
 sem exigir do usuário conhecimento específico de uma fonte concreta.
+
+**`estrategia` opcional, atribuída depois da construção (issue #75):** o
+wizard reordenado (`cli/etapas/extracao.py::conectar()`) constrói o
+Extrator e testa conexão antes de perguntar a estratégia de amostragem —
+`configurar_amostragem()` a atribui depois, mutando a mesma instância de
+`ConfiguracaoDeExtracao` que o Extrator já guarda por referência (não é
+`frozen=True`). `estrategia_obrigatoria()` centraliza a checagem que todo
+`Extrator.extrair_tabela` faz antes de usar `estrategia` — `Falha` explícita
+em vez de `AttributeError`, e evita cada Adapter concreto reimplementar o
+mesmo guard manualmente.
 
 **Sem `max_trabalhadores`/`max_conexoes` (removidos na issue #10):** a versão
 original (issue #5) tinha os dois campos aqui, com uma validação cruzada
@@ -611,6 +624,7 @@ class OrquestradorDeTabelas(Protocol):
         extrator: Extrator,
         /,
         progresso: Callable[[str], None] | None = None,
+        ao_conhecer_total: Callable[[int], None] | None = None,
     ) -> Resultado[list[TabelaExtraida]]: ...
 
     def aplicar_sobrescritas(
@@ -632,6 +646,11 @@ class OrquestradorDeTabelas(Protocol):
 - `progresso`, se informado, é chamado uma vez por item concluído (sucesso
   ou falha) com o identificador `"<escopo>.<tabela>"` — alimenta a barra de
   progresso do wizard sem acoplar o Port a `questionary`.
+- `ao_conhecer_total`, se informado, é chamado uma única vez, logo após a
+  listagem interna terminar e antes da extração paralela começar, com o nº
+  de pares a extrair — elimina a necessidade do chamador listar as tabelas
+  de novo por fora só para saber o total (issue #75; antes `cli/etapas/
+  extracao.py` tinha um `_contar_tabelas` que duplicava essa listagem).
 
 **Comportamento esperado de `aplicar_sobrescritas`:**
 - Distribui `sobrescrita()` em workers paralelos sobre a lista recebida.
@@ -705,15 +724,28 @@ class ExtratorPostgres:
         dsn: str,
         configuracao: ConfiguracaoDeExtracao,
         max_conexoes: int = 8,
+        connect_timeout: int = 50,
     ) -> None: ...
 ```
 
 **Construção:** cria `ThreadedConnectionPool(minconn=1, maxconn=max_conexoes,
-dsn=dsn)` e um `threading.Semaphore(max_conexoes)` interno. `max_conexoes` é
-parâmetro próprio de `ExtratorPostgres` (não vem de `ConfiguracaoDeExtracao`,
-que não carrega mais nenhum conceito de concorrência desde a issue #10) —
-conhecimento específico de quanto este Postgres aguenta com segurança,
-default `8`.
+dsn=dsn, connect_timeout=connect_timeout)` e um `threading.Semaphore(max_conexoes)`
+interno. `max_conexoes` é parâmetro próprio de `ExtratorPostgres` (não vem de
+`ConfiguracaoDeExtracao`, que não carrega mais nenhum conceito de
+concorrência desde a issue #10) — conhecimento específico de quanto este
+Postgres aguenta com segurança, default `8`.
+
+**`connect_timeout` (issue #75):** sem esse parâmetro, um host inacessível
+por firewall (pacote descartado, não recusado) trava a conexão TCP inicial
+por um timeout do SO que pode passar de um minuto — o libpq não tem
+timeout de conexão por padrão. Default `50` segundos, pago uma única vez no
+aquecimento do pool (`minconn=1`), não por query. Não exposto no wizard —
+`_construir_extrator_postgres` usa o default, mesmo padrão de
+`max_conexoes`. `ExtratorMariaDB` ganhou o parâmetro homônimo por simetria
+de leitura do código (`connect_timeout: int = 10`, repassado ao
+`PooledDB`) — o `pymysql` já tinha esse valor como default implícito do
+próprio driver, então declarar explicitamente não muda o comportamento,
+só deixa de depender de conhecer o driver pra saber o timeout real.
 
 **Semáforo interno (issue #10):** `listar_tabelas`/`extrair_tabela` adquirem
 o semáforo antes de `pool.getconn()` e o liberam depois de `pool.putconn()`
@@ -793,7 +825,9 @@ schemas de sistema do Postgres (`information_schema`, `pg_catalog`,
    truncar as páginas vazias, ainda pode reportar total desatualizado —
    sem sinal de catálogo barato pra esse caso específico.
 4. Monta e executa a query de amostra a partir de
-   `configuracao.estrategia.requisicao` (`match`/`assert_never`, issue #76):
+   `configuracao.estrategia_obrigatoria().valor.requisicao` (`Falha` cedo se
+   `estrategia` ainda `None`, issue #75; `match`/`assert_never` sobre a
+   requisição, issue #76):
    - `AmostragemProbabilistica(percentual, seed)`: `SELECT * FROM
      {schema}.{tabela} TABLESAMPLE BERNOULLI(percentual) REPEATABLE(seed)`.
      `BERNOULLI` sorteia cada linha independentemente com probabilidade
@@ -1006,6 +1040,7 @@ class OrquestradorParalelo:
         extrator: Extrator,
         /,
         progresso: Callable[[str], None] | None = None,
+        ao_conhecer_total: Callable[[int], None] | None = None,
     ) -> Resultado[list[TabelaExtraida]]: ...
 
     def aplicar_sobrescritas(
@@ -1334,7 +1369,7 @@ cli/
 ├── avisos.py           # ou_sair, exibir_avisos — cross-cutting, sem estado
 ├── validacao.py        # validar_dependencias (produz/requer)
 ├── etapas/              # uma fase do pipeline por módulo
-│   ├── extracao.py      # etapas 1-5: amostragem, conexão, escopos, extração
+│   ├── extracao.py      # etapas 1-5: conexão, escopos, amostragem, extração
 │   ├── curadoria.py     # etapas 6-8: skeletons, pausa, aplicar sobrescritas
 │   ├── analise.py       # etapas 9-11: escolher Geradores, validar, analisar
 │   └── geracao.py       # etapas 12-14: destino, confirmar, executar
@@ -1366,8 +1401,15 @@ sem derrubar a descoberta das demais.
 
 - Entry point de `ddf.extratores` aponta para uma instância pronta de
   `ExtratorRegistrado` (classe + função `construir` interativa) — não dá
-  pra genericizar o construtor de um Extrator (DSN do Postgres vs.
-  host/porta/usuário/senha do MariaDB).
+  pra genericizar o construtor de um Extrator (cada fonte pergunta um
+  conjunto de credenciais diferente). Desde a issue #75, Postgres e
+  MariaDB perguntam o mesmo formato — host/porta/banco (ou usuário)/senha
+  mascarada separados, DSN do Postgres montada internamente com
+  `urllib.parse.quote`; antes o Postgres pedia uma connection string
+  inteira em texto claro (senha visível), assimétrico ao MariaDB. Postgres
+  também pergunta um campo opcional de parâmetros extra (ex.:
+  `sslmode=require`), anexado como query string — cobre Postgres gerenciado
+  (RDS, Azure Database, PgBouncer) sem voltar à connection string livre.
 - Entry point de `ddf.geradores` aponta direto para a classe (construtor
   sem argumentos, mesmo padrão de `Analisador`).
 - `Analisador` **não** entra nesse mecanismo — é a ACL entre Curation e
@@ -1389,19 +1431,25 @@ def executar() -> None:
 Modo `--config`/não-interativo ficou fora de escopo da issue #16 — a
 assinatura não reserva esse parâmetro.
 
-**Etapas:**
+**Etapas** (ordem revisada na issue #75 — antes a estratégia de amostragem
+era a etapa 1, escolhida sem nenhuma informação sobre fonte/escopo; ver
+Decisão 13 do `system_design_doc.md`):
 
-1. Escolher estratégia de amostragem (`ESTRATEGIAS_REGISTRADAS`) — escolha
-   explícita mesmo havendo só `PercentualDeLinhas` hoje.
-2. Escolher fonte (`EXTRATORES_REGISTRADOS`) e construir o `Extrator`
+1. Escolher fonte (`EXTRATORES_REGISTRADOS`) e construir o `Extrator`
    (`ExtratorRegistrado.construir`, que pergunta credenciais específicas da
-   fonte).
-3. Testar conexão via `listar_escopos()` — retry manual até 3 tentativas,
+   fonte) — `ConfiguracaoDeExtracao` é construída aqui sem estratégia
+   (`estrategia=None`).
+2. Testar conexão via `listar_escopos()` — retry manual até 3 tentativas,
    nunca automático com a mesma credencial (risco de lockout de conta).
-4. Escolher escopo(s) — reaproveita a lista de `listar_escopos()` (etapa 3),
+3. Escolher escopo(s) — reaproveita a lista de `listar_escopos()` (etapa 2),
    sem 2ª chamada de rede.
+4. Escolher estratégia de amostragem (`ESTRATEGIAS_REGISTRADAS`) — escolha
+   explícita mesmo havendo só `PercentualDeLinhas` hoje; atribuída à mesma
+   `ConfiguracaoDeExtracao` construída na etapa 1 (`configuracao.estrategia
+   = ...`), já em uso pelo `Extrator`.
 5. Extrair em paralelo via `OrquestradorParalelo` — spinner de progresso +
-   avisos de sucesso parcial.
+   avisos de sucesso parcial. Total exibido na barra de progresso vem de
+   `ao_conhecer_total` (issue #75), não de uma listagem prévia por fora.
 6. Gerar/atualizar skeletons de sobrescrita em disco — conta criados/
    atualizados vs. preservados sem mudança.
 7. **Pausa:** `prompts.pausar(...)` — usuário edita os YAMLs de overrides
@@ -1435,18 +1483,30 @@ propagaria crua pro usuário final do wizard, violando a NFR4/RF7 do PRD —
 exatamente o risco que motivou a issue #56.
 
 **Código de saída:** `0` em sucesso, `1` em qualquer `Falha` (ou nenhuma
-tabela extraída/curada com sucesso), `0` também se o usuário cancelar um
-prompt (Ctrl+C/Esc) ou recusar a confirmação final.
+tabela extraída/curada com sucesso — `_sair_se_vazio(itens, mensagem)`,
+issue #75, único ponto que decide isso; `OrquestradorParalelo.extrair`/
+`aplicar_sobrescritas` nunca devolvem `Falha` por conta própria, mesmo com
+lote vazio), `0` também se o usuário cancelar um prompt (Ctrl+C/Esc) ou
+recusar a confirmação final.
 
 ### Validação de dependências (`cli/validacao.py`)
 
 ```python
 def validar_dependencias(
-    analisadores: list[Analisador],
-    geradores: list[Gerador],
+    analisadores: dict[str, Analisador],
+    geradores: dict[str, Gerador],
 ) -> Resultado[list[Analisador]]:
     """Valida produz/requer e devolve os Analisadores em ordem de execução."""
 ```
+
+**Recebe dicts (nome de registro → instância), não listas (issue #75):**
+antes as mensagens de erro citavam `type(instancia).__name__` (nome da
+classe Python, ex.: "GeradorDbt") em vez do rótulo exibido no menu do
+wizard (ex.: "Dbt"). `validar_dependencias` monta um mapa `id(instância) ->
+nome` a partir dos dois dicts recebidos e usa esse rótulo (com fallback pro
+nome da classe se a instância não estiver no mapa) em toda mensagem de erro
+— `cli/etapas/analise.py::validar_selecao` passa `ANALISADORES_REGISTRADOS`
+direto e monta o dict dos Geradores escolhidos.
 
 **Comportamento:**
 1. Ordena os Analisadores recebidos por dependência topológica de
@@ -1456,7 +1516,8 @@ def validar_dependencias(
    dos Analisadores que vêm antes dele na ordem topológica calculada.
 3. Para cada Gerador: verifica que seus `requer` estão no conjunto `produz`
    total dos Analisadores.
-4. `Falha` com mensagem listando cada dependência não satisfeita e qual
+4. `Falha` com mensagem listando cada dependência não satisfeita, citando o
+   rótulo de registro (não a classe Python) de quem requer e qual
    Analisador produziria ela.
 5. `Falha` com mensagem clara se houver ciclo entre `produz`/`requer` dos
    Analisadores selecionados (ex.: A requer o que só B produz, e B requer o
@@ -1519,7 +1580,8 @@ carrega `construir` (sem `classe_estrategia`: nunca foi lido em produção,
 removido na issue #76), para `EstrategiaDeAmostragem`. `PercentualDeLinhas`
 e `TabelaInteira` estão registradas — a 2ª estratégia antecipada desde a #9/#16
 chegou na #76, sem precisar reabrir `wizard.py`: a escolha já era explícita
-no wizard (etapa 1) mesmo quando só havia uma opção.
+no wizard (etapa 4, reordenada na issue #75 — era etapa 1) mesmo quando só
+havia uma opção.
 
 **`registro/analisadores.py`/`registro/geradores.py`** — mais simples:
 guardam a instância direto (`dict[str, Analisador]`/`dict[str, Gerador]`),

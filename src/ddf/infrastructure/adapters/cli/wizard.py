@@ -1,6 +1,7 @@
 """Wizard interativo do ddf — fluxo completo via click + questionary."""
 
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 import click
@@ -26,6 +27,20 @@ _BANNER = r"""
 """
 
 
+def _sair_se_vazio(itens: Sequence[object], mensagem: str) -> None:
+    """Imprime `mensagem` e sai com código 1 se `itens` estiver vazio.
+
+    `OrquestradorParalelo.extrair`/`aplicar_sobrescritas` nunca devolvem
+    Falha — falha individual de item vira Aviso, o lote inteiro sempre
+    "tem sucesso" mesmo com 0 itens processados (ver docstring de ambos).
+    Esta função é o único ponto que decide que um lote vazio não deve
+    seguir para as etapas seguintes do wizard.
+    """
+    if not itens:
+        print(mensagem)
+        sys.exit(1)
+
+
 @click.command()
 def executar() -> None:
     """Executa o wizard interativo do ddf, da conexão aos artefatos gerados."""
@@ -33,17 +48,15 @@ def executar() -> None:
     avisos.exibir_avisos(
         descoberta.descobrir_extratores() + descoberta.descobrir_geradores()
     )
-    configuracao = extracao.configurar_amostragem()
-    extrator, escopos_disponiveis = extracao.conectar(configuracao)
+    extrator, configuracao, escopos_disponiveis = extracao.conectar()
     escopos = prompts.escolher_multiplos(
         "Escolha um ou mais escopos:", escopos_disponiveis
     )
+    extracao.configurar_amostragem(configuracao)
 
     orquestrador = OrquestradorParalelo()
     tabelas = extracao.extrair(orquestrador, extrator, escopos)
-    if not tabelas:
-        print("Nenhuma tabela extraída com sucesso.")
-        sys.exit(1)
+    _sair_se_vazio(tabelas, "Nenhuma tabela extraída com sucesso.")
 
     diretorio_overrides = Path(
         prompts.texto(
@@ -53,9 +66,7 @@ def executar() -> None:
     sobrescrita = curadoria.curar(orquestrador, diretorio_overrides, tabelas)
 
     banco_curado = curadoria.aplicar_sobrescritas(orquestrador, sobrescrita, tabelas)
-    if not banco_curado.tabelas:
-        print("Nenhuma tabela curada com sucesso.")
-        sys.exit(1)
+    _sair_se_vazio(banco_curado.tabelas, "Nenhuma tabela curada com sucesso.")
 
     nomes_geradores = analise.escolher_geradores()
     analisadores_ordenados = analise.validar_selecao(nomes_geradores)

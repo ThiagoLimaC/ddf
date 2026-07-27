@@ -8,6 +8,8 @@ chamada direta — são descobertos via entry points do grupo "ddf.extratores"
 """
 
 from collections.abc import Callable
+from ipaddress import AddressValueError, IPv6Address
+from urllib.parse import quote
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.ports.extrator import Extrator, ExtratorRegistrado
@@ -51,20 +53,59 @@ def registrar_extrator(
     )
 
 
+def _formatar_host(host: str) -> str:
+    """Envolve um host IPv6 literal entre colchetes, exigido pelo formato de DSN.
+
+    Sem isso, `host:porta` fica ambíguo/inválido para IPv6 (`::1:5432` não
+    tem como saber onde o endereço termina e a porta começa) — a URI
+    padrão exige `[::1]:5432`. Hostname/IPv4 (o caso comum, incluindo
+    endpoints da AWS RDS — sempre hostname, nunca IPv6 bruto) passam
+    intactos.
+    """
+    try:
+        IPv6Address(host)
+    except AddressValueError:
+        return host
+    return f"[{host}]"
+
+
 def _construir_extrator_postgres(configuracao: ConfiguracaoDeExtracao) -> Extrator:
-    """Pergunta a connection string do Postgres e monta o ExtratorPostgres."""
-    dsn = prompts.texto(
-        "Connection string do Postgres:",
-        default="postgresql://usuario:senha@host:porta/banco",
-        dica_limpar=True,
+    """Pergunta host/porta/credenciais do Postgres e monta o ExtratorPostgres.
+
+    Campos separados (não uma connection string inteira) para que a senha
+    passe por `prompts.senha()` — mascarada, mesmo tratamento do MariaDB —
+    em vez de aparecer em texto claro na tela/scrollback do terminal.
+    Usuário/senha/banco passam por `quote` antes de compor a DSN: qualquer
+    um pode conter caracteres especiais de URL (`@`, `:`, `/`, `%`) que
+    quebrariam o formato se inseridos crus.
+
+    Parâmetros extra (opcional) cobrem o que campos fixos não expressam —
+    principalmente `sslmode`, comum/exigido por Postgres gerenciado em
+    produção (RDS, Azure Database, PgBouncer na frente) — sem voltar a
+    pedir a connection string inteira em texto claro.
+    """
+    host = prompts.texto("Host do Postgres:")
+    porta = prompts.numero("Porta:", int, default="5432")
+    banco = prompts.texto("Banco de dados:")
+    usuario = prompts.texto("Usuário:")
+    senha_conexao = prompts.senha("Senha:")
+    parametros_extra = prompts.texto(
+        "Parâmetros extra de conexão (opcional, ex.: sslmode=require):",
+        default="",
     )
+    dsn = (
+        f"postgresql://{quote(usuario, safe='')}:{quote(senha_conexao, safe='')}"
+        f"@{_formatar_host(host)}:{porta}/{quote(banco, safe='')}"
+    )
+    if parametros_extra:
+        dsn += f"?{parametros_extra}"
     return ExtratorPostgres(dsn=dsn, configuracao=configuracao)
 
 
 def _construir_extrator_mariadb(configuracao: ConfiguracaoDeExtracao) -> Extrator:
     """Pergunta host/porta/credenciais do MariaDB e monta o ExtratorMariaDB."""
     host = prompts.texto("Host do MariaDB:")
-    porta = int(prompts.texto("Porta:", default="3306"))
+    porta = prompts.numero("Porta:", int, default="3306")
     usuario = prompts.texto("Usuário:")
     senha_conexao = prompts.senha("Senha:")
     return ExtratorMariaDB(

@@ -1,5 +1,6 @@
 """Etapas 12-14 do wizard: destino dos artefatos, confirmação e execução."""
 
+import re
 import sys
 from pathlib import Path
 
@@ -10,11 +11,21 @@ from ddf.infrastructure.adapters.cli.avisos import exibir_avisos
 from ddf.infrastructure.adapters.cli.registro.geradores import GERADORES_REGISTRADOS
 from ddf.pipeline.seguranca import executar_com_seguranca
 
-_SUGESTOES_DE_DESTINO = {
-    "Markdown": "markdown",
-    "Dbt": "dbt",
-    "ContextoDeIA": "contexto_de_ia",
-}
+_LIMITE_PALAVRA = re.compile(r"(.)([A-Z][a-z]+)")
+_LIMITE_SIGLA = re.compile(r"([a-z0-9])([A-Z])")
+
+
+def _slugificar(nome: str) -> str:
+    """Converte um nome de registro CamelCase em snake_case pra nome de pasta.
+
+    Genérico — não depende de conhecer os nomes dos Geradores nativos de
+    antemão, ao contrário de um dicionário fixo por nome. "ContextoDeIA"
+    vira "contexto_de_ia", "Markdown" vira "markdown", sem exceção
+    cadastrada à parte para nenhum dos dois.
+    """
+    com_separador_de_palavra = _LIMITE_PALAVRA.sub(r"\1_\2", nome)
+    com_separador_de_sigla = _LIMITE_SIGLA.sub(r"\1_\2", com_separador_de_palavra)
+    return com_separador_de_sigla.lower()
 
 
 def sugerir_destino(nomes_geradores: list[str]) -> str:
@@ -25,8 +36,7 @@ def sugerir_destino(nomes_geradores: list[str]) -> str:
     """
     if len(nomes_geradores) != 1:
         return "artefatos"
-    nome = nomes_geradores[0]
-    return f"artefatos/{_SUGESTOES_DE_DESTINO.get(nome, nome.lower())}"
+    return f"artefatos/{_slugificar(nomes_geradores[0])}"
 
 
 def confirmar_execucao(nomes_geradores: list[str], destino: Path) -> None:

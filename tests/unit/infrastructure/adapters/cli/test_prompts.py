@@ -84,6 +84,52 @@ def test_texto_com_dica_limpar_sem_default_nao_passa_instrucao(
     assert fake.kwargs["instruction"] is None
 
 
+# numero() — caminho feliz, erro esperado, borda
+
+
+def test_numero_converte_a_resposta(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Caminho feliz: resposta numérica válida é convertida e devolvida."""
+    _substituir(monkeypatch, "text", "42")
+
+    assert prompts.numero("Porta:", int, default="3306") == 42
+
+
+def test_numero_com_entrada_invalida_reprompt_ate_funcionar(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Erro esperado: entrada não numérica reexibe o prompt em vez de propagar."""
+    respostas = iter(["abc", "", "8"])
+    monkeypatch.setattr(
+        "questionary.text",
+        lambda *args, **kwargs: _RespostaFake(next(respostas)),
+    )
+
+    assert prompts.numero("Porta:", int) == 8
+    assert "Erro: valor inválido" in capsys.readouterr().out
+
+
+def test_numero_opcional_em_branco_devolve_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Borda: resposta em branco devolve None em vez de repetir o prompt."""
+    _substituir(monkeypatch, "text", "")
+
+    assert prompts.numero_opcional("Seed (opcional):", int) is None
+
+
+def test_numero_opcional_com_entrada_invalida_reprompt_ate_funcionar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Erro esperado: entrada não numérica reexibe o prompt, branco continua valendo."""
+    respostas = iter(["abc", "7"])
+    monkeypatch.setattr(
+        "questionary.text",
+        lambda *args, **kwargs: _RespostaFake(next(respostas)),
+    )
+
+    assert prompts.numero_opcional("Seed (opcional):", int) == 7
+
+
 # senha(), selecionar(), confirmar() — caminho feliz + cancelamento
 
 
@@ -226,7 +272,7 @@ def test_progresso_paralelo_com_total_mostra_fracao(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Caminho feliz: com total conhecido, mostra 'concluídas/total'."""
-    callback = prompts.progresso_paralelo("Extraindo...", total=2)
+    callback, _definir_total = prompts.progresso_paralelo("Extraindo...", total=2)
 
     callback("public.clientes")
     callback("public.pedidos")
@@ -240,13 +286,36 @@ def test_progresso_paralelo_sem_total_mostra_contagem_corrida(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Borda: sem total (None), mostra só a contagem corrida, sem fração."""
-    callback = prompts.progresso_paralelo("Gerando skeletons...")
+    callback, _definir_total = prompts.progresso_paralelo("Gerando skeletons...")
 
     callback("public.clientes")
 
     saida = capsys.readouterr().out
     assert "(1) — public.clientes" in saida
     assert "/1" not in saida
+
+
+def test_progresso_paralelo_definir_total_depois_passa_a_mostrar_fracao(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Borda: total definido após a criação passa a valer nas chamadas seguintes."""
+    callback, definir_total = prompts.progresso_paralelo("Extraindo...")
+
+    callback("public.clientes")
+    definir_total(2)
+    callback("public.pedidos")
+
+    saida = capsys.readouterr().out
+    assert "(1) — public.clientes" in saida
+    assert "(2/2) — public.pedidos" in saida
+
+
+def test_progresso_paralelo_devolve_named_tuple_com_campos_nomeados() -> None:
+    """Borda: acesso por nome (.callback/.definir_total), não só por posição."""
+    resultado = prompts.progresso_paralelo("Extraindo...")
+
+    assert resultado.callback is resultado[0]
+    assert resultado.definir_total is resultado[1]
 
 
 # ampulheta()

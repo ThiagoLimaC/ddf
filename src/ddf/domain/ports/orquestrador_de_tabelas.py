@@ -20,12 +20,19 @@ class OrquestradorDeTabelas(Protocol):
         extrator: Extrator,
         /,
         progresso: Callable[[str], None] | None = None,
+        ao_conhecer_total: Callable[[int], None] | None = None,
     ) -> Resultado[list[TabelaExtraida]]:
         """Extrai, em paralelo, todas as tabelas dos escopos informados.
 
         Falhas individuais (listagem de um escopo ou extração de uma tabela)
         nunca abortam o lote inteiro — viram Aviso no Sucesso devolvido,
         junto das tabelas que deram certo.
+
+        `ao_conhecer_total`, se informado, é chamado uma única vez — assim
+        que a listagem interna termina, antes de iniciar a extração — com o
+        nº de tabelas que de fato serão extraídas. Existe para o chamador
+        mostrar um total real sem precisar listar as tabelas de novo por
+        fora (issue #75).
         """
         ...
 

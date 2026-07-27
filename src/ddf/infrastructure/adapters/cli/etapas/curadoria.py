@@ -40,7 +40,7 @@ def _gerar_skeletons(
     curadoria de verdade vem da 2ª passada, em `aplicar_sobrescritas`, após
     o usuário editar os YAMLs.
     """
-    progresso = prompts.progresso_paralelo(
+    progresso, _definir_total = prompts.progresso_paralelo(
         "Gerando skeletons de sobrescrita...", len(tabelas)
     )
     resultado = orquestrador.aplicar_sobrescritas(tabelas, sobrescrita, progresso)
@@ -61,7 +61,9 @@ def aplicar_sobrescritas(
     tabelas: list[TabelaExtraida],
 ) -> BancoCurado:
     """Etapa 8: reaplica a sobrescrita (já editada) em paralelo, gera o BancoCurado."""
-    progresso = prompts.progresso_paralelo("Aplicando sobrescritas...", len(tabelas))
+    progresso, _definir_total = prompts.progresso_paralelo(
+        "Aplicando sobrescritas...", len(tabelas)
+    )
     resultado = orquestrador.aplicar_sobrescritas(tabelas, sobrescrita, progresso)
     print()
     return ou_sair(resultado)

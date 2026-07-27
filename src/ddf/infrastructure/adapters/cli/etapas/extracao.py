@@ -1,4 +1,4 @@
-"""Etapas 1-5 do wizard: amostragem, conexão, escopos e extração das tabelas."""
+"""Etapas 1-5 do wizard: conexão, escopos, amostragem e extração das tabelas."""
 
 import sys
 import time
@@ -20,8 +20,32 @@ from ddf.infrastructure.adapters.cli.registro.extratores import (
 _MAXIMO_TENTATIVAS_CONEXAO = 3
 
 
-def configurar_amostragem() -> ConfiguracaoDeExtracao:
-    """Etapa 1: escolhe a estratégia de amostragem, monta a ConfiguracaoDeExtracao.
+def conectar() -> tuple[Extrator, ConfiguracaoDeExtracao, list[str]]:
+    """Etapas 1-2: escolhe a fonte, constrói o Extrator sem estratégia, testa conexão.
+
+    A estratégia de amostragem só é escolhida depois, em
+    `configurar_amostragem` — já com fonte conectada e escopos conhecidos —
+    por isso `ConfiguracaoDeExtracao` é construída aqui com `estrategia=None`
+    e devolvida junto, para ser preenchida antes da extração de fato.
+
+    Reaproveita o Resultado de `listar_escopos()` como sonda de
+    conectividade — a etapa 3 (escolher escopos) usa a mesma lista, sem uma
+    2ª chamada de rede.
+    """
+    nome_fonte = prompts.selecionar(
+        "Qual fonte?", list(EXTRATORES_REGISTRADOS.keys())
+    )
+    configuracao = ConfiguracaoDeExtracao()
+    extrator = EXTRATORES_REGISTRADOS[nome_fonte].construir(configuracao)
+    escopos = _testar_conexao(extrator)
+    return extrator, configuracao, escopos
+
+
+def configurar_amostragem(configuracao: ConfiguracaoDeExtracao) -> None:
+    """Etapa 4: escolhe a estratégia de amostragem, atribuindo à configuração já em uso.
+
+    `configuracao` é o mesmo objeto já guardado pelo Extrator construído em
+    `conectar` — atribuir `estrategia` aqui é o que ele lê ao extrair.
 
     `EstrategiaDeAmostragem` é um Port — `PercentualDeLinhas` e
     `TabelaInteira` (issue #76) já provam que o registro cresce sem
@@ -30,23 +54,7 @@ def configurar_amostragem() -> ConfiguracaoDeExtracao:
     nome_estrategia = prompts.selecionar(
         "Qual estratégia de amostragem?", list(ESTRATEGIAS_REGISTRADAS.keys())
     )
-    estrategia = ESTRATEGIAS_REGISTRADAS[nome_estrategia].construir()
-    return ConfiguracaoDeExtracao(estrategia=estrategia)
-
-
-def conectar(configuracao: ConfiguracaoDeExtracao) -> tuple[Extrator, list[str]]:
-    """Etapas 2-3: escolhe a fonte, constrói o Extrator e testa a conexão.
-
-    Reaproveita o Resultado de `listar_escopos()` como sonda de
-    conectividade — a etapa 4 (escolher escopos) usa a mesma lista, sem uma
-    2ª chamada de rede.
-    """
-    nome_fonte = prompts.selecionar(
-        "Qual fonte?", list(EXTRATORES_REGISTRADOS.keys())
-    )
-    extrator = EXTRATORES_REGISTRADOS[nome_fonte].construir(configuracao)
-    escopos = _testar_conexao(extrator)
-    return extrator, escopos
+    configuracao.estrategia = ESTRATEGIAS_REGISTRADAS[nome_estrategia].construir()
 
 
 def _testar_conexao(extrator: Extrator) -> list[str]:
@@ -76,34 +84,20 @@ def _testar_conexao(extrator: Extrator) -> list[str]:
         tentativa += 1
 
 
-def _contar_tabelas(extrator: Extrator, escopos: list[str]) -> int | None:
-    """Pré-lista as tabelas dos escopos só para saber o total esperado no progresso.
-
-    Falha em listar algum escopo aqui não é fatal — `orquestrador.extrair`
-    trata isso de verdade (vira Aviso); aqui só degrada para progresso sem
-    total (contagem corrida), sem duplicar tratamento de erro.
-
-    Args:
-        extrator: Extrator já conectado.
-        escopos: escopos escolhidos pelo usuário.
-    """
-    total = 0
-    for escopo in escopos:
-        resultado = extrator.listar_tabelas(escopo)
-        if isinstance(resultado, Falha):
-            return None
-        total += len(resultado.valor)
-    return total
-
-
 def extrair(
     orquestrador: OrquestradorDeTabelas, extrator: Extrator, escopos: list[str]
 ) -> list[TabelaExtraida]:
-    """Etapa 5: extrai, em paralelo, todas as tabelas dos escopos escolhidos."""
-    total = _contar_tabelas(extrator, escopos)
-    progresso = prompts.progresso_paralelo("Extraindo tabelas...", total)
+    """Etapa 5: extrai, em paralelo, todas as tabelas dos escopos escolhidos.
+
+    Total exibido na barra de progresso vem do próprio `orquestrador.extrair`
+    (`ao_conhecer_total`), assim que ele termina de listar as tabelas
+    internamente — sem uma 2ª listagem só para saber a contagem (issue #75).
+    """
+    progresso, definir_total = prompts.progresso_paralelo("Extraindo tabelas...")
     inicio = time.monotonic()
-    resultado = orquestrador.extrair(escopos, extrator, progresso=progresso)
+    resultado = orquestrador.extrair(
+        escopos, extrator, progresso=progresso, ao_conhecer_total=definir_total
+    )
     print()
     print(f"⏱️  duração: {time.monotonic() - inicio:.0f}s")
     return ou_sair(resultado)

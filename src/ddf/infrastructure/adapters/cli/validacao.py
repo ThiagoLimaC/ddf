@@ -7,8 +7,8 @@ from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 
 
 def validar_dependencias(
-    analisadores: list[Analisador],
-    geradores: list[Gerador],
+    analisadores: dict[str, Analisador],
+    geradores: dict[str, Gerador],
 ) -> Resultado[list[Analisador]]:
     """Valida que todos os requer de Analisadores e Geradores estão satisfeitos.
 
@@ -16,25 +16,45 @@ def validar_dependencias(
     produz/requer — a ordem de seleção do usuário não determina a ordem de
     execução, só o conjunto selecionado.
 
+    Recebe dicts (nome de registro -> instância), não listas soltas, para
+    que mensagens de erro citem o rótulo exibido no menu do wizard (ex.:
+    "Dbt") em vez do nome da classe Python (ex.: "GeradorDbt").
+
     Args:
-        analisadores: Analisadores selecionados pelo usuário.
-        geradores: Geradores selecionados pelo usuário.
+        analisadores: Analisadores selecionados pelo usuário, por nome de
+            registro.
+        geradores: Geradores selecionados pelo usuário, por nome de registro.
 
     Returns:
         Sucesso com os Analisadores reordenados topologicamente, ou Falha
         com a descrição da dependência ausente ou do ciclo detectado.
     """
-    produzido_por = _mapear_produtores(analisadores)
+    rotulos: dict[int, str] = {
+        id(instancia): nome
+        for registro in (analisadores, geradores)
+        for nome, instancia in registro.items()
+    }
+    lista_analisadores = list(analisadores.values())
+    lista_geradores = list(geradores.values())
 
-    ausentes = _dependencias_ausentes(analisadores, geradores, produzido_por)
+    produzido_por = _mapear_produtores(lista_analisadores)
+
+    ausentes = _dependencias_ausentes(
+        lista_analisadores, lista_geradores, produzido_por, rotulos
+    )
     if ausentes:
         return Falha("Dependências não satisfeitas: " + "; ".join(ausentes) + ".")
 
-    ordenados = _ordenar_topologicamente(analisadores, produzido_por)
+    ordenados = _ordenar_topologicamente(lista_analisadores, produzido_por, rotulos)
     if isinstance(ordenados, str):
         return Falha(ordenados)
 
     return Sucesso(valor=ordenados)
+
+
+def _rotulo(instancia: Analisador | Gerador, rotulos: dict[int, str]) -> str:
+    """Devolve o nome de registro da instância, com o nome da classe como fallback."""
+    return rotulos.get(id(instancia), type(instancia).__name__)
 
 
 def _mapear_produtores(
@@ -48,17 +68,18 @@ def _mapear_produtores(
     Returns:
         Dicionário de TipoDeMetrica para o Analisador que a produz.
     """
-    return {
-        metrica: analisador
-        for analisador in analisadores
-        for metrica in analisador.produz
-    }
+    produzido_por: dict[TipoDeMetrica, Analisador] = {}
+    for analisador in analisadores:
+        for metrica in analisador.produz:
+            produzido_por[metrica] = analisador
+    return produzido_por
 
 
 def _dependencias_ausentes(
     analisadores: list[Analisador],
     geradores: list[Gerador],
     produzido_por: dict[TipoDeMetrica, Analisador],
+    rotulos: dict[int, str],
 ) -> list[str]:
     """Lista, em texto, cada requer não satisfeito pelo conjunto selecionado.
 
@@ -66,6 +87,7 @@ def _dependencias_ausentes(
         analisadores: Analisadores selecionados pelo usuário.
         geradores: Geradores selecionados pelo usuário.
         produzido_por: Mapa de TipoDeMetrica para o Analisador que a produz.
+        rotulos: Mapa de id(instância) para o nome exibido no menu do wizard.
 
     Returns:
         Lista de mensagens, uma por dependência não satisfeita.
@@ -75,14 +97,14 @@ def _dependencias_ausentes(
         for metrica in analisador.requer:
             if metrica not in produzido_por:
                 ausentes.append(
-                    f"{type(analisador).__name__} requer {metrica.__name__}, "
+                    f"{_rotulo(analisador, rotulos)} requer {metrica.__name__}, "
                     "que nenhum Analisador selecionado produz"
                 )
     for gerador in geradores:
         for metrica in gerador.requer:
             if metrica not in produzido_por:
                 ausentes.append(
-                    f"{type(gerador).__name__} requer {metrica.__name__}, "
+                    f"{_rotulo(gerador, rotulos)} requer {metrica.__name__}, "
                     "que nenhum Analisador selecionado produz"
                 )
     return ausentes
@@ -91,12 +113,14 @@ def _dependencias_ausentes(
 def _ordenar_topologicamente(
     analisadores: list[Analisador],
     produzido_por: dict[TipoDeMetrica, Analisador],
+    rotulos: dict[int, str],
 ) -> list[Analisador] | str:
     """Ordena Analisadores por dependência ou devolve mensagem de ciclo detectado.
 
     Args:
         analisadores: Analisadores selecionados pelo usuário.
         produzido_por: Mapa de TipoDeMetrica para o Analisador que a produz.
+        rotulos: Mapa de id(instância) para o nome exibido no menu do wizard.
 
     Returns:
         Lista de Analisadores ordenada topologicamente por produz/requer,
@@ -114,7 +138,7 @@ def _ordenar_topologicamente(
     while restantes:
         prontos = [a for a in restantes if dependencias[id(a)] <= resolvidos]
         if not prontos:
-            nomes = ", ".join(type(a).__name__ for a in restantes)
+            nomes = ", ".join(_rotulo(a, rotulos) for a in restantes)
             return f"Ciclo de dependências detectado entre: {nomes}."
         for analisador in prontos:
             ordenados.append(analisador)

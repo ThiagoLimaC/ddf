@@ -228,13 +228,14 @@ precisa para funcionar. A CLI valida antes de rodar.
 
 ### 8. CLI (wizard)
 
-Conduz: escolher estratégia de amostragem → escolher fonte e conectar →
-escolher escopos → extrair (paralelo) → gerar skeletons → **pausa para
+Conduz: escolher fonte e conectar → escolher escopos → escolher estratégia
+de amostragem → extrair (paralelo) → gerar skeletons → **pausa para
 curadoria** → aplicar sobrescritas → escolher Geradores → validar
 Analisadores+Geradores → analisar → escolher destino → confirmar → executar.
 14 etapas ao todo, uma fase do pipeline por módulo em `cli/etapas/`
 (`extracao.py`, `curadoria.py`, `analise.py`, `geracao.py`) — `wizard.py`
-só orquestra a sequência.
+só orquestra a sequência. Ordem revisada na issue #75 — antes a estratégia
+de amostragem era escolhida antes de conhecer fonte/escopo (ver Decisão 13).
 
 Fontes, Analisadores, Geradores e Estratégias de amostragem são pontos de
 extensão registrados em `cli/registro/` (`EXTRATORES_REGISTRADOS`,
@@ -352,3 +353,21 @@ Exibe `Aviso`s em streaming por etapa concluída, agrupados por origem e por
     (ex.: `OperationalError` → `Falha("Não foi possível conectar...")`) — é
     chamada em volta dessas conversões, não dentro delas; rede de segurança
     para o que não foi previsto, não a primeira linha de tratamento.
+13. **`ConfiguracaoDeExtracao.estrategia` opcional, atribuída após a
+    construção do Extrator** — achado da banca de revisão pós-CLI (issue
+    #75): o wizard escolhia a estratégia de amostragem antes de conectar à
+    fonte ou conhecer os escopos disponíveis, sem informação real sobre o
+    que estava sendo amostrado. Reordenado para fonte → conectar → escopos
+    → estratégia, mas `ConfiguracaoDeExtracao.estrategia` era um campo
+    obrigatório no construtor do Extrator — precisaria ser conhecida antes
+    de conectar. Resolvido tornando `estrategia: EstrategiaDeAmostragem |
+    None = None`: `cli/etapas/extracao.py::conectar()` constrói o Extrator
+    sem estratégia, `configurar_amostragem()` a atribui depois, mutando o
+    mesmo objeto `ConfiguracaoDeExtracao` já guardado pelo Extrator (não é
+    `frozen=True`, ao contrário dos demais Value Objects de
+    `domain/model/common/`). `ConfiguracaoDeExtracao.estrategia_obrigatoria()
+    -> Resultado[EstrategiaDeAmostragem]` centraliza a checagem que todo
+    `Extrator.extrair_tabela` precisa fazer antes de ler `estrategia` —
+    `Falha` explícita se ainda `None`, em vez de cada Adapter concreto
+    (Postgres, MariaDB, e futuros plugins de terceiro) reimplementar o
+    mesmo `if estrategia is None` manualmente.

@@ -1,4 +1,4 @@
-"""Helper agnóstico de fonte pra montar MetadadosDeAmostra e o Aviso de divergência."""
+"""Helper agnóstico de fonte pra montar MetadadosDeAmostra e os Avisos de custo."""
 
 from typing import assert_never
 
@@ -18,8 +18,19 @@ def construir_metadados_de_amostra(
     total_linhas: int,
     origem: str,
     causa_provavel: str,
+    identificador_tabela: str,
 ) -> tuple[MetadadosDeAmostra, list[Aviso]]:
-    """Monta MetadadosDeAmostra e emite Aviso quando a amostra diverge de total_linhas.
+    """Monta MetadadosDeAmostra e emite os Avisos de custo associados à estratégia.
+
+    Dois Avisos independentes, nenhum fatal: (1) toda vez que a requisição é
+    AmostragemProbabilistica, documenta que a leitura varre a tabela inteira
+    independente do percentual pedido — limitação estrutural da estratégia
+    (ver docstring de `PercentualDeLinhas`), não uma condição de erro; (2)
+    quando a amostra excede `total_linhas`, sintoma de estimativa de
+    catálogo desatualizada. Ambos citam `identificador_tabela`, mesmo padrão
+    de `construir_colunas_fk` — sem isso, os exemplos que `avisos.py` mostra
+    antes de colapsar por contagem ficam anônimos, sem dizer qual tabela
+    específica paga o custo (issue #75).
 
     Args:
         nome: identificador da EstrategiaDeAmostragem (MetadadosDeAmostra.estrategia).
@@ -35,7 +46,9 @@ def construir_metadados_de_amostra(
         causa_provavel: explicação, específica do motor, de por que
             total_linhas pode estar desatualizado (ex.: "sem ANALYZE
             recente" no Postgres, "sem ANALYZE TABLE recente" no MariaDB).
+        identificador_tabela: "escopo.tabela", citado nas mensagens de Aviso.
     """
+    avisos: list[Aviso] = []
     match requisicao:
         case AmostragemProbabilistica(percentual=percentual, seed=seed):
             metadados = MetadadosDeAmostra(
@@ -44,6 +57,18 @@ def construir_metadados_de_amostra(
                 percentual=percentual,
                 seed=seed,
             )
+            avisos.append(
+                Aviso(
+                    mensagem=(
+                        f"'{identificador_tabela}': amostragem por percentual "
+                        f"faz varredura sequencial completa da tabela "
+                        f"({total_linhas} linhas), independente do percentual "
+                        "pedido — custo de I/O não escala com o tamanho da "
+                        "amostra resultante."
+                    ),
+                    origem=origem,
+                )
+            )
         case AmostragemIntegral():
             metadados = MetadadosDeAmostra(
                 estrategia=nome, tamanho_amostra=tamanho_amostra
@@ -51,14 +76,13 @@ def construir_metadados_de_amostra(
         case _ as nunca:
             assert_never(nunca)
 
-    avisos: list[Aviso] = []
     if tamanho_amostra > total_linhas:
         avisos.append(
             Aviso(
                 mensagem=(
-                    f"Amostra ({tamanho_amostra} linhas) maior que total_linhas "
-                    f"({total_linhas}) — total_linhas pode estar desatualizado "
-                    f"({causa_provavel})."
+                    f"'{identificador_tabela}': amostra ({tamanho_amostra} "
+                    f"linhas) maior que total_linhas ({total_linhas}) — "
+                    f"total_linhas pode estar desatualizado ({causa_provavel})."
                 ),
                 origem=origem,
             )

@@ -1,4 +1,4 @@
-"""Testes das etapas 1-5 do wizard: amostragem, conexão, escopos e extração."""
+"""Testes das etapas 1-5 do wizard: conexão, escopos, amostragem e extração."""
 
 from collections.abc import Callable
 
@@ -56,9 +56,27 @@ class OrquestradorFake:
         self._resultado_extrair = resultado_extrair
 
     def extrair(
-        self, escopos: list[str], extrator: object, progresso: object = None
+        self,
+        escopos: list[str],
+        extrator: object,
+        progresso: Callable[[str], None] | None = None,
+        ao_conhecer_total: Callable[[int], None] | None = None,
     ) -> Resultado[list[TabelaExtraida]]:
-        """Devolve o Resultado configurado, ignorando os argumentos."""
+        """Devolve o Resultado configurado, chamando ao_conhecer_total/progresso.
+
+        Simula o comportamento real de OrquestradorParalelo: informa o total
+        antes de "processar" cada item da lista de sucesso configurada.
+        """
+        tabelas = (
+            self._resultado_extrair.valor
+            if isinstance(self._resultado_extrair, Sucesso)
+            else []
+        )
+        if ao_conhecer_total is not None:
+            ao_conhecer_total(len(tabelas))
+        if progresso is not None:
+            for tabela in tabelas:
+                progresso(f"{tabela.nome_escopo}.{tabela.nome_tabela}")
         return self._resultado_extrair
 
     def aplicar_sobrescritas(
@@ -74,7 +92,7 @@ class OrquestradorFake:
 def test_configurar_amostragem_usa_a_estrategia_escolhida(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Caminho feliz: monta a ConfiguracaoDeExtracao com a estratégia escolhida."""
+    """Caminho feliz: atribui a estratégia escolhida à configuração recebida."""
     registro = {
         "Percentual de linhas": EstrategiaRegistrada(
             construir=lambda: PercentualDeLinhas(percentual=10.0),
@@ -85,10 +103,10 @@ def test_configurar_amostragem_usa_a_estrategia_escolhida(
         "ddf.infrastructure.adapters.cli.prompts.selecionar",
         lambda mensagem, escolhas: "Percentual de linhas",
     )
+    configuracao = ConfiguracaoDeExtracao()
 
-    configuracao = extracao.configurar_amostragem()
+    extracao.configurar_amostragem(configuracao)
 
-    assert isinstance(configuracao, ConfiguracaoDeExtracao)
     assert isinstance(configuracao.estrategia, PercentualDeLinhas)
 
 
@@ -98,7 +116,7 @@ def test_configurar_amostragem_usa_a_estrategia_escolhida(
 def test_conectar_com_sucesso_na_primeira_tentativa(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Caminho feliz: conecta e devolve os escopos já na 1ª tentativa."""
+    """Caminho feliz: conecta e devolve escopos na 1ª tentativa, sem estratégia."""
     extrator_fake = ExtratorFake([Sucesso(valor=["public", "vendas"])])
     registro = {
         "Fake": ExtratorRegistrado(
@@ -109,11 +127,11 @@ def test_conectar_com_sucesso_na_primeira_tentativa(
     monkeypatch.setattr(
         "ddf.infrastructure.adapters.cli.prompts.selecionar", lambda *a: "Fake"
     )
-    configuracao = ConfiguracaoDeExtracao(estrategia=PercentualDeLinhas(percentual=10))
 
-    extrator, escopos = extracao.conectar(configuracao)
+    extrator, configuracao, escopos = extracao.conectar()
 
     assert extrator is extrator_fake
+    assert configuracao.estrategia is None
     assert escopos == ["public", "vendas"]
 
 
@@ -160,36 +178,6 @@ def test_testar_conexao_usuario_escolhe_sair_antes_do_limite(
     assert excinfo.value.code == 1
 
 
-# _contar_tabelas() — caminho feliz e borda
-
-
-def test_contar_tabelas_soma_todos_os_escopos() -> None:
-    """Caminho feliz: soma o total de tabelas de todos os escopos informados."""
-    extrator_fake = ExtratorFake(
-        respostas_escopos=[],
-        respostas_tabelas={
-            "public": Sucesso(valor=[("public", "clientes"), ("public", "pedidos")]),
-            "vendas": Sucesso(valor=[("vendas", "itens")]),
-        },
-    )
-
-    total = extracao._contar_tabelas(extrator_fake, ["public", "vendas"])  # type: ignore[arg-type]
-
-    assert total == 3
-
-
-def test_contar_tabelas_degrada_para_none_se_algum_escopo_falhar() -> None:
-    """Borda: falha ao listar um escopo degrada para None, sem propagar erro aqui."""
-    extrator_fake = ExtratorFake(
-        respostas_escopos=[],
-        respostas_tabelas={"public": Falha(erro="schema não encontrado")},
-    )
-
-    total = extracao._contar_tabelas(extrator_fake, ["public"])  # type: ignore[arg-type]
-
-    assert total is None
-
-
 # extrair() — caminho feliz
 
 
@@ -207,6 +195,20 @@ def test_extrair_devolve_as_tabelas_do_orquestrador(
     tabelas = extracao.extrair(orquestrador, extrator_fake, ["public"])  # type: ignore[arg-type]
 
     assert tabelas == [tabela]
+
+
+def test_extrair_usa_total_do_orquestrador_na_barra_de_progresso(
+    fabrica_tabela_extraida: Callable[[str, str], TabelaExtraida],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Borda: total exibido vem de ao_conhecer_total, sem listar tabelas por fora."""
+    tabela = fabrica_tabela_extraida("public", "clientes")
+    orquestrador = OrquestradorFake(Sucesso(valor=[tabela]))
+    extrator_fake = ExtratorFake(respostas_escopos=[], respostas_tabelas={})
+
+    extracao.extrair(orquestrador, extrator_fake, ["public"])  # type: ignore[arg-type]
+
+    assert "(1/1)" in capsys.readouterr().out
 
 
 # extrair() — erro esperado
