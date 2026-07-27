@@ -230,33 +230,47 @@ def ampulheta(mensagem: str) -> Generator[None, None, None]:
 
 def progresso_paralelo(
     mensagem_base: str, total: int | None = None
-) -> Callable[[str], None]:
-    """Devolve um callback de progresso para as fases paralelas do wizard.
+) -> tuple[Callable[[str], None], Callable[[int], None]]:
+    """Devolve (callback de progresso, callback para definir o total depois).
 
-    Pensado para ser passado como `progresso=` a `OrquestradorDeTabelas.
-    extrair`/`aplicar_sobrescritas` — cada chamada já chega serializada pela
-    thread principal (ver `_executar_em_paralelo`), sem necessidade de lock
-    aqui. Não mostra tempo decorrido por item — a duração é do processo
-    inteiro, exibida uma vez ao final pelo chamador.
+    Pensado para o 1º elemento ser passado como `progresso=` a
+    `OrquestradorDeTabelas.extrair`/`aplicar_sobrescritas` — cada chamada já
+    chega serializada pela thread principal (ver `_executar_em_paralelo`),
+    sem necessidade de lock aqui. Não mostra tempo decorrido por item — a
+    duração é do processo inteiro, exibida uma vez ao final pelo chamador.
+
+    O 2º elemento existe para os casos em que o total só é conhecido depois
+    de iniciada a chamada (ex.: `extrair`, que lista as tabelas de cada
+    escopo internamente) — nesse caso, passe-o como `ao_conhecer_total=` e
+    a fração "N/total" passa a valer a partir da 1ª chamada de progresso
+    seguinte. Chamadores que já sabem o total (ex.: `aplicar_sobrescritas`,
+    com `len(tabelas)` em mãos) simplesmente não usam o 2º elemento.
 
     Args:
         mensagem_base: texto fixo exibido antes da contagem.
         total: número total de itens esperados, exibido como fração
-            "N/total". Omitido quando o total só é conhecido depois de
-            iniciada a chamada (ex.: `extrair`, que lista as tabelas de
-            cada escopo internamente) — nesse caso mostra só "N".
+            "N/total". Omitido quando ainda não é conhecido na criação.
     """
     print()
     concluidas = 0
+    total_atual = total
+
+    def _definir_total(novo_total: int) -> None:
+        nonlocal total_atual
+        total_atual = novo_total
 
     def _callback(identificador: str) -> None:
         nonlocal concluidas
         concluidas += 1
-        contagem = f"{concluidas}/{total}" if total is not None else str(concluidas)
+        contagem = (
+            f"{concluidas}/{total_atual}"
+            if total_atual is not None
+            else str(concluidas)
+        )
         print(
             f"\r\x1b[K{mensagem_base} ({contagem}) — {identificador}",
             end="",
             flush=True,
         )
 
-    return _callback
+    return _callback, _definir_total

@@ -272,7 +272,7 @@ def test_progresso_paralelo_com_total_mostra_fracao(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Caminho feliz: com total conhecido, mostra 'concluídas/total'."""
-    callback = prompts.progresso_paralelo("Extraindo...", total=2)
+    callback, _definir_total = prompts.progresso_paralelo("Extraindo...", total=2)
 
     callback("public.clientes")
     callback("public.pedidos")
@@ -286,13 +286,28 @@ def test_progresso_paralelo_sem_total_mostra_contagem_corrida(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Borda: sem total (None), mostra só a contagem corrida, sem fração."""
-    callback = prompts.progresso_paralelo("Gerando skeletons...")
+    callback, _definir_total = prompts.progresso_paralelo("Gerando skeletons...")
 
     callback("public.clientes")
 
     saida = capsys.readouterr().out
     assert "(1) — public.clientes" in saida
     assert "/1" not in saida
+
+
+def test_progresso_paralelo_definir_total_depois_passa_a_mostrar_fracao(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Borda: total definido após a criação passa a valer nas chamadas seguintes."""
+    callback, definir_total = prompts.progresso_paralelo("Extraindo...")
+
+    callback("public.clientes")
+    definir_total(2)
+    callback("public.pedidos")
+
+    saida = capsys.readouterr().out
+    assert "(1) — public.clientes" in saida
+    assert "(2/2) — public.pedidos" in saida
 
 
 # ampulheta()

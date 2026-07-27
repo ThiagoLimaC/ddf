@@ -278,6 +278,30 @@ def test_extrair_chama_progresso_uma_vez_por_tabela_concluida(
     assert sorted(chamadas) == ["vendas.clientes", "vendas.pedidos"]
 
 
+def test_extrair_chama_ao_conhecer_total_com_o_total_real_a_extrair(
+    construir_extrator_fake: Callable[..., ExtratorFake],
+) -> None:
+    """Borda: ao_conhecer_total recebe o nº de pares após a listagem interna.
+
+    Escopo com falha de listagem não entra na contagem — só os pares que
+    de fato serão extraídos (issue #75, elimina listagem duplicada na CLI).
+    """
+    extrator = construir_extrator_fake(
+        {
+            "vendas": Sucesso([("vendas", "pedidos"), ("vendas", "clientes")]),
+            "financeiro_typo": Falha("Escopo 'financeiro_typo' não encontrado."),
+        }
+    )
+    orquestrador = OrquestradorParalelo(max_trabalhadores=4)
+    totais: list[int] = []
+
+    orquestrador.extrair(
+        ["vendas", "financeiro_typo"], extrator, ao_conhecer_total=totais.append
+    )
+
+    assert totais == [2]
+
+
 def test_aplicar_sobrescritas_chama_progresso_uma_vez_por_tabela_concluida(
     fabrica_tabela_extraida: Callable[[str, str], TabelaExtraida],
     construir_sobrescrita_fake: Callable[..., SobrescritaFake],

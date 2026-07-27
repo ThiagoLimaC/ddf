@@ -122,6 +122,7 @@ class OrquestradorParalelo:
         extrator: Extrator,
         /,
         progresso: Callable[[str], None] | None = None,
+        ao_conhecer_total: Callable[[int], None] | None = None,
     ) -> Resultado[list[TabelaExtraida]]:
         """Lista e extrai, em paralelo, todas as tabelas dos escopos informados.
 
@@ -133,6 +134,9 @@ class OrquestradorParalelo:
             extrator: Extrator concreto usado para listar/extrair cada tabela.
             progresso: callback opcional invocado com "<escopo>.<tabela>" a
                 cada tabela concluída (sucesso ou falha).
+            ao_conhecer_total: callback opcional invocado uma vez, logo após
+                a listagem interna terminar, com o nº de pares (escopo,
+                tabela) que de fato serão extraídos.
 
         Returns:
             Sucesso com list[TabelaExtraida] ordenada por (nome_escopo,
@@ -156,6 +160,9 @@ class OrquestradorParalelo:
                 )
                 continue
             pares_a_extrair.extend(resultado_listagem.valor)
+
+        if ao_conhecer_total is not None:
+            ao_conhecer_total(len(pares_a_extrair))
 
         tabelas, avisos_extracao, falhas_extracao = self._executar_em_paralelo(
             "Extrator",
