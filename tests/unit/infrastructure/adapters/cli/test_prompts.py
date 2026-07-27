@@ -84,6 +84,52 @@ def test_texto_com_dica_limpar_sem_default_nao_passa_instrucao(
     assert fake.kwargs["instruction"] is None
 
 
+# numero() — caminho feliz, erro esperado, borda
+
+
+def test_numero_converte_a_resposta(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Caminho feliz: resposta numérica válida é convertida e devolvida."""
+    _substituir(monkeypatch, "text", "42")
+
+    assert prompts.numero("Porta:", int, default="3306") == 42
+
+
+def test_numero_com_entrada_invalida_reprompt_ate_funcionar(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Erro esperado: entrada não numérica reexibe o prompt em vez de propagar."""
+    respostas = iter(["abc", "", "8"])
+    monkeypatch.setattr(
+        "questionary.text",
+        lambda *args, **kwargs: _RespostaFake(next(respostas)),
+    )
+
+    assert prompts.numero("Porta:", int) == 8
+    assert "Erro: valor inválido" in capsys.readouterr().out
+
+
+def test_numero_opcional_em_branco_devolve_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Borda: resposta em branco devolve None em vez de repetir o prompt."""
+    _substituir(monkeypatch, "text", "")
+
+    assert prompts.numero_opcional("Seed (opcional):", int) is None
+
+
+def test_numero_opcional_com_entrada_invalida_reprompt_ate_funcionar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Erro esperado: entrada não numérica reexibe o prompt, branco continua valendo."""
+    respostas = iter(["abc", "7"])
+    monkeypatch.setattr(
+        "questionary.text",
+        lambda *args, **kwargs: _RespostaFake(next(respostas)),
+    )
+
+    assert prompts.numero_opcional("Seed (opcional):", int) == 7
+
+
 # senha(), selecionar(), confirmar() — caminho feliz + cancelamento
 
 

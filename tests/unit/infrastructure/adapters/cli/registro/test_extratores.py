@@ -1,4 +1,4 @@
-"""Testes de registrar_extrator."""
+"""Testes de registrar_extrator e dos construtores privados de Extrator."""
 
 import pytest
 
@@ -6,8 +6,29 @@ from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtra
 from ddf.domain.ports.extrator import Extrator, ExtratorRegistrado
 from ddf.infrastructure.adapters.cli.registro.extratores import (
     EXTRATORES_REGISTRADOS,
+    _construir_extrator_mariadb,
     registrar_extrator,
 )
+from ddf.infrastructure.adapters.extractors.mariadb.extrator_mariadb import (
+    ExtratorMariaDB,
+)
+from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
+    PercentualDeLinhas,
+)
+
+
+class _RespostaFake:
+    """Substitui o objeto que `questionary.text/password(...)` devolve."""
+
+    def __init__(self, valor: object) -> None:
+        self.valor = valor
+
+    def __call__(self, *args: object, **kwargs: object) -> "_RespostaFake":
+        return self
+
+    def ask(self) -> object:
+        """Devolve o valor pré-configurado, como `.ask()` do questionary faria."""
+        return self.valor
 
 
 class ExtratorFake:
@@ -67,3 +88,23 @@ def test_registrar_extrator_com_nome_duplicado_falha() -> None:
             classe_extrator=ExtratorFake, construir=_construir_fake
         )
     }
+
+
+# _construir_extrator_mariadb() — erro esperado
+def test_construir_extrator_mariadb_com_porta_invalida_reprompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Erro esperado: porta não numérica não crasha, reprompt até funcionar."""
+    respostas_texto = iter(["host1", "abc", "3307", "user1"])
+    monkeypatch.setattr(
+        "questionary.text",
+        lambda *args, **kwargs: _RespostaFake(next(respostas_texto)),
+    )
+    monkeypatch.setattr(
+        "questionary.password", lambda *args, **kwargs: _RespostaFake("senha1")
+    )
+    configuracao = ConfiguracaoDeExtracao(estrategia=PercentualDeLinhas(percentual=10))
+
+    extrator = _construir_extrator_mariadb(configuracao)
+
+    assert isinstance(extrator, ExtratorMariaDB)
