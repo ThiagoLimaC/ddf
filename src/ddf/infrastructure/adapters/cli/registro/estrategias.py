@@ -57,14 +57,13 @@ def _construir_percentual_de_linhas() -> EstrategiaDeAmostragem:
     em inglês) dentro de AmostragemProbabilistica — capturado aqui pra sair
     com mensagem em português, mesmo padrão de `ou_sair` (avisos.py).
     """
-    percentual = float(
-        prompts.texto("Percentual de amostragem (0-100]:", default="10")
+    percentual = prompts.numero(
+        "Percentual de amostragem (0-100]:", float, default="10"
     )
-    seed_texto = prompts.texto(
+    seed = prompts.numero_opcional(
         "Seed para reprodutibilidade (opcional, deixe em branco para aleatório):",
-        default="",
+        int,
     )
-    seed = int(seed_texto) if seed_texto else None
     try:
         return PercentualDeLinhas(percentual=percentual, seed=seed)
     except ValidationError:

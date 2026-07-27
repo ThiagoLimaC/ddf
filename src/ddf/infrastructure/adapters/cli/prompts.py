@@ -6,9 +6,11 @@ import threading
 import time
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import cast
+from typing import TypeVar, cast
 
 import questionary
+
+_Numero = TypeVar("_Numero", int, float)
 
 _QUADROS_AMPULHETA = ("⏳", "⌛")
 
@@ -48,6 +50,49 @@ def texto(mensagem: str, default: str = "", dica_limpar: bool = False) -> str:
     if resposta is None:
         sys.exit(0)
     return resposta
+
+
+def numero(
+    mensagem: str, conversor: Callable[[str], _Numero], default: str = ""
+) -> _Numero:
+    """Pergunta um número, repetindo até que `conversor` consiga interpretar.
+
+    Sem isso, `int()`/`float()` aplicado direto na resposta livre de
+    `texto()` derruba o wizard com um ValueError cru assim que o usuário
+    digita algo não numérico — mesmo espírito de `ou_sair` (avisos.py):
+    nunca deixar um erro técnico chegar bruto no terminal.
+
+    Args:
+        mensagem: pergunta exibida ao usuário.
+        conversor: `int` ou `float`.
+        default: valor pré-preenchido no campo.
+    """
+    while True:
+        resposta = texto(mensagem, default=default)
+        try:
+            return conversor(resposta)
+        except ValueError:
+            print(f"Erro: valor inválido ({resposta!r}). Tente novamente.")
+
+
+def numero_opcional(
+    mensagem: str, conversor: Callable[[str], _Numero], default: str = ""
+) -> _Numero | None:
+    """Como `numero()`, mas resposta em branco devolve None em vez de repetir.
+
+    Args:
+        mensagem: pergunta exibida ao usuário.
+        conversor: `int` ou `float`.
+        default: valor pré-preenchido no campo.
+    """
+    while True:
+        resposta = texto(mensagem, default=default)
+        if not resposta:
+            return None
+        try:
+            return conversor(resposta)
+        except ValueError:
+            print(f"Erro: valor inválido ({resposta!r}). Tente novamente.")
 
 
 def senha(mensagem: str) -> str:

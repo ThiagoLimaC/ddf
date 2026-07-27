@@ -64,7 +64,7 @@ def _construir_extrator_postgres(configuracao: ConfiguracaoDeExtracao) -> Extrat
 def _construir_extrator_mariadb(configuracao: ConfiguracaoDeExtracao) -> Extrator:
     """Pergunta host/porta/credenciais do MariaDB e monta o ExtratorMariaDB."""
     host = prompts.texto("Host do MariaDB:")
-    porta = int(prompts.texto("Porta:", default="3306"))
+    porta = prompts.numero("Porta:", int, default="3306")
     usuario = prompts.texto("Usuário:")
     senha_conexao = prompts.senha("Senha:")
     return ExtratorMariaDB(
