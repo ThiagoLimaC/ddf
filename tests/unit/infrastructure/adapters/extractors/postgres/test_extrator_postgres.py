@@ -52,7 +52,7 @@ def test_primeiro_uso_cria_pool_com_parametros_corretos(
     extrator.listar_tabelas("public")
 
     pool_classe_fake.assert_called_once_with(
-        minconn=1, maxconn=5, dsn="postgresql://fake"
+        minconn=1, maxconn=5, dsn="postgresql://fake", connect_timeout=50
     )
 
 
@@ -69,7 +69,31 @@ def test_max_conexoes_padrao_dimensiona_pool_com_oito(
     extrator.listar_tabelas("public")
 
     pool_classe_fake.assert_called_once_with(
-        minconn=1, maxconn=8, dsn="postgresql://fake"
+        minconn=1, maxconn=8, dsn="postgresql://fake", connect_timeout=50
+    )
+
+
+def test_connect_timeout_customizado_e_repassado_ao_pool(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: connect_timeout customizado é repassado ao ThreadedConnectionPool.
+
+    Sem isso, um host inacessível por firewall (pacote descartado, não
+    recusado) travaria por um timeout de TCP do SO — pode passar de um
+    minuto — antes de qualquer mensagem de erro chegar à CLI.
+    """
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.return_value = []
+    pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+    extrator = ExtratorPostgres(
+        dsn="postgresql://fake", configuracao=configuracao, connect_timeout=3
+    )
+    extrator.listar_tabelas("public")
+
+    pool_classe_fake.assert_called_once_with(
+        minconn=1, maxconn=8, dsn="postgresql://fake", connect_timeout=3
     )
 
 
