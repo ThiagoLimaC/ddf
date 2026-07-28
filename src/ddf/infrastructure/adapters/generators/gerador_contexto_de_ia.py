@@ -3,10 +3,13 @@
 Em vez de um único `ai_context.json` com o `BancoAnalisado` inteiro
 serializado (redundante com Markdown/dbt — mesma informação, outro parser),
 o artefato é dividido em um `index.json` leve com o grafo de relacionamentos
-via FK real, e um arquivo por tabela em `tabelas/<escopo>__<tabela>.json`
-(mesma convenção de nome de `_nome_model` do `GeradorDbt`) — permite a um
-agente carregar só o subconjunto do schema relevante à tarefa (schema
-linking), em vez do banco inteiro.
+via FK real, e um arquivo por tabela em `tabelas/<escopo>/<tabela>.json`
+(issue #77) — permite a um agente carregar só o subconjunto do schema
+relevante à tarefa (schema linking), em vez do banco inteiro. Diferente do
+`_nome_model` do `GeradorDbt` (que precisa de nome globalmente único no
+grafo dbt, daí o `stg_<escopo>__<tabela>`), aqui a própria subpasta por
+escopo já desambigua tabela homônima entre escopos — sem necessidade do
+prefixo redundante no nome do arquivo.
 """
 
 import json
@@ -32,21 +35,20 @@ from ddf.infrastructure.adapters.generators._metricas import (
 _TAMANHO_AMOSTRA_MINIMO_ENUM = 100
 
 
-def _nome_arquivo(escopo: str, tabela: str) -> str:
-    """Nome do arquivo por tabela: `<escopo>__<tabela>.json`.
+def _nome_arquivo(tabela: str) -> str:
+    """Nome do arquivo de uma tabela dentro da subpasta do seu escopo: `<tabela>.json`.
 
-    Mesma convenção de duplo underscore do `_nome_model` do `GeradorDbt` —
-    evita colisão entre escopos com tabela de mesmo nome, sem inventar uma
-    segunda convenção de nomenclatura no produto.
+    Sem prefixo de escopo — a subpasta `tabelas/<escopo>/` já desambigua
+    tabela homônima entre escopos, ao contrário do `_nome_model` do
+    `GeradorDbt` (namespace global de model no grafo dbt).
 
     Args:
-        escopo: `nome_escopo` da tabela.
         tabela: `nome_tabela` da tabela.
 
     Returns:
-        Nome do arquivo, único mesmo quando dois escopos têm tabela homônima.
+        Nome do arquivo dentro de `tabelas/<escopo>/`.
     """
-    return f"{escopo}__{tabela}.json"
+    return f"{tabela}.json"
 
 
 def _chave_tabela(escopo: str, tabela: str) -> str:
@@ -290,6 +292,9 @@ class GeradorContextoDeIA:
     def __call__(self, entrada: BancoAnalisado, destino: Path) -> Resultado[None]:
         """Escreve `index.json` (grafo de relacionamentos) e um chunk por tabela.
 
+        Cada tabela vai para `tabelas/<escopo>/<tabela>.json` — subpasta por
+        escopo, mesma organização já usada pelo `GeradorDbt` (issue #77).
+
         Args:
             entrada: banco analisado cujas tabelas já devem ter
                 MetricasBaseColuna calculada.
@@ -308,8 +313,8 @@ class GeradorContextoDeIA:
                     "nome_escopo": tabela.nome_escopo,
                     "nome_tabela": tabela.nome_tabela,
                     "arquivo": (
-                        "tabelas/"
-                        + _nome_arquivo(tabela.nome_escopo, tabela.nome_tabela)
+                        f"tabelas/{tabela.nome_escopo}/"
+                        f"{_nome_arquivo(tabela.nome_tabela)}"
                     ),
                 }
                 for tabela in tabelas
@@ -323,8 +328,11 @@ class GeradorContextoDeIA:
             return resultado_indice
 
         for tabela in tabelas:
-            caminho_tabela = destino / "tabelas" / _nome_arquivo(
-                tabela.nome_escopo, tabela.nome_tabela
+            caminho_tabela = (
+                destino
+                / "tabelas"
+                / tabela.nome_escopo
+                / _nome_arquivo(tabela.nome_tabela)
             )
             resultado_tabela = escrever_arquivo(
                 caminho_tabela, _dump_json(_montar_tabela_json(tabela))

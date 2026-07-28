@@ -1304,9 +1304,11 @@ de contexto-pra-agente (schema linking, M-Schema, chunking > dump
 monolítico) — o artefato é dividido em três peças, todas deriváveis 100% do
 que já está em `BancoAnalisado`, sem Analisador novo e sem dependência nova:
 
-**Saída:** `<destino>/index.json` + `<destino>/tabelas/<escopo>__<tabela>.json`
-(um arquivo por tabela; convenção de nome igual ao `_nome_model` do
-`GeradorDbt`, evita colisão entre escopos com tabela homônima).
+**Saída:** `<destino>/index.json` + `<destino>/tabelas/<escopo>/<tabela>.json`
+(um arquivo por tabela, agrupado em subpasta por escopo — issue #77; a
+subpasta já desambigua tabela homônima entre escopos, sem precisar do
+prefixo `<escopo>__` usado pelo `_nome_model` do `GeradorDbt`, que resolve
+um problema diferente — namespace global de model no grafo dbt).
 
 **`index.json`:**
 ```json
@@ -1337,7 +1339,7 @@ pontual), não vira `Aviso` por ocorrência — vira uma nota fixa
 (`nota_de_escopo`) sempre presente no artefato, no mesmo espírito da nota
 de rodapé de `MetadadosDeAmostra` no `GeradorMarkdown`.
 
-**`tabelas/<escopo>__<tabela>.json`:** dados estruturais + métricas da
+**`tabelas/<escopo>/<tabela>.json`:** dados estruturais + métricas da
 tabela (chunk endereçável independentemente, para um agente carregar só o
 subconjunto do schema relevante à tarefa) e, quando aplicável, uma seção
 `esquema_de_consulta.colunas_filtraveis` (tool/function-calling schema):
