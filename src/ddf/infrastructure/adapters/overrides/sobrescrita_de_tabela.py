@@ -52,6 +52,8 @@ def _calcular_hash_estrutural(tabela: TabelaExtraida) -> str:
             if coluna.referencia is not None
             else "None"
         )
+    for restricao in tabela.restricoes_unicas:
+        partes.append("restricao_unica:" + ",".join(restricao.colunas))
     bruto = "|".join(partes).encode("utf-8")
     return hashlib.sha256(bruto).hexdigest()
 
