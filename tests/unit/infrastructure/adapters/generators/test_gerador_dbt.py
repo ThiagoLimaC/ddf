@@ -188,7 +188,13 @@ def test_readme_lista_escopos_e_tabelas_do_lote(
     construir_tabela: Callable[..., TabelaAnalisada],
     construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
 ) -> None:
-    """README.md na raiz lista os escopos/tabelas do lote gerado (issue #77)."""
+    """README.md na raiz lista os escopos/tabelas do lote gerado (issue #77).
+
+    Verifica a linha completa com o caminho do `.sql`, não só substrings
+    soltas — pega divergência entre o README e `_nome_model` (única fonte
+    real da convenção de nome do staging model), que um `in readme` solto
+    não pegaria se o template reconstruísse o nome por conta própria.
+    """
     tabela_clientes = construir_tabela(
         colunas=[construir_coluna()], nome_tabela="clientes", nome_escopo="vendas"
     )
@@ -202,10 +208,10 @@ def test_readme_lista_escopos_e_tabelas_do_lote(
     assert isinstance(resultado, Sucesso)
     readme = (tmp_path / "README.md").read_text()
     assert "Gerado em:" in readme
-    assert "vendas" in readme
-    assert "clientes" in readme
-    assert "rh" in readme
-    assert "perfis" in readme
+    assert (
+        "- `clientes` → `models/staging/vendas/stg_vendas__clientes.sql`" in readme
+    )
+    assert "- `perfis` → `models/staging/rh/stg_rh__perfis.sql`" in readme
 
 
 def test_falha_ao_nao_conseguir_escrever_em_disco(

@@ -24,7 +24,7 @@ dbt test
 ### {{ escopo.nome }}
 
 {% for tabela in escopo.tabelas %}
-- `{{ tabela }}` → `models/staging/{{ escopo.nome }}/stg_{{ escopo.nome }}__{{ tabela }}.sql`
+- `{{ tabela.nome }}` → `{{ tabela.caminho_sql }}`
 {% endfor %}
 
 {% endfor %}

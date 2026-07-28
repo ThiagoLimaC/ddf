@@ -1214,16 +1214,25 @@ class GeradorDbt:
     def __call__(self, entrada: BancoAnalisado, destino: Path) -> Resultado[None]: ...
 ```
 
-**Saída:** `dbt_project.yml`, `models/staging/sources.yml`,
-`models/staging/stg_<escopo>__<tabela>.sql` por tabela,
-`models/staging/schema.yml`.
+**Saída:** `dbt_project.yml`, `README.md` (issue #77) na raiz do projeto
+gerado e, por escopo, uma subpasta autocontida em
+`models/staging/<escopo>/`: `sources.yml`, `stg_<escopo>__<tabela>.sql` por
+tabela, e `schema.yml` — convenção real dbt-labs pra staging multi-source
+("as you add more source systems, create a subdirectory per source"),
+substituindo o layout achatado original (`models/staging/sources.yml`
+único pra todos os escopos).
 
 **Nome do staging model (issue #14, desvio deliberado do `stg_<tabela>`
 originalmente cogitado):** `stg_<nome_escopo>__<nome_tabela>` (duplo
 underscore, convenção dbt-labs pra múltiplas fontes) — nomes de model são
 globalmente únicos no grafo dbt, e `stg_<tabela>` sozinho colidiria se dois
 escopos tiverem tabela de mesmo nome (ex.: `vendas.clientes` e
-`rh.clientes`).
+`rh.clientes`). Continua valendo com a reorganização em subpastas por
+escopo da issue #77: a subpasta desambigua o *arquivo* no filesystem, mas
+o *nome do model* precisa continuar único no grafo dbt independente de
+onde o `.sql` mora — por isso, ao contrário do `GeradorContextoDeIA` (que
+descartou o prefixo de escopo no nome do arquivo por não ter essa
+restrição), o `GeradorDbt` mantém o prefixo.
 
 **Nota de idioma:** esta é a única saída do sistema cujo destino consome os
 nomes diretamente (o próprio dbt e o warehouse). Por isso, e só aqui, os
