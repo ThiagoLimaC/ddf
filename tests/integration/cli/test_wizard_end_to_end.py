@@ -135,7 +135,7 @@ def test_wizard_fluxo_completo_com_extrator_fake(
     resultado = CliRunner().invoke(executar)
 
     assert resultado.exit_code == 0, resultado.output
-    assert (destino / "public" / "clientes.md").exists()
+    assert (destino / "markdown" / "public" / "clientes.md").exists()
     assert (diretorio_overrides / "public" / "clientes.yaml").exists()
 
 

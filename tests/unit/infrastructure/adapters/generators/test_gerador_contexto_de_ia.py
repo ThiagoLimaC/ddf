@@ -55,12 +55,12 @@ def test_caminho_feliz_gera_index_e_chunk_por_tabela(
         {
             "nome_escopo": "vendas",
             "nome_tabela": "clientes",
-            "arquivo": "tabelas/vendas__clientes.json",
+            "arquivo": "tabelas/vendas/clientes.json",
         },
         {
             "nome_escopo": "vendas",
             "nome_tabela": "pedidos",
-            "arquivo": "tabelas/vendas__pedidos.json",
+            "arquivo": "tabelas/vendas/pedidos.json",
         },
     ]
     grafo = indice["grafo_de_relacionamentos"]
@@ -83,7 +83,7 @@ def test_caminho_feliz_gera_index_e_chunk_por_tabela(
     assert "referenciado_por" not in tabelas_do_grafo["vendas.pedidos"]
     assert "referencia" not in tabelas_do_grafo["vendas.clientes"]
 
-    chunk_pedidos = _ler_json(tmp_path / "tabelas" / "vendas__pedidos.json")
+    chunk_pedidos = _ler_json(tmp_path / "tabelas" / "vendas" / "pedidos.json")
     assert chunk_pedidos["nome_tabela"] == "pedidos"
     assert chunk_pedidos["nome_escopo"] == "vendas"
     assert chunk_pedidos["colunas"][0]["nome"] == "cliente_id"
@@ -185,7 +185,7 @@ def test_enum_sugerido_quando_cobertura_e_amostra_suficientes(
     resultado = GeradorContextoDeIA()(banco, tmp_path)
 
     assert isinstance(resultado, Sucesso)
-    chunk = _ler_json(tmp_path / "tabelas" / "escopo__pedidos.json")
+    chunk = _ler_json(tmp_path / "tabelas" / "escopo" / "pedidos.json")
     filtraveis = chunk["esquema_de_consulta"]["colunas_filtraveis"]
     assert filtraveis == [
         {
@@ -218,7 +218,7 @@ def test_amostra_pequena_nao_sugere_enum_mesmo_com_cobertura_total(
     resultado = GeradorContextoDeIA()(banco, tmp_path)
 
     assert isinstance(resultado, Sucesso)
-    chunk = _ler_json(tmp_path / "tabelas" / "escopo__pedidos.json")
+    chunk = _ler_json(tmp_path / "tabelas" / "escopo" / "pedidos.json")
     assert "esquema_de_consulta" not in chunk
 
 
@@ -245,7 +245,7 @@ def test_chave_primaria_nunca_vira_sugestao_de_enum(
     resultado = GeradorContextoDeIA()(banco, tmp_path)
 
     assert isinstance(resultado, Sucesso)
-    chunk = _ler_json(tmp_path / "tabelas" / "escopo__pedidos.json")
+    chunk = _ler_json(tmp_path / "tabelas" / "escopo" / "pedidos.json")
     assert "esquema_de_consulta" not in chunk
 
 
@@ -267,7 +267,7 @@ def test_metadados_amostra_inclui_percentual_e_seed_efetivos(
     resultado = GeradorContextoDeIA()(banco, tmp_path)
 
     assert isinstance(resultado, Sucesso)
-    chunk = _ler_json(tmp_path / "tabelas" / "escopo__pedidos.json")
+    chunk = _ler_json(tmp_path / "tabelas" / "escopo" / "pedidos.json")
     assert chunk["metadados_amostra"]["percentual"] == 10.0
     assert chunk["metadados_amostra"]["seed"] == 42
 
@@ -285,7 +285,7 @@ def test_metadados_amostra_percentual_e_seed_sao_none_em_tabela_inteira(
     resultado = GeradorContextoDeIA()(banco, tmp_path)
 
     assert isinstance(resultado, Sucesso)
-    chunk = _ler_json(tmp_path / "tabelas" / "escopo__pedidos.json")
+    chunk = _ler_json(tmp_path / "tabelas" / "escopo" / "pedidos.json")
     assert chunk["metadados_amostra"]["percentual"] is None
     assert chunk["metadados_amostra"]["seed"] is None
 
@@ -303,7 +303,7 @@ def test_tabela_sem_metricas_base_tabela_nao_inclui_secao(
     resultado = GeradorContextoDeIA()(banco, tmp_path)
 
     assert isinstance(resultado, Sucesso)
-    chunk = _ler_json(tmp_path / "tabelas" / "escopo__pedidos.json")
+    chunk = _ler_json(tmp_path / "tabelas" / "escopo" / "pedidos.json")
     assert "metricas_tabela" not in chunk
 
 
@@ -324,7 +324,7 @@ def test_tabela_com_metricas_base_tabela_inclui_completude(
     resultado = GeradorContextoDeIA()(banco, tmp_path)
 
     assert isinstance(resultado, Sucesso)
-    chunk = _ler_json(tmp_path / "tabelas" / "escopo__pedidos.json")
+    chunk = _ler_json(tmp_path / "tabelas" / "escopo" / "pedidos.json")
     assert chunk["metricas_tabela"] == {"completude": 92.4, "amostra_vazia": False}
 
 
@@ -351,7 +351,7 @@ def test_amostra_vazia_sinaliza_completude_sem_evidencia(
     resultado = GeradorContextoDeIA()(banco, tmp_path)
 
     assert isinstance(resultado, Sucesso)
-    chunk = _ler_json(tmp_path / "tabelas" / "escopo__pedidos.json")
+    chunk = _ler_json(tmp_path / "tabelas" / "escopo" / "pedidos.json")
     assert chunk["metricas_tabela"] == {"completude": 100.0, "amostra_vazia": True}
 
 
@@ -399,6 +399,6 @@ def test_geracao_e_deterministica(
     del indice_a["generated_at"]
     del indice_b["generated_at"]
     assert indice_a == indice_b
-    assert (destino_a / "tabelas" / "vendas__pedidos.json").read_text(
+    assert (destino_a / "tabelas" / "vendas" / "pedidos.json").read_text(
         encoding="utf-8"
-    ) == (destino_b / "tabelas" / "vendas__pedidos.json").read_text(encoding="utf-8")
+    ) == (destino_b / "tabelas" / "vendas" / "pedidos.json").read_text(encoding="utf-8")

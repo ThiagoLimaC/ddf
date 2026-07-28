@@ -1,0 +1,30 @@
+# Projeto dbt gerado pelo ddf
+
+Projeto dbt standalone (camada staging) gerado automaticamente pelo
+[ddf](https://github.com/ThiagoLimaC/ddf) a partir do banco de dados fonte.
+Cada model faz `CAST` explícito dos tipos originais e replica as colunas
+1:1, sem transformação de negócio.
+
+*Gerado em: {{ gerado_em }}*
+
+## Como usar
+
+```
+dbt run
+dbt test
+```
+
+> Os testes `accepted_values` usam `severity: warn` — são calculados sobre
+> uma amostra dos dados, não a população completa, então um valor de cauda
+> longa fora da amostra não deve quebrar o build.
+
+## Escopos e tabelas
+
+{% for escopo in escopos %}
+### {{ escopo.nome }}
+
+{% for tabela in escopo.tabelas %}
+- `{{ tabela.nome }}` → `{{ tabela.caminho_sql }}`
+{% endfor %}
+
+{% endfor %}
