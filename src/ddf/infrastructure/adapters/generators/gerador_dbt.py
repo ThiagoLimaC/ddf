@@ -54,9 +54,10 @@ _ambiente = Environment(
     trim_blocks=True,
     lstrip_blocks=True,
     keep_trailing_newline=True,
-    autoescape=False,  # noqa: S701 — saída é SQL, não HTML
+    autoescape=False,  # noqa: S701 — saída é SQL/Markdown, não HTML
 )
 _TEMPLATE_SQL = _ambiente.get_template("stg_tabela.sql.jinja2")
+_TEMPLATE_README = _ambiente.get_template("readme.md.jinja2")
 
 
 def _nome_model(escopo: str, tabela: str) -> str:
@@ -352,28 +353,88 @@ def _model_schema_yaml(
     return entrada
 
 
-def _montar_sources(tabelas: list[TabelaAnalisada]) -> dict[str, Any]:
-    """Agrupa as tabelas do lote por escopo para `sources.yml`.
+def _agrupar_por_escopo(
+    tabelas: list[TabelaAnalisada],
+) -> dict[str, list[TabelaAnalisada]]:
+    """Agrupa tabelas por escopo, preservando a ordem de primeira aparição.
+
+    Única fonte de agrupamento por escopo do Gerador — `GeradorDbt.__call__`,
+    `_montar_sources` e `_renderizar_readme` reaproveitam este resultado em
+    vez de reagrupar cada um por conta própria.
 
     Args:
         tabelas: tabelas do lote analisado, já ordenadas por
             `(nome_escopo, nome_tabela)`.
 
     Returns:
-        Dict `{"version": 2, "sources": [...]}`, um bloco de source por
-        escopo distinto, preservando a ordem de primeira aparição.
+        Dict `{escopo: [TabelaAnalisada, ...]}`.
     """
-    tabelas_por_escopo: dict[str, list[str]] = {}
+    tabelas_por_escopo: dict[str, list[TabelaAnalisada]] = {}
     for tabela in tabelas:
-        tabelas_por_escopo.setdefault(tabela.nome_escopo, []).append(tabela.nome_tabela)
+        tabelas_por_escopo.setdefault(tabela.nome_escopo, []).append(tabela)
+    return tabelas_por_escopo
 
+
+def _montar_sources(
+    escopo: str, tabelas_do_escopo: list[TabelaAnalisada]
+) -> dict[str, Any]:
+    """Monta o `sources.yml` de um único escopo.
+
+    Args:
+        escopo: nome do escopo — todas as tabelas em `tabelas_do_escopo`
+            pertencem a ele.
+        tabelas_do_escopo: tabelas desse escopo.
+
+    Returns:
+        Dict `{"version": 2, "sources": [{"name": escopo, "tables": [...]}]}`.
+    """
     return {
         "version": 2,
         "sources": [
-            {"name": escopo, "tables": [{"name": nome} for nome in nomes]}
-            for escopo, nomes in tabelas_por_escopo.items()
+            {
+                "name": escopo,
+                "tables": [
+                    {"name": tabela.nome_tabela} for tabela in tabelas_do_escopo
+                ],
+            }
         ],
     }
+
+
+def _renderizar_readme(
+    tabelas_por_escopo: dict[str, list[TabelaAnalisada]], gerado_em: str
+) -> str:
+    """Renderiza o README.md do projeto dbt gerado, na raiz do projeto.
+
+    Args:
+        tabelas_por_escopo: tabelas do lote, já agrupadas por escopo
+            (`_agrupar_por_escopo`).
+        gerado_em: timestamp ISO 8601 da execução, compartilhado com
+            `dbt_project.yml`.
+
+    Returns:
+        Markdown listando os escopos e tabelas cobertos, com o caminho real
+        de cada staging model — calculado via `_nome_model`, nunca
+        remontado à parte no template, pra não divergir se a convenção de
+        nome do model mudar.
+    """
+    escopos = [
+        {
+            "nome": escopo,
+            "tabelas": [
+                {
+                    "nome": tabela.nome_tabela,
+                    "caminho_sql": (
+                        f"models/staging/{escopo}/"
+                        f"{_nome_model(escopo, tabela.nome_tabela)}.sql"
+                    ),
+                }
+                for tabela in tabelas
+            ],
+        }
+        for escopo, tabelas in tabelas_por_escopo.items()
+    ]
+    return _TEMPLATE_README.render(escopos=escopos, gerado_em=gerado_em)
 
 
 def _dump_yaml(conteudo: dict[str, Any]) -> str:
@@ -387,7 +448,13 @@ class GeradorDbt:
     requer: list[TipoDeMetrica] = [MetricasBaseColuna]
 
     def __call__(self, entrada: BancoAnalisado, destino: Path) -> Resultado[None]:
-        """Escreve o dbt_project.yml, sources.yml, um .sql por tabela e schema.yml.
+        """Escreve dbt_project.yml, README.md e, por escopo, sources/models/schema.
+
+        Cada escopo do lote vira uma subpasta autocontida em
+        `models/staging/<escopo>/` (`sources.yml` + um `.sql` por tabela +
+        `schema.yml`) — convenção real dbt-labs pra staging multi-source,
+        consistente com `stg_<escopo>__<tabela>` já usado pra evitar colisão
+        de nome de model entre escopos.
 
         Args:
             entrada: banco analisado cujas tabelas já devem ter
@@ -402,6 +469,7 @@ class GeradorDbt:
         avisos: list[Aviso] = []
         tabelas = sorted(entrada.tabelas, key=lambda t: (t.nome_escopo, t.nome_tabela))
         presentes = {(tabela.nome_escopo, tabela.nome_tabela) for tabela in tabelas}
+        tabelas_por_escopo = _agrupar_por_escopo(tabelas)
 
         gerado_em = datetime.now(UTC).isoformat()
         projeto = {**_DBT_PROJECT, "meta": {"generated_at": gerado_em}}
@@ -411,30 +479,40 @@ class GeradorDbt:
         if isinstance(resultado_projeto, Falha):
             return resultado_projeto
 
-        resultado_sources = escrever_arquivo(
-            destino / "models" / "staging" / "sources.yml",
-            _dump_yaml(_montar_sources(tabelas)),
+        resultado_readme = escrever_arquivo(
+            destino / "README.md", _renderizar_readme(tabelas_por_escopo, gerado_em)
         )
-        if isinstance(resultado_sources, Falha):
-            return resultado_sources
+        if isinstance(resultado_readme, Falha):
+            return resultado_readme
 
-        for tabela in tabelas:
-            nome_model = _nome_model(tabela.nome_escopo, tabela.nome_tabela)
-            caminho_sql = destino / "models" / "staging" / f"{nome_model}.sql"
-            resultado_sql = escrever_arquivo(caminho_sql, _renderizar_sql(tabela))
-            if isinstance(resultado_sql, Falha):
-                return resultado_sql
+        for escopo, tabelas_do_escopo in tabelas_por_escopo.items():
+            pasta_escopo = destino / "models" / "staging" / escopo
 
-        schema: dict[str, Any] = {
-            "version": 2,
-            "models": [
-                _model_schema_yaml(tabela, presentes, avisos) for tabela in tabelas
-            ],
-        }
-        resultado_schema = escrever_arquivo(
-            destino / "models" / "staging" / "schema.yml", _dump_yaml(schema)
-        )
-        if isinstance(resultado_schema, Falha):
-            return resultado_schema
+            resultado_sources = escrever_arquivo(
+                pasta_escopo / "sources.yml",
+                _dump_yaml(_montar_sources(escopo, tabelas_do_escopo)),
+            )
+            if isinstance(resultado_sources, Falha):
+                return resultado_sources
+
+            for tabela in tabelas_do_escopo:
+                nome_model = _nome_model(tabela.nome_escopo, tabela.nome_tabela)
+                caminho_sql = pasta_escopo / f"{nome_model}.sql"
+                resultado_sql = escrever_arquivo(caminho_sql, _renderizar_sql(tabela))
+                if isinstance(resultado_sql, Falha):
+                    return resultado_sql
+
+            schema: dict[str, Any] = {
+                "version": 2,
+                "models": [
+                    _model_schema_yaml(tabela, presentes, avisos)
+                    for tabela in tabelas_do_escopo
+                ],
+            }
+            resultado_schema = escrever_arquivo(
+                pasta_escopo / "schema.yml", _dump_yaml(schema)
+            )
+            if isinstance(resultado_schema, Falha):
+                return resultado_schema
 
         return Sucesso(None, avisos=avisos)

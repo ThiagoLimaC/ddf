@@ -17,39 +17,14 @@ class GeradorFake:
     def __init__(self, resultado: Resultado[None]) -> None:
         """Guarda o Resultado que __call__ sempre devolve."""
         self._resultado = resultado
+        self.destino_recebido: Path | None = None
 
     def __call__(
         self, entrada: BancoAnalisado, destino: Path
     ) -> Resultado[None]:
-        """Devolve o Resultado configurado, ignorando os argumentos recebidos."""
+        """Grava o destino recebido e devolve o Resultado configurado."""
+        self.destino_recebido = destino
         return self._resultado
-
-
-# sugerir_destino() — caminho feliz
-
-
-def test_sugerir_destino_com_um_gerador_usa_a_sugestao_especifica() -> None:
-    """Caminho feliz: um único Gerador escolhido sugere seu destino específico."""
-    assert geracao.sugerir_destino(["Dbt"]) == "artefatos/dbt"
-
-
-# sugerir_destino() — borda
-
-
-def test_sugerir_destino_com_varios_geradores_usa_destino_generico() -> None:
-    """Borda: mais de um Gerador escolhido sugere o destino genérico."""
-    assert geracao.sugerir_destino(["Markdown", "Dbt"]) == "artefatos"
-
-
-def test_sugerir_destino_com_nome_camel_case_vira_snake_case() -> None:
-    """Borda: nome de registro sem entrada cadastrada é convertido genericamente.
-
-    Não há dicionário de exceções por nome — "ContextoDeIA" vira
-    "contexto_de_ia" pela mesma regra usada para qualquer outro nome,
-    Gerador nativo ou de plugin de terceiro.
-    """
-    assert geracao.sugerir_destino(["ContextoDeIA"]) == "artefatos/contexto_de_ia"
-    assert geracao.sugerir_destino(["GeradorNovo"]) == "artefatos/gerador_novo"
 
 
 # confirmar_execucao() — caminho feliz e erro esperado
@@ -87,14 +62,38 @@ def test_executar_geradores_com_sucesso_nao_sai(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Caminho feliz: todos os Geradores escolhidos rodam com sucesso."""
-    monkeypatch.setattr(
-        geracao, "GERADORES_REGISTRADOS", {"Markdown": GeradorFake(Sucesso(valor=None))}
-    )
+    gerador_fake = GeradorFake(Sucesso(valor=None))
+    monkeypatch.setattr(geracao, "GERADORES_REGISTRADOS", {"Markdown": gerador_fake})
     banco_analisado = BancoAnalisado(tabelas=[])
 
     geracao.executar_geradores(["Markdown"], banco_analisado, tmp_path)
 
     assert "'Markdown': artefato(s) escrito(s)" in capsys.readouterr().out
+    assert gerador_fake.destino_recebido == tmp_path / "markdown"
+
+
+def test_executar_geradores_escreve_cada_gerador_em_subpasta_propria(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Caminho feliz: dois Geradores escolhidos na mesma execução não se misturam.
+
+    Reprodução direta do bug da issue #77 — antes, `executar_geradores`
+    passava o mesmo `destino` para todos os Geradores escolhidos.
+    """
+    gerador_markdown = GeradorFake(Sucesso(valor=None))
+    gerador_dbt = GeradorFake(Sucesso(valor=None))
+    monkeypatch.setattr(
+        geracao,
+        "GERADORES_REGISTRADOS",
+        {"Markdown": gerador_markdown, "Dbt": gerador_dbt},
+    )
+    banco_analisado = BancoAnalisado(tabelas=[])
+
+    geracao.executar_geradores(["Markdown", "Dbt"], banco_analisado, tmp_path)
+
+    assert gerador_markdown.destino_recebido == tmp_path / "markdown"
+    assert gerador_dbt.destino_recebido == tmp_path / "dbt"
+    assert gerador_markdown.destino_recebido != gerador_dbt.destino_recebido
 
 
 # executar_geradores() — erro esperado
@@ -141,3 +140,23 @@ def test_executar_geradores_continua_apos_uma_falha_isolada(
     saida = capsys.readouterr().out
     assert "Falha em 'Dbt'" in saida
     assert "'Markdown': artefato(s) escrito(s)" in saida
+
+
+def test_executar_geradores_converte_nome_camel_case_em_slug_snake_case(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Borda: nome de registro sem entrada cadastrada é convertido genericamente.
+
+    Não há dicionário de exceções por nome — "ContextoDeIA" vira
+    "contexto_de_ia" pela mesma regra usada para qualquer outro nome,
+    Gerador nativo ou de plugin de terceiro.
+    """
+    gerador_fake = GeradorFake(Sucesso(valor=None))
+    monkeypatch.setattr(
+        geracao, "GERADORES_REGISTRADOS", {"ContextoDeIA": gerador_fake}
+    )
+    banco_analisado = BancoAnalisado(tabelas=[])
+
+    geracao.executar_geradores(["ContextoDeIA"], banco_analisado, tmp_path)
+
+    assert gerador_fake.destino_recebido == tmp_path / "contexto_de_ia"

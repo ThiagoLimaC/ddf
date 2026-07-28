@@ -302,9 +302,9 @@
     mas incompleta se o lote for subconjunto da fonte, então o grafo carrega
     `nota_de_escopo` fixa avisando disso (não é `Aviso` por ocorrência,
     é limitação estrutural de toda execução)
-  - `tabelas/<escopo>__<tabela>.json` — chunk por tabela (mesma convenção
-    de nome do `_nome_model` do dbt), endereçável independente do banco
-    inteiro (schema linking)
+  - `tabelas/<escopo>/<tabela>.json` — chunk por tabela, agrupado em
+    subpasta por escopo (reabertura de escopo da #77, ver abaixo),
+    endereçável independente do banco inteiro (schema linking)
   - `esquema_de_consulta.colunas_filtraveis` por tabela: sugestão de filtro
     `enum` quando a coluna não é PK, `tamanho_amostra >= 100` e cobertura
     dos top-10 `valores_frequentes` `>= 0.9` — reaproveita
@@ -314,6 +314,33 @@
   - Fora de escopo (decisão explícita, não implícita): inferir
     `papel_de_negocio`/`regras_de_negocio` a partir de estatísticas —
     exigiria exceção formal à Restrição 5 do PRD, fica para issue separada
+  - Reabertura de escopo da #77 (extensão do mesmo padrão aplicado ao
+    `GeradorDbt`, pedida pelo usuário após ver o resultado em uso real):
+    `tabelas/<escopo>__<tabela>.json` achatado virou
+    `tabelas/<escopo>/<tabela>.json`, sem prefixo de escopo no nome do
+    arquivo — a subpasta já desambigua tabela homônima entre escopos,
+    diferente do `_nome_model` do `GeradorDbt` (que precisa de nome
+    globalmente único no grafo dbt)
+- [x] `GeradorDbt` — reabertura de escopo da #77 (mini projeto dbt mais
+  completo):
+  - `models/staging/<escopo>/` autocontido (`sources.yml` + `.sql` por
+    tabela + `schema.yml`), em vez de tudo achatado em `staging/` — convenção
+    real dbt-labs pra staging multi-source, consistente com
+    `stg_<escopo>__<tabela>` já usado pra evitar colisão de nome de model
+  - `README.md` novo na raiz do projeto gerado, documentando escopos/
+    tabelas cobertos e comandos básicos (`dbt run`/`dbt test`)
+  - `_agrupar_por_escopo` extraído como helper compartilhado entre
+    `_montar_sources`/`_renderizar_readme` (reuso real, mesmo loop)
+  - Fora de escopo (avaliado e adiado, mesmo tratamento já dado à FK
+    composta): `packages.yml`/`dbt_utils.unique_combination_of_columns`
+    exigiria modelar UNIQUE composto estruturalmente (campo novo em
+    `TabelaExtraida`/`TabelaCurada`/`TabelaAnalisada`, query nova nos dois
+    Extratores, hash estrutural) — escopo maior que "mini projeto dbt",
+    fica para issue futura. Camada intermediate, `profiles.yml`,
+    `analyses/`, `exposures.yml`, `freshness` em sources e macros custom
+    (validação de `formato_detectado`, teste "soft" de nulos/unicidade)
+    também ficam de fora, registrados em
+    `plan/registry-plan/issue-77-*.md`
 
 ## 7. CLI real wizard (issue #16) — concluída
 
@@ -345,3 +372,11 @@
       `Analisador`/`Gerador` (bug encontrado durante a implementação: a
       primeira combinação real de `compor()` com um `Analisador` em `src/`
       apareceu só aqui, fora do escopo anterior do `mypy --strict`)
+- [x] `cli/etapas/geracao.py` — reabertura de escopo da #77 (bugfix): com
+      2+ Geradores escolhidos na mesma execução, os artefatos caíam
+      misturados no mesmo diretório. `executar_geradores` passa a escrever
+      cada Gerador sempre em `destino/<slug>` (via `_slugificar`), mesmo
+      quando só um é escolhido. `sugerir_destino` removida — o subpath por
+      Gerador deixa de ser um caso especial de sugestão de texto e passa a
+      ser sempre aplicado na escrita; `wizard.py` sugere só `"artefatos"`
+      genérico

@@ -19,8 +19,8 @@ from ddf.domain.shared.resultado import Falha, Sucesso
 from ddf.infrastructure.adapters.generators.gerador_dbt import GeradorDbt
 
 
-def _schema_yml(destino: Path) -> dict[str, Any]:
-    conteudo = (destino / "models" / "staging" / "schema.yml").read_text()
+def _schema_yml(destino: Path, escopo: str = "escopo") -> dict[str, Any]:
+    conteudo = (destino / "models" / "staging" / escopo / "schema.yml").read_text()
     resultado: dict[str, Any] = yaml.safe_load(conteudo)
     return resultado
 
@@ -33,13 +33,18 @@ def _coluna(modelo: dict[str, Any], nome: str) -> dict[str, Any]:
     return next(c for c in modelo["columns"] if c["name"] == nome)
 
 
-def test_caminho_feliz_gera_os_quatro_artefatos(
+def test_caminho_feliz_gera_artefatos_por_escopo(
     tmp_path: Path,
     construir_coluna: Callable[..., ColunaAnalisada],
     construir_tabela: Callable[..., TabelaAnalisada],
     construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
 ) -> None:
-    """Duas tabelas em escopos diferentes geram os 4 artefatos com as 4 regras."""
+    """Duas tabelas em escopos diferentes geram subpastas autocontidas por escopo.
+
+    `models/staging/vendas/` e `models/staging/rh/` cada um com seu próprio
+    `sources.yml`/`.sql`/`schema.yml` — sem tabela de um escopo vazando pro
+    `schema.yml` do outro (issue #77).
+    """
     metrica_unica = MetricasBaseColuna(
         percentual_nulo=0.0, percentual_unico=100.0, valores_frequentes=[]
     )
@@ -96,19 +101,27 @@ def test_caminho_feliz_gera_os_quatro_artefatos(
 
     assert isinstance(resultado, Sucesso)
     assert (tmp_path / "dbt_project.yml").exists()
-    assert (tmp_path / "models" / "staging" / "sources.yml").exists()
-    assert (tmp_path / "models" / "staging" / "stg_vendas__clientes.sql").exists()
-    assert (tmp_path / "models" / "staging" / "stg_rh__perfis.sql").exists()
-    assert (tmp_path / "models" / "staging" / "schema.yml").exists()
+    assert (tmp_path / "README.md").exists()
+    assert (tmp_path / "models" / "staging" / "vendas" / "sources.yml").exists()
+    assert (tmp_path / "models" / "staging" / "rh" / "sources.yml").exists()
+    assert (
+        tmp_path / "models" / "staging" / "vendas" / "stg_vendas__clientes.sql"
+    ).exists()
+    assert (tmp_path / "models" / "staging" / "rh" / "stg_rh__perfis.sql").exists()
+    assert (tmp_path / "models" / "staging" / "vendas" / "schema.yml").exists()
+    assert (tmp_path / "models" / "staging" / "rh" / "schema.yml").exists()
 
-    sources = yaml.safe_load(
-        (tmp_path / "models" / "staging" / "sources.yml").read_text()
+    sources_vendas = yaml.safe_load(
+        (tmp_path / "models" / "staging" / "vendas" / "sources.yml").read_text()
     )
-    nomes_sources = [s["name"] for s in sources["sources"]]
-    assert nomes_sources == ["rh", "vendas"]
+    assert [s["name"] for s in sources_vendas["sources"]] == ["vendas"]
+    sources_rh = yaml.safe_load(
+        (tmp_path / "models" / "staging" / "rh" / "sources.yml").read_text()
+    )
+    assert [s["name"] for s in sources_rh["sources"]] == ["rh"]
 
     sql_clientes = (
-        tmp_path / "models" / "staging" / "stg_vendas__clientes.sql"
+        tmp_path / "models" / "staging" / "vendas" / "stg_vendas__clientes.sql"
     ).read_text()
     linhas_sql = sql_clientes.splitlines()
     assert linhas_sql[0] == "select"
@@ -118,11 +131,20 @@ def test_caminho_feliz_gera_os_quatro_artefatos(
     assert linhas_sql[4] == "    CAST(perfil_id AS INTEGER) as perfil_id"  # sem vírgula
     assert linhas_sql[5] == "from {{ source('vendas', 'clientes') }}"
 
-    sql_perfis = (tmp_path / "models" / "staging" / "stg_rh__perfis.sql").read_text()
+    sql_perfis = (
+        tmp_path / "models" / "staging" / "rh" / "stg_rh__perfis.sql"
+    ).read_text()
     assert "CAST(id AS NUMERIC(10,2)) as id" in sql_perfis
 
-    schema = _schema_yml(tmp_path)
-    modelo_clientes = _modelo(schema, "stg_vendas__clientes")
+    schema_vendas = _schema_yml(tmp_path, "vendas")
+    nomes_models_vendas = [m["name"] for m in schema_vendas["models"]]
+    assert nomes_models_vendas == ["stg_vendas__clientes"]  # não vaza rh
+
+    schema_rh = _schema_yml(tmp_path, "rh")
+    nomes_models_rh = [m["name"] for m in schema_rh["models"]]
+    assert nomes_models_rh == ["stg_rh__perfis"]  # não vaza vendas
+
+    modelo_clientes = _modelo(schema_vendas, "stg_vendas__clientes")
 
     coluna_id_yaml = _coluna(modelo_clientes, "id")
     assert "tests" not in coluna_id_yaml  # PK suprime unique/not_null redundante
@@ -158,6 +180,38 @@ def test_dbt_project_registra_generated_at(
     assert isinstance(resultado, Sucesso)
     projeto = yaml.safe_load((tmp_path / "dbt_project.yml").read_text())
     datetime.fromisoformat(projeto["meta"]["generated_at"])  # ValueError se malformado
+
+
+def test_readme_lista_escopos_e_tabelas_do_lote(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """README.md na raiz lista os escopos/tabelas do lote gerado (issue #77).
+
+    Verifica a linha completa com o caminho do `.sql`, não só substrings
+    soltas — pega divergência entre o README e `_nome_model` (única fonte
+    real da convenção de nome do staging model), que um `in readme` solto
+    não pegaria se o template reconstruísse o nome por conta própria.
+    """
+    tabela_clientes = construir_tabela(
+        colunas=[construir_coluna()], nome_tabela="clientes", nome_escopo="vendas"
+    )
+    tabela_perfis = construir_tabela(
+        colunas=[construir_coluna()], nome_tabela="perfis", nome_escopo="rh"
+    )
+    banco = construir_banco([tabela_clientes, tabela_perfis])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    readme = (tmp_path / "README.md").read_text()
+    assert "Gerado em:" in readme
+    assert (
+        "- `clientes` → `models/staging/vendas/stg_vendas__clientes.sql`" in readme
+    )
+    assert "- `perfis` → `models/staging/rh/stg_rh__perfis.sql`" in readme
 
 
 def test_falha_ao_nao_conseguir_escrever_em_disco(
@@ -280,7 +334,7 @@ def test_fk_fora_do_lote_emite_aviso_e_omite_relationships(
     assert len(resultado.avisos) == 1
     assert "rh.funcionarios" in resultado.avisos[0].mensagem
 
-    schema = _schema_yml(tmp_path)
+    schema = _schema_yml(tmp_path, "vendas")
     modelo = _modelo(schema, "stg_vendas__pedidos")
     coluna_yaml = _coluna(modelo, "funcionario_id")
     assert "tests" not in coluna_yaml
@@ -370,7 +424,9 @@ def test_coluna_unknown_nao_recebe_cast(
     resultado = GeradorDbt()(banco, tmp_path)
 
     assert isinstance(resultado, Sucesso)
-    sql = (tmp_path / "models" / "staging" / "stg_escopo__tabela.sql").read_text()
+    sql = (
+        tmp_path / "models" / "staging" / "escopo" / "stg_escopo__tabela.sql"
+    ).read_text()
     assert "spatiallocation as spatiallocation" in sql
     assert "CAST" not in sql
 
@@ -395,7 +451,9 @@ def test_array_com_elemento_reconhecido_recebe_cast_de_array(
     resultado = GeradorDbt()(banco, tmp_path)
 
     assert isinstance(resultado, Sucesso)
-    sql = (tmp_path / "models" / "staging" / "stg_escopo__tabela.sql").read_text()
+    sql = (
+        tmp_path / "models" / "staging" / "escopo" / "stg_escopo__tabela.sql"
+    ).read_text()
     assert "CAST(tags AS INTEGER[])" in sql
 
 
@@ -417,7 +475,9 @@ def test_array_sem_elemento_reconhecido_nao_recebe_cast(
     resultado = GeradorDbt()(banco, tmp_path)
 
     assert isinstance(resultado, Sucesso)
-    sql = (tmp_path / "models" / "staging" / "stg_escopo__tabela.sql").read_text()
+    sql = (
+        tmp_path / "models" / "staging" / "escopo" / "stg_escopo__tabela.sql"
+    ).read_text()
     assert "pontos as pontos" in sql
     assert "CAST" not in sql
 
@@ -448,9 +508,9 @@ def test_geracao_e_deterministica(
     assert isinstance(resultado_a, Sucesso)
     assert isinstance(resultado_b, Sucesso)
     for relativo in (
-        "models/staging/sources.yml",
-        "models/staging/schema.yml",
-        "models/staging/stg_escopo__tabela.sql",
+        "models/staging/escopo/sources.yml",
+        "models/staging/escopo/schema.yml",
+        "models/staging/escopo/stg_escopo__tabela.sql",
     ):
         assert (destino_a / relativo).read_text() == (destino_b / relativo).read_text()
 

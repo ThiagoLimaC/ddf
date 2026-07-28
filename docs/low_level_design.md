@@ -1214,16 +1214,25 @@ class GeradorDbt:
     def __call__(self, entrada: BancoAnalisado, destino: Path) -> Resultado[None]: ...
 ```
 
-**Saída:** `dbt_project.yml`, `models/staging/sources.yml`,
-`models/staging/stg_<escopo>__<tabela>.sql` por tabela,
-`models/staging/schema.yml`.
+**Saída:** `dbt_project.yml`, `README.md` (issue #77) na raiz do projeto
+gerado e, por escopo, uma subpasta autocontida em
+`models/staging/<escopo>/`: `sources.yml`, `stg_<escopo>__<tabela>.sql` por
+tabela, e `schema.yml` — convenção real dbt-labs pra staging multi-source
+("as you add more source systems, create a subdirectory per source"),
+substituindo o layout achatado original (`models/staging/sources.yml`
+único pra todos os escopos).
 
 **Nome do staging model (issue #14, desvio deliberado do `stg_<tabela>`
 originalmente cogitado):** `stg_<nome_escopo>__<nome_tabela>` (duplo
 underscore, convenção dbt-labs pra múltiplas fontes) — nomes de model são
 globalmente únicos no grafo dbt, e `stg_<tabela>` sozinho colidiria se dois
 escopos tiverem tabela de mesmo nome (ex.: `vendas.clientes` e
-`rh.clientes`).
+`rh.clientes`). Continua valendo com a reorganização em subpastas por
+escopo da issue #77: a subpasta desambigua o *arquivo* no filesystem, mas
+o *nome do model* precisa continuar único no grafo dbt independente de
+onde o `.sql` mora — por isso, ao contrário do `GeradorContextoDeIA` (que
+descartou o prefixo de escopo no nome do arquivo por não ter essa
+restrição), o `GeradorDbt` mantém o prefixo.
 
 **Nota de idioma:** esta é a única saída do sistema cujo destino consome os
 nomes diretamente (o próprio dbt e o warehouse). Por isso, e só aqui, os
@@ -1304,9 +1313,11 @@ de contexto-pra-agente (schema linking, M-Schema, chunking > dump
 monolítico) — o artefato é dividido em três peças, todas deriváveis 100% do
 que já está em `BancoAnalisado`, sem Analisador novo e sem dependência nova:
 
-**Saída:** `<destino>/index.json` + `<destino>/tabelas/<escopo>__<tabela>.json`
-(um arquivo por tabela; convenção de nome igual ao `_nome_model` do
-`GeradorDbt`, evita colisão entre escopos com tabela homônima).
+**Saída:** `<destino>/index.json` + `<destino>/tabelas/<escopo>/<tabela>.json`
+(um arquivo por tabela, agrupado em subpasta por escopo — issue #77; a
+subpasta já desambigua tabela homônima entre escopos, sem precisar do
+prefixo `<escopo>__` usado pelo `_nome_model` do `GeradorDbt`, que resolve
+um problema diferente — namespace global de model no grafo dbt).
 
 **`index.json`:**
 ```json
@@ -1337,7 +1348,7 @@ pontual), não vira `Aviso` por ocorrência — vira uma nota fixa
 (`nota_de_escopo`) sempre presente no artefato, no mesmo espírito da nota
 de rodapé de `MetadadosDeAmostra` no `GeradorMarkdown`.
 
-**`tabelas/<escopo>__<tabela>.json`:** dados estruturais + métricas da
+**`tabelas/<escopo>/<tabela>.json`:** dados estruturais + métricas da
 tabela (chunk endereçável independentemente, para um agente carregar só o
 subconjunto do schema relevante à tarefa) e, quando aplicável, uma seção
 `esquema_de_consulta.colunas_filtraveis` (tool/function-calling schema):
@@ -1463,11 +1474,14 @@ Decisão 13 do `system_design_doc.md`):
     de execução. Não existe etapa de "escolher Analisadores".
 11. Analisar via `compor(*analisadores_ordenados)` sobre `ContextoDeAnalise`
     — spinner + avisos.
-12. Escolher destino — sugestão específica do Gerador quando só um foi
-    escolhido (`sugerir_destino`), genérica (`artefatos/`) caso contrário.
+12. Escolher destino — diretório raiz, sugestão genérica (`artefatos`).
 13. Confirmar — resumo do que será gerado.
 14. Executar Geradores — cada um protegido por `executar_com_seguranca`,
-    avisos e caminho do artefato exibidos por Gerador.
+    escrevendo sempre na sua própria subpasta (`destino/<slug>`, via
+    `_slugificar`), mesmo quando só um Gerador foi escolhido — evita
+    misturar artefatos de Geradores diferentes no mesmo diretório quando
+    mais de um é escolhido na mesma execução (issue #77). Avisos e caminho
+    do artefato exibidos por Gerador.
 
 **Exibição de avisos (`cli/avisos.py::exibir_avisos`):** agrupados por
 origem e por "tipo" (mesma forma, identificador normalizado) — as 3
