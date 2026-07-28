@@ -6,6 +6,7 @@ from typing_extensions import Self
 
 from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import TipoDeDado
 
 
@@ -54,6 +55,13 @@ class TabelaExtraida(BaseModel):
     total_linhas: int = Field(ge=0)
     amostra: pl.DataFrame
     metadados_amostra: MetadadosDeAmostra
+    restricoes_unicas: list[RestricaoUnica] = Field(
+        default_factory=list,
+        description=(
+            "UNIQUE composto (2+ colunas) real do schema. UNIQUE "
+            "single-column continua representado por ColunaExtraida.unica."
+        ),
+    )
 
     @model_validator(mode="after")
     def _valida_nomes_de_coluna_unicos(self) -> Self:
@@ -62,4 +70,17 @@ class TabelaExtraida(BaseModel):
         duplicados = {nome for nome in nomes if nomes.count(nome) > 1}
         if duplicados:
             raise ValueError(f"Nomes de coluna duplicados: {sorted(duplicados)}.")
+        return self
+
+    @model_validator(mode="after")
+    def _valida_colunas_das_restricoes_unicas(self) -> Self:
+        """Garante que toda coluna citada em restricoes_unicas existe na tabela."""
+        nomes_das_colunas = {coluna.nome for coluna in self.colunas}
+        for restricao in self.restricoes_unicas:
+            desconhecidas = set(restricao.colunas) - nomes_das_colunas
+            if desconhecidas:
+                raise ValueError(
+                    f"RestricaoUnica cita coluna(s) inexistente(s) na tabela: "
+                    f"{sorted(desconhecidas)}."
+                )
         return self
