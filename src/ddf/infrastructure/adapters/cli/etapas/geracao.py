@@ -28,21 +28,12 @@ def _slugificar(nome: str) -> str:
     return com_separador_de_sigla.lower()
 
 
-def sugerir_destino(nomes_geradores: list[str]) -> str:
-    """Sugere um destino específico do Gerador quando só um foi escolhido.
-
-    Args:
-        nomes_geradores: nomes dos Geradores escolhidos pelo usuário.
-    """
-    if len(nomes_geradores) != 1:
-        return "artefatos"
-    return f"artefatos/{_slugificar(nomes_geradores[0])}"
-
-
 def confirmar_execucao(nomes_geradores: list[str], destino: Path) -> None:
     """Etapa 13: mostra um resumo do que será gerado e confirma antes de executar."""
     lista = ", ".join(nomes_geradores)
-    confirmado = prompts.confirmar(f"Gerar {lista} em '{destino.resolve()}'?")
+    confirmado = prompts.confirmar(
+        f"Gerar {lista} em subpastas dentro de '{destino.resolve()}'?"
+    )
     if not confirmado:
         sys.exit(0)
 
@@ -52,23 +43,29 @@ def executar_geradores(
 ) -> None:
     """Etapa 14: executa cada Gerador escolhido, protegido por executar_com_seguranca.
 
+    Cada Gerador escreve na sua própria subpasta (`destino/<slug>`), mesmo
+    quando só um é escolhido — evita misturar artefatos de Geradores
+    diferentes no mesmo diretório quando mais de um é escolhido na mesma
+    execução.
+
     Args:
         nomes_geradores: nomes dos Geradores escolhidos pelo usuário.
         banco_analisado: banco curado com as métricas já calculadas.
-        destino: diretório onde os artefatos são escritos.
+        destino: diretório raiz onde os artefatos são escritos.
     """
     houve_falha = False
     for nome in nomes_geradores:
         gerador = GERADORES_REGISTRADOS[nome]
+        destino_gerador = destino / _slugificar(nome)
         resultado = executar_com_seguranca(
-            nome, lambda: gerador(banco_analisado, destino)
+            nome, lambda: gerador(banco_analisado, destino_gerador)
         )
         exibir_avisos(resultado.avisos)
         if isinstance(resultado, Falha):
             print(f"Falha em '{nome}': {resultado.erro}")
             houve_falha = True
             continue
-        print(f"'{nome}': artefato(s) escrito(s) em '{destino.resolve()}'.")
+        print(f"'{nome}': artefato(s) escrito(s) em '{destino_gerador.resolve()}'.")
 
     if houve_falha:
         sys.exit(1)

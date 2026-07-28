@@ -75,7 +75,7 @@ def executar() -> None:
     destino = Path(
         prompts.texto(
             "Diretório de destino dos artefatos:",
-            default=geracao.sugerir_destino(nomes_geradores),
+            default="artefatos",
             dica_limpar=True,
         )
     ).expanduser()
