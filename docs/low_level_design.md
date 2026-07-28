@@ -1463,11 +1463,14 @@ Decisão 13 do `system_design_doc.md`):
     de execução. Não existe etapa de "escolher Analisadores".
 11. Analisar via `compor(*analisadores_ordenados)` sobre `ContextoDeAnalise`
     — spinner + avisos.
-12. Escolher destino — sugestão específica do Gerador quando só um foi
-    escolhido (`sugerir_destino`), genérica (`artefatos/`) caso contrário.
+12. Escolher destino — diretório raiz, sugestão genérica (`artefatos`).
 13. Confirmar — resumo do que será gerado.
 14. Executar Geradores — cada um protegido por `executar_com_seguranca`,
-    avisos e caminho do artefato exibidos por Gerador.
+    escrevendo sempre na sua própria subpasta (`destino/<slug>`, via
+    `_slugificar`), mesmo quando só um Gerador foi escolhido — evita
+    misturar artefatos de Geradores diferentes no mesmo diretório quando
+    mais de um é escolhido na mesma execução (issue #77). Avisos e caminho
+    do artefato exibidos por Gerador.
 
 **Exibição de avisos (`cli/avisos.py::exibir_avisos`):** agrupados por
 origem e por "tipo" (mesma forma, identificador normalizado) — as 3
