@@ -51,6 +51,11 @@ _TOTAL_LINHAS_SQL = """
 # constraint_name+table_schema cruza linhas de tabelas diferentes e classifica
 # colunas UNIQUE reais como não-únicas por acidente (validado empiricamente
 # contra MariaDB 11 real durante a revisão desta issue).
+#
+# ORDER BY ordinal_position (issue #89): sem isso, a ordem das colunas
+# dentro de uma constraint composta não é garantida entre execuções — o
+# hash estrutural (SobrescritaDeTabela) dispararia falso positivo de
+# "estrutura alterada" sem nenhuma mudança real de schema.
 _COLUNAS_UNICAS_SQL = """
     SELECT kcu.constraint_name, kcu.column_name
     FROM information_schema.table_constraints tc
@@ -60,6 +65,7 @@ _COLUNAS_UNICAS_SQL = """
         AND tc.table_name = kcu.table_name
     WHERE tc.constraint_type = 'UNIQUE'
         AND tc.table_schema = %s AND tc.table_name = %s
+    ORDER BY kcu.constraint_name, kcu.ordinal_position
 """
 # `_construir_coluna` só aceita um match de `_extrair_coluna_json_valid`
 # se o nome extraído também existir entre as colunas reais desta tabela

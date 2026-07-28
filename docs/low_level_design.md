@@ -234,6 +234,7 @@ class TabelaExtraida(BaseModel):
     total_linhas: int                  # total real (information_schema)
     amostra: pl.DataFrame              # sempre preenchida pelo Extrator
     metadados_amostra: MetadadosDeAmostra
+    restricoes_unicas: list[RestricaoUnica] = Field(default_factory=list)
 ```
 
 **Comportamento:** `amostra` é sempre preenchida pelo Extrator e obrigatória —
@@ -242,6 +243,21 @@ via `ContextoDeAnalise.curado`), então não há estado intermediário em que el
 possa estar ausente aqui. Produzida pelo Extrator, consumida pela Sobrescrita.
 O campo opcional (`pl.DataFrame | None`) e o descarte por liberação de memória
 vivem em `TabelaCurada`, não em `TabelaExtraida` (ver seção Curation Context).
+
+**`restricoes_unicas` (issue #89):** UNIQUE composto (2+ colunas) real do
+schema — fato de catálogo, no mesmo nível epistemológico de
+`nao_nulavel`/`unica` (#44), por isso campo direto de nível **tabela** (não
+`MetricaDeTabela`). `unica: bool` em `ColunaExtraida` continua representando
+só UNIQUE single-column; uma constraint composta não marca nenhuma coluna
+individual. `RestricaoUnica` (`domain/model/common/restricao_unica.py`) é um
+Value Object novo — `colunas: tuple[str, ...]`, `frozen=True`, mesmo padrão
+de `ReferenciaDeColuna`, com validação de mínimo 2 colunas sem duplicata.
+`TabelaExtraida` valida adicionalmente que toda coluna citada em
+`restricoes_unicas` existe em `self.colunas` — pega bug de JOIN incorreto no
+Extrator antes do hash estrutural ou da geração dbt. Propaga para
+`TabelaCurada`/`TabelaAnalisada` automaticamente via `model_dump`/
+`model_validate` (mesmo mecanismo de `iniciar_contexto`, ver Analysis
+Context abaixo), sem exigir mudança em nenhum dos dois pontos de tradução.
 
 ---
 
@@ -278,6 +294,7 @@ class TabelaCurada(BaseModel):
     regras_de_negocio: list[str] = Field(default_factory=list)
     amostra: pl.DataFrame | None        # mesmo DataFrame de TabelaExtraida — sem cópia; None após descarte
     metadados_amostra: MetadadosDeAmostra
+    restricoes_unicas: list[RestricaoUnica] = Field(default_factory=list)
 ```
 
 **Comportamento:** o `pl.DataFrame` é passado por referência — sem cópia.
@@ -382,6 +399,7 @@ class TabelaAnalisada(BaseModel):
     regras_de_negocio: list[str]
     metadados_amostra: MetadadosDeAmostra  # preservado para Geradores anotarem artefatos
     metricas: list[MetricaDeTabela] = Field(default_factory=list)
+    restricoes_unicas: list[RestricaoUnica] = Field(default_factory=list)
 ```
 
 ### `BancoAnalisado`
@@ -781,25 +799,45 @@ schemas de sistema do Postgres (`information_schema`, `pg_catalog`,
    por linha via `ORDINAL_POSITION`/`POSITION_IN_UNIQUE_CONSTRAINT`, sem
    precisar de um segundo JOIN. **Issue #44:** a mesma leitura de
    `information_schema.columns` passa a incluir `is_nullable` (sem JOIN
-   novo) para `nao_nulavel`. UNIQUE (`unica`) é lido à parte, via catálogo
-   `pg_index` (não `information_schema.table_constraints`, desvio
-   deliberado do padrão de PK/FK): todo UNIQUE constraint no Postgres é
-   backed por um índice em `pg_index`, então uma única query cobre tanto
-   constraint UNIQUE nomeada quanto `CREATE UNIQUE INDEX` solto (sem `ADD
-   CONSTRAINT`) — o segundo caso não aparece em
+   novo) para `nao_nulavel`. UNIQUE (`unica`/`restricoes_unicas`) é lido à
+   parte, via catálogo `pg_index` (não `information_schema.
+   table_constraints`, desvio deliberado do padrão de PK/FK): todo UNIQUE
+   constraint no Postgres é backed por um índice em `pg_index`, então uma
+   única query cobre tanto constraint UNIQUE nomeada quanto `CREATE UNIQUE
+   INDEX` solto (sem `ADD CONSTRAINT`) — o segundo caso não aparece em
    `information_schema.table_constraints` de jeito nenhum. `NOT
    i.indisprimary` exclui PK sem lógica extra (o índice de suporte de uma PK
-   nunca aparece como uma entrada `indisunique` "solta"); `array_length(
-   i.indkey, 1) = 1` filtra só UNIQUE single-column, ignorando compostos:
+   nunca aparece como uma entrada `indisunique` "solta").
+
+   **Issue #89:** a versão original desta query filtrava
+   `array_length(i.indkey, 1) = 1`, descartando UNIQUE composto (2+
+   colunas) de propósito — só existia `unica: bool` single-column então. A
+   versão atual usa `unnest(i.indkey) WITH ORDINALITY` para desempacotar
+   todas as colunas de cada índice, cobrindo single-column e composto numa
+   passada só, agrupadas depois em Python por `(nome_tabela, indexrelid)`
+   — grupo de 1 vira `unica`, grupo de 2+ vira `RestricaoUnica`. 4
+   predicados adicionais (achados da banca de revisão, validados
+   empiricamente contra Postgres 16 real) evitam índices que a versão
+   antiga descartava só por acidente: `indexprs IS NULL` (índice de
+   expressão, ex. `UNIQUE(b, lower(a))` — o JOIN de `attnum` falha pra
+   entrada de expressão, sobrando só as colunas reais e classificando-as
+   erradamente), `k.ord <= i.indnkeyatts` (exclui coluna `INCLUDE` de
+   índice covering, PG11+), `indpred IS NULL` (exclui índice UNIQUE
+   parcial — ex. soft-delete — que não garante unicidade da tabela
+   inteira) e `indisvalid` (exclui índice inválido, ex. `CONCURRENTLY` que
+   falhou):
    ```sql
-   SELECT a.attname
+   SELECT t.relname, i.indexrelid, a.attname
    FROM pg_index i
    JOIN pg_class t ON t.oid = i.indrelid
    JOIN pg_namespace n ON n.oid = t.relnamespace
-   JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = i.indkey[0]
+   JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
+   JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
    WHERE i.indisunique AND NOT i.indisprimary
-     AND array_length(i.indkey, 1) = 1
-     AND n.nspname = %s AND t.relname = %s
+     AND i.indexprs IS NULL AND i.indpred IS NULL AND i.indisvalid
+     AND k.ord <= i.indnkeyatts
+     AND n.nspname = %s
+   ORDER BY t.relname, i.indexrelid, k.ord
    ```
 2. Mapeia tipos Postgres → `TipoDeDado` (tabela abaixo).
 3. Lê `total_linhas` via `COALESCE(NULLIF(n_live_tup, 0), CASE WHEN relkind
@@ -858,6 +896,15 @@ percentual/100` no lugar de `TABLESAMPLE`/`REPEATABLE` (MariaDB não tem
 `information_schema.tables.TABLE_ROWS`, sem mudança — MariaDB não tem fonte
 equivalente a `n_live_tup` sem escrita (`ANALYZE TABLE`) ou full-scan
 (`COUNT(*)`).
+
+**`restricoes_unicas` no MariaDB (issue #89):** sem query nova — a mesma
+`_COLUNAS_UNICAS_SQL` (que já agrupa por `constraint_name` desde a #44 para
+achar UNIQUE single-column) agora também particiona os grupos de 2+ colunas
+como `RestricaoUnica`, via `_particionar_colunas_unicas`. A query ganhou
+`ORDER BY constraint_name, ordinal_position` — achado da banca de revisão:
+sem ordem garantida, a sequência de colunas dentro de uma constraint
+composta oscilaria entre execuções sem nenhuma mudança real de schema,
+disparando falso positivo no hash estrutural (`SobrescritaDeTabela`).
 
 **Mapeamento de tipos:**
 
@@ -990,7 +1037,10 @@ class SobrescritaDeTabela:
    pra detectar mudança de referência mesmo quando `chave_estrangeira`
    continua `True`. `nao_nulavel`/`unica` entraram no hash na issue #44 —
    sem eles, uma coluna que virasse NOT NULL/UNIQUE no banco não disparava
-   aviso de mudança estrutural nem regeneração do skeleton.
+   aviso de mudança estrutural nem regeneração do skeleton. `restricoes_unicas`
+   (nível tabela) entra no hash na issue #89, uma parte
+   `"restricao_unica:" + ",".join(colunas)` por `RestricaoUnica` — mesmo
+   motivo, aplicado ao caso de UNIQUE composto.
 2. Lê `diretorio_sobrescritas/<escopo>/<tabela>.yaml` se existir.
 3. **Hash bate:** aplica `papel_de_negocio`/`regras_de_negocio` do YAML.
 4. **Hash não bate (estrutura mudou):** atualiza skeleton preservando curadoria
@@ -1220,7 +1270,12 @@ gerado e, por escopo, uma subpasta autocontida em
 tabela, e `schema.yml` — convenção real dbt-labs pra staging multi-source
 ("as you add more source systems, create a subdirectory per source"),
 substituindo o layout achatado original (`models/staging/sources.yml`
-único pra todos os escopos).
+único pra todos os escopos). `packages.yml` (issue #89) é **condicional**:
+só escrito quando alguma tabela do lote tem `restricoes_unicas` — sem
+consumidor real (o teste model-level abaixo), declarar a dependência seria
+decoração no artefato gerado. Se uma execução anterior gerou `packages.yml`
+e a constraint UNIQUE composta correspondente deixou de existir no lote
+atual, o Gerador remove o arquivo órfão explicitamente.
 
 **Nome do staging model (issue #14, desvio deliberado do `stg_<tabela>`
 originalmente cogitado):** `stg_<nome_escopo>__<nome_tabela>` (duplo
@@ -1275,6 +1330,18 @@ compensa sugerir o teste. `relationships` aponta para
 bruto; só é gerado quando a tabela referenciada também foi analisada nesta
 execução — apontar `ref()` para um model que este Gerador não produziu
 quebraria `dbt run` do usuário.
+
+**Teste model-level — `dbt_utils.unique_combination_of_columns` (issue
+#89):** diferente da tabela acima (testes de **coluna**), este é o único
+teste sugerido no nível do **model** (tabela) — um por `RestricaoUnica` de
+`TabelaAnalisada.restricoes_unicas`, com `combination_of_columns` listando
+as colunas na mesma ordem capturada do catálogo. Severidade **padrão**
+(`error`, sem `config: {severity: warn}`), ao contrário de
+`accepted_values`: é fato estrutural do schema (constraint UNIQUE real),
+não estimativa sobre amostra — não há razão estatística para suavizar.
+Requer `packages.yml` declarando `dbt-labs/dbt_utils` (ver "Saída" acima),
+por isso só é sugerido quando `restricoes_unicas` não é vazio — o mesmo
+UNIQUE composto que aciona a geração condicional de `packages.yml`.
 
 **Limitação conhecida — `relationships` em FK composta (issue #56):** o
 teste é gerado por coluna, uma `relationships` independente por coluna

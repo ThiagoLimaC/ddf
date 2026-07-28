@@ -341,6 +341,43 @@
     (validação de `formato_detectado`, teste "soft" de nulos/unicidade)
     também ficam de fora, registrados em
     `plan/registry-plan/issue-77-*.md`
+- [x] `RestricaoUnica` + `restricoes_unicas` — reabertura de escopo da #89
+  (fecha a pendência registrada acima na #77):
+  - `RestricaoUnica` (Value Object novo, `domain/model/common/`) —
+    `colunas: tuple[str, ...]`, `frozen=True`, mesmo padrão de
+    `ReferenciaDeColuna`, validado (mínimo 2 colunas, sem duplicata)
+  - `restricoes_unicas: list[RestricaoUnica]` em `TabelaExtraida`/
+    `TabelaCurada`/`TabelaAnalisada` (nível tabela, mesmo padrão
+    epistemológico de `nao_nulavel`/`unica` da #44); validator cruzado em
+    `TabelaExtraida` garante que toda coluna citada existe na tabela;
+    propaga para Curation/Analysis automaticamente via `model_dump`/
+    `model_validate`, sem tocar em `iniciar_contexto`/`_traduzir`
+  - `SobrescritaDeTabela._calcular_hash_estrutural` inclui
+    `restricoes_unicas` — sem isso, UNIQUE composto criado/removido no
+    banco não disparava aviso de estrutura alterada
+  - `ExtratorPostgres`: query nova via `pg_index` + `unnest(indkey) WITH
+    ORDINALITY`, substituindo o filtro `array_length = 1` que descartava
+    compostos; 4 predicados adicionais (achados da banca de revisão,
+    validados contra Postgres 16 real) evitam falsos positivos de índice
+    de expressão, covering/`INCLUDE`, parcial (soft-delete) e inválido
+  - `ExtratorMariaDB`: sem query nova — só reagrupamento Python
+    (`_particionar_colunas_unicas`) sobre a mesma leitura já existente
+    desde a #44; query ganhou `ORDER BY` (achado da banca — sem ordem
+    garantida, o hash estrutural oscilaria sem mudança real de schema)
+  - `GeradorDbt`: `packages.yml` condicional (só com `restricoes_unicas`
+    no lote, removido se órfão) + teste model-level
+    `dbt_utils.unique_combination_of_columns`, severidade padrão (`error`,
+    diferente de `accepted_values`)
+  - Fora de escopo, avaliado e adiado (mesmo tratamento da FK composta):
+    `GeradorMarkdown`/`GeradorContextoDeIA` não renderizam
+    `restricoes_unicas`, apesar de já renderizarem o análogo
+    single-column (`unica`) — a issue #89 não pediu extensão desses dois
+    Geradores; fica para issue futura se o usuário quiser essa simetria
+  - Banca de revisão completa (Arquiteto de Software + Engenheiro de
+    Dados + PO) antes da implementação, exigência explícita da própria
+    issue por mudar contrato estrutural cross-context (mesmo risco/
+    tamanho da #44) — achados incorporados ao plano antes do código,
+    registrados em `plan/registry-plan/issue-89-*.md`
 
 ## 7. CLI real wizard (issue #16) — concluída
 

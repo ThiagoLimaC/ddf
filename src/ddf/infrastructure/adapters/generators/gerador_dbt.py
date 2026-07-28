@@ -22,6 +22,7 @@ from ddf.domain.model.analysis import (
     TabelaAnalisada,
     TipoDeMetrica,
 )
+from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
@@ -44,6 +45,12 @@ _DBT_PROJECT: dict[str, Any] = {
             "staging": {"+materialized": "view"},
         },
     },
+}
+
+_PACKAGES_YML: dict[str, Any] = {
+    "packages": [
+        {"package": "dbt-labs/dbt_utils", "version": [">=1.0.0", "<2.0.0"]},
+    ],
 }
 
 _CATEGORIAS_COM_TIMEZONE = {CategoriaDeDado.TIMESTAMP, CategoriaDeDado.TIME}
@@ -245,9 +252,7 @@ def _sugestoes_de_teste(
         and metrica.percentual_unico == 100.0
     )
     nao_nulo = coluna.nao_nulavel or (
-        tamanho_amostra > 0
-        and metrica is not None
-        and metrica.percentual_nulo == 0.0
+        tamanho_amostra > 0 and metrica is not None and metrica.percentual_nulo == 0.0
     )
     if unico and not coluna.chave_primaria:
         testes.append("unique")
@@ -328,6 +333,32 @@ def _coluna_schema_yaml(
     return entrada
 
 
+def _testes_de_modelo(restricoes_unicas: list[RestricaoUnica]) -> list[Any]:
+    """Sugere os testes dbt de qualidade aplicáveis no nível do model (tabela).
+
+    Diferente de `_sugestoes_de_teste` (nível coluna), hoje o único teste
+    model-level é `dbt_utils.unique_combination_of_columns` — um por
+    `RestricaoUnica` (UNIQUE composto real do schema, issue #89). Usa
+    severidade padrão (`error`), não `warn` como `accepted_values`: é fato
+    estrutural do catálogo, não estimativa sobre amostra.
+
+    Args:
+        restricoes_unicas: UNIQUE compostos reais da tabela.
+
+    Returns:
+        Lista de testes no formato aceito por `schema.yml` (dicts), uma
+        entrada `dbt_utils.unique_combination_of_columns` por restrição.
+    """
+    return [
+        {
+            "dbt_utils.unique_combination_of_columns": {
+                "combination_of_columns": list(restricao.colunas),
+            }
+        }
+        for restricao in restricoes_unicas
+    ]
+
+
 def _model_schema_yaml(
     tabela: TabelaAnalisada, presentes: set[tuple[str, str]], avisos: list[Aviso]
 ) -> dict[str, Any]:
@@ -339,12 +370,16 @@ def _model_schema_yaml(
         avisos: lista de avisos acumulada pelo Gerador.
 
     Returns:
-        Dict com `name`, `description` opcional e a lista de `columns`.
+        Dict com `name`, `description` opcional, `tests` opcional
+        (model-level, ver `_testes_de_modelo`) e a lista de `columns`.
     """
     nome_model = _nome_model(tabela.nome_escopo, tabela.nome_tabela)
     entrada: dict[str, Any] = {"name": nome_model}
     if tabela.papel_de_negocio:
         entrada["description"] = tabela.papel_de_negocio
+    testes_de_modelo = _testes_de_modelo(tabela.restricoes_unicas)
+    if testes_de_modelo:
+        entrada["tests"] = testes_de_modelo
     tamanho_amostra = tabela.metadados_amostra.tamanho_amostra
     entrada["columns"] = [
         _coluna_schema_yaml(coluna, presentes, avisos, tamanho_amostra)
@@ -402,7 +437,9 @@ def _montar_sources(
 
 
 def _renderizar_readme(
-    tabelas_por_escopo: dict[str, list[TabelaAnalisada]], gerado_em: str
+    tabelas_por_escopo: dict[str, list[TabelaAnalisada]],
+    gerado_em: str,
+    usa_dbt_utils: bool,
 ) -> str:
     """Renderiza o README.md do projeto dbt gerado, na raiz do projeto.
 
@@ -411,6 +448,9 @@ def _renderizar_readme(
             (`_agrupar_por_escopo`).
         gerado_em: timestamp ISO 8601 da execução, compartilhado com
             `dbt_project.yml`.
+        usa_dbt_utils: se `packages.yml` foi gerado nesta execução — o bloco
+            de comandos só menciona `dbt deps` quando há dependência real
+            a instalar (issue #89).
 
     Returns:
         Markdown listando os escopos e tabelas cobertos, com o caminho real
@@ -434,7 +474,9 @@ def _renderizar_readme(
         }
         for escopo, tabelas in tabelas_por_escopo.items()
     ]
-    return _TEMPLATE_README.render(escopos=escopos, gerado_em=gerado_em)
+    return _TEMPLATE_README.render(
+        escopos=escopos, gerado_em=gerado_em, usa_dbt_utils=usa_dbt_utils
+    )
 
 
 def _dump_yaml(conteudo: dict[str, Any]) -> str:
@@ -470,6 +512,7 @@ class GeradorDbt:
         tabelas = sorted(entrada.tabelas, key=lambda t: (t.nome_escopo, t.nome_tabela))
         presentes = {(tabela.nome_escopo, tabela.nome_tabela) for tabela in tabelas}
         tabelas_por_escopo = _agrupar_por_escopo(tabelas)
+        usa_dbt_utils = any(tabela.restricoes_unicas for tabela in tabelas)
 
         gerado_em = datetime.now(UTC).isoformat()
         projeto = {**_DBT_PROJECT, "meta": {"generated_at": gerado_em}}
@@ -479,8 +522,25 @@ class GeradorDbt:
         if isinstance(resultado_projeto, Falha):
             return resultado_projeto
 
+        # packages.yml só existe quando há UNIQUE composto consumindo
+        # dbt_utils de verdade nesta execução (issue #89) — declarar a
+        # dependência sem consumidor seria decoração no artefato gerado.
+        # Removido explicitamente quando não há mais consumidor, pra não
+        # deixar um arquivo órfão de uma execução anterior (achado da
+        # banca de revisão).
+        caminho_packages = destino / "packages.yml"
+        if usa_dbt_utils:
+            resultado_packages = escrever_arquivo(
+                caminho_packages, _dump_yaml(_PACKAGES_YML)
+            )
+            if isinstance(resultado_packages, Falha):
+                return resultado_packages
+        else:
+            caminho_packages.unlink(missing_ok=True)
+
         resultado_readme = escrever_arquivo(
-            destino / "README.md", _renderizar_readme(tabelas_por_escopo, gerado_em)
+            destino / "README.md",
+            _renderizar_readme(tabelas_por_escopo, gerado_em, usa_dbt_utils),
         )
         if isinstance(resultado_readme, Falha):
             return resultado_readme

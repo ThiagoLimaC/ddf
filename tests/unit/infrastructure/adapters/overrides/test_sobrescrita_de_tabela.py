@@ -4,6 +4,7 @@ from pathlib import Path
 
 import yaml
 
+from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
 from ddf.domain.shared.resultado import Falha, Sucesso
@@ -161,6 +162,35 @@ def test_hash_muda_quando_coluna_vira_not_null_ou_unique(
     )
 
     resultado = sobrescrita(tabela_com_restricao_nova)
+
+    assert isinstance(resultado, Sucesso)
+    assert "algum campo estrutural foi" in resultado.avisos[0].mensagem
+    hash_novo = yaml.safe_load(caminho.read_text(encoding="utf-8"))["hash"]
+    assert hash_novo != hash_original
+
+
+def test_hash_muda_quando_unique_composto_e_criado(
+    tmp_path: Path, tabela_extraida: TabelaExtraida
+) -> None:
+    """Borda: restricoes_unicas (UNIQUE composto) entra no hash estrutural.
+
+    Sem isso, criar/remover um UNIQUE composto no banco não dispararia
+    aviso de mudança estrutural nem regeneração do skeleton (issue #89,
+    mesmo tratamento já dado a nao_nulavel/unica na #44).
+    """
+    sobrescrita = SobrescritaDeTabela(tmp_path)
+    sobrescrita(tabela_extraida)
+
+    caminho = tmp_path / "public" / "clientes.yaml"
+    hash_original = yaml.safe_load(caminho.read_text(encoding="utf-8"))["hash"]
+
+    tabela_com_unique_composto = tabela_extraida.model_copy(
+        update={
+            "restricoes_unicas": [RestricaoUnica(colunas=("id", "nome"))],
+        }
+    )
+
+    resultado = sobrescrita(tabela_com_unique_composto)
 
     assert isinstance(resultado, Sucesso)
     assert "algum campo estrutural foi" in resultado.avisos[0].mensagem

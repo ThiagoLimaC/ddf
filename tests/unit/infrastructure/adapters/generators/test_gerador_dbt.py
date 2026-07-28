@@ -14,6 +14,7 @@ from ddf.domain.model.analysis import (
     TabelaAnalisada,
 )
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.shared.resultado import Falha, Sucesso
 from ddf.infrastructure.adapters.generators.gerador_dbt import GeradorDbt
@@ -208,10 +209,94 @@ def test_readme_lista_escopos_e_tabelas_do_lote(
     assert isinstance(resultado, Sucesso)
     readme = (tmp_path / "README.md").read_text()
     assert "Gerado em:" in readme
-    assert (
-        "- `clientes` → `models/staging/vendas/stg_vendas__clientes.sql`" in readme
-    )
+    assert "- `clientes` → `models/staging/vendas/stg_vendas__clientes.sql`" in readme
     assert "- `perfis` → `models/staging/rh/stg_rh__perfis.sql`" in readme
+
+
+def test_packages_yml_nao_e_gerado_sem_unique_composto(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Sem UNIQUE composto no lote, packages.yml não é gerado (issue #89).
+
+    Declarar dbt_utils como dependência sem consumidor real seria decoração
+    no artefato gerado — mesmo argumento já usado na issue original.
+    """
+    tabela = construir_tabela(colunas=[construir_coluna()])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    assert not (tmp_path / "packages.yml").exists()
+    readme = (tmp_path / "README.md").read_text()
+    assert "dbt deps" not in readme
+
+
+def test_packages_yml_e_teste_model_level_com_unique_composto(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """UNIQUE composto gera packages.yml + teste model-level (issue #89).
+
+    Severidade padrão (sem `config: severity`), diferente de
+    `accepted_values` — é fato estrutural do schema, não amostral.
+    """
+    coluna_a = construir_coluna(nome="codigo_pais")
+    coluna_b = construir_coluna(nome="codigo_local")
+    tabela = construir_tabela(
+        colunas=[coluna_a, coluna_b],
+        restricoes_unicas=[RestricaoUnica(colunas=("codigo_pais", "codigo_local"))],
+    )
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    packages = yaml.safe_load((tmp_path / "packages.yml").read_text())
+    assert packages == {
+        "packages": [
+            {"package": "dbt-labs/dbt_utils", "version": [">=1.0.0", "<2.0.0"]}
+        ]
+    }
+    readme = (tmp_path / "README.md").read_text()
+    assert "dbt deps" in readme
+
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    assert modelo["tests"] == [
+        {
+            "dbt_utils.unique_combination_of_columns": {
+                "combination_of_columns": ["codigo_pais", "codigo_local"],
+            }
+        }
+    ]
+
+
+def test_packages_yml_orfao_e_removido_quando_restricao_some(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Borda: packages.yml de execução anterior é removido sem consumidor novo.
+
+    Simula o cenário achado pela banca de revisão: UNIQUE composto existia
+    numa execução passada (packages.yml em disco) e foi removido do banco —
+    a próxima geração não deve deixar o arquivo órfão pra trás.
+    """
+    (tmp_path / "packages.yml").write_text("packages: []\n")
+    tabela = construir_tabela(colunas=[construir_coluna()])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    assert not (tmp_path / "packages.yml").exists()
 
 
 def test_falha_ao_nao_conseguir_escrever_em_disco(
@@ -293,9 +378,7 @@ def test_amostra_vazia_com_fato_estrutural_ainda_sugere_teste(
     metrica_vazia = MetricasBaseColuna(
         percentual_nulo=0.0, percentual_unico=0.0, valores_frequentes=[]
     )
-    coluna = construir_coluna(
-        nome="email", nao_nulavel=True, metricas=[metrica_vazia]
-    )
+    coluna = construir_coluna(nome="email", nao_nulavel=True, metricas=[metrica_vazia])
     tabela = construir_tabela(colunas=[coluna], tamanho_amostra=0)
     banco = construir_banco([tabela])
 

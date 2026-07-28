@@ -16,6 +16,7 @@ from ddf.domain.model.common.requisicao_de_amostragem import (
     AmostragemProbabilistica,
     RequisicaoDeAmostragem,
 )
+from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
@@ -108,29 +109,35 @@ def _construir_coluna(
     )
 
 
-def _colunas_unicas_de_coluna_unica(
+def _particionar_colunas_unicas(
     linhas: list[tuple[str, str]],
-) -> set[str]:
-    """Agrupa (constraint_name, column_name) e mantém só constraints de 1 coluna.
+) -> tuple[set[str], list[RestricaoUnica]]:
+    """Agrupa (constraint_name, column_name) por constraint e particiona por tamanho.
 
-    Uma constraint UNIQUE composta (2+ colunas) não torna nenhuma coluna
-    individual única sozinha — só constraints com exatamente 1 linha no grupo
-    (uma única coluna membro) contam.
+    Constraint com 1 coluna vira `unica` single-column; com 2+ colunas vira
+    uma `RestricaoUnica` composta (issue #89). `_COLUNAS_UNICAS_SQL` já
+    ordena por `(constraint_name, ordinal_position)`, então cada grupo
+    preserva a ordem real das colunas dentro da constraint.
 
     Args:
         linhas: pares (constraint_name, column_name) de _COLUNAS_UNICAS_SQL.
 
     Returns:
-        Nomes de coluna que são a única membro de sua constraint UNIQUE.
+        Tupla (nomes de coluna únicas single-column, lista de RestricaoUnica
+        para as constraints compostas).
     """
     colunas_por_constraint: dict[str, list[str]] = {}
     for nome_constraint, nome_coluna in linhas:
         colunas_por_constraint.setdefault(nome_constraint, []).append(nome_coluna)
-    return {
-        colunas[0]
-        for colunas in colunas_por_constraint.values()
-        if len(colunas) == 1
-    }
+
+    unicas: set[str] = set()
+    restricoes_unicas: list[RestricaoUnica] = []
+    for colunas in colunas_por_constraint.values():
+        if len(colunas) == 1:
+            unicas.add(colunas[0])
+        else:
+            restricoes_unicas.append(RestricaoUnica(colunas=tuple(colunas)))
+    return unicas, restricoes_unicas
 
 
 def _colunas_json_de_check_clauses(
@@ -352,7 +359,9 @@ class ExtratorMariaDB:
                 )
 
                 cursor.execute(_COLUNAS_UNICAS_SQL, (escopo, tabela))
-                colunas_unicas = _colunas_unicas_de_coluna_unica(cursor.fetchall())
+                colunas_unicas, restricoes_unicas = _particionar_colunas_unicas(
+                    cursor.fetchall()
+                )
 
                 cursor.execute(_COLUNAS_JSON_SQL, (escopo, tabela))
                 nomes_colunas_reais = {linha.nome for linha in linhas_colunas}
@@ -404,12 +413,9 @@ class ExtratorMariaDB:
                             percentual=percentual, seed=seed_usado
                         )
                         consulta_amostra = (
-                            f"SELECT * FROM {identificador_tabela} "
-                            "WHERE RAND(%s) <= %s"
+                            f"SELECT * FROM {identificador_tabela} WHERE RAND(%s) <= %s"
                         )
-                        cursor.execute(
-                            consulta_amostra, (seed_usado, percentual / 100)
-                        )
+                        cursor.execute(consulta_amostra, (seed_usado, percentual / 100))
                     case AmostragemIntegral():
                         requisicao_efetiva = requisicao
                         cursor.execute(f"SELECT * FROM {identificador_tabela}")
@@ -461,6 +467,7 @@ class ExtratorMariaDB:
                     total_linhas=total_linhas_final,
                     amostra=amostra,
                     metadados_amostra=metadados_amostra,
+                    restricoes_unicas=restricoes_unicas,
                 ),
                 avisos=avisos,
             )

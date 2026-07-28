@@ -5,6 +5,7 @@ from typing_extensions import Self
 
 from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import TipoDeDado
 from ddf.domain.model.curation import BancoCurado
 
@@ -96,6 +97,13 @@ class TabelaAnalisada(BaseModel):
     regras_de_negocio: list[str] = Field(default_factory=list)
     metadados_amostra: MetadadosDeAmostra
     metricas: list[MetricaDeTabela] = Field(default_factory=list)
+    restricoes_unicas: list[RestricaoUnica] = Field(
+        default_factory=list,
+        description=(
+            "UNIQUE composto (2+ colunas) real do schema. UNIQUE "
+            "single-column continua representado por ColunaAnalisada.unica."
+        ),
+    )
 
     @model_validator(mode="after")
     def _valida_nomes_de_coluna_unicos(self) -> Self:

@@ -52,30 +52,22 @@ _CHAVES_ESTRANGEIRAS_SCHEMA_SQL = """
         AND tc.table_schema = %s
 """
 
-# relkind IN ('r', 'p') — bug pré-existente encontrado no desenho da issue
-# #66 (não introduzido aqui): sem o filtro, information_schema.tables já
-# classifica tabela particionada (relkind='p') como BASE TABLE normalmente,
-# mas reltuples do pai particionado só agrega os filhos a partir do PG14 —
-# podia ficar em 0 mesmo com dado real nas partições em versões anteriores.
-# O join por nome contra pg_namespace já blindava contra pegar a relação
-# errada (Postgres não permite colisão de nome entre tabela/view/sequence no
-# mesmo schema); o filtro é defesa explícita do tipo de relação, não
-# correção de uma colisão observada.
+# relkind IN ('r', 'p'): sem isso, tabela particionada (relkind='p') tinha
+# reltuples zerado em versões pré-PG14, mesmo com dado real nas partições
+# (issue #66).
 #
 # n_live_tup: contador incremental, mais atual que reltuples entre
-# ANALYZEs, sem custo adicional. NULLIF(s.n_live_tup, 0) trata "sem
-# estatística reportada ainda" como ausência, não zero real.
+# ANALYZEs. NULLIF(s.n_live_tup, 0) trata "sem estatística ainda" como
+# ausência, não zero real.
 #
 # CASE cobre o que reltuples também erra: TRUNCATE zera n_live_tup mas
-# deixa reltuples com o valor antigo indefinidamente (sem gatilho de
-# autovacuum depois de TRUNCATE). pg_relation_size(oid) = 0 é sinal físico
-# (arquivo vazio) — relkind <> 'p' exclui tabela-mãe particionada, que
-# sempre tem tamanho 0 por não ter storage próprio. NULLIF(reltuples, -1)
-# trata "nunca analisada" como ausência, não zero.
+# deixa reltuples desatualizado indefinidamente. pg_relation_size(oid) = 0
+# é sinal físico de tabela vazia; relkind <> 'p' exclui tabela-mãe
+# particionada (sempre tamanho 0). NULLIF(reltuples, -1) trata "nunca
+# analisada" como ausência.
 #
 # Limitação aceita: DELETE em massa sem TRUNCATE, antes do autovacuum
-# truncar páginas vazias, ainda pode reportar total desatualizado — sem
-# sinal de catálogo barato pra esse caso (issue #76).
+# truncar páginas vazias, ainda pode reportar total desatualizado (#76).
 _TOTAL_LINHAS_SCHEMA_SQL = """
     SELECT c.relname,
            COALESCE(
@@ -93,21 +85,33 @@ _TOTAL_LINHAS_SCHEMA_SQL = """
     WHERE n.nspname = %s AND c.relkind IN ('r', 'p')
 """
 
-# Via pg_index (catálogo), não information_schema.table_constraints como
-# PK/FK acima: todo UNIQUE constraint no Postgres é backed por um índice em
-# pg_index, então esta única query cobre tanto constraint UNIQUE nomeada
-# quanto CREATE UNIQUE INDEX solto (sem ADD CONSTRAINT) — o segundo caso não
-# aparece em information_schema.table_constraints de jeito nenhum.
-# NOT i.indisprimary exclui PK sem lógica extra: o índice de suporte de uma
-# PK nunca aparece como uma segunda entrada indisunique "solta".
-_COLUNAS_UNICAS_SCHEMA_SQL = """
-    SELECT t.relname, a.attname
+# Via pg_index, não information_schema.table_constraints: cobre também
+# CREATE UNIQUE INDEX solto. NOT i.indisprimary exclui PK. unnest(indkey)
+# WITH ORDINALITY desempacota todas as colunas de cada índice (não só a
+# 1ª), cobrindo single-column e composto numa passada só, agrupados depois
+# em Python por (nome_tabela, indexrelid); k.ord preserva a ordem.
+#
+# Predicados extra (issue #89, achados da banca contra Postgres 16 real —
+# sem eles, cenários abaixo produziriam RestricaoUnica/unica falsos):
+#   - indexprs IS NULL: ignora índice com coluna de expressão (o JOIN de
+#     attnum falha pra ela, sobrando só as colunas reais no grupo).
+#   - k.ord <= indnkeyatts: ignora coluna INCLUDE de índice covering.
+#   - indpred IS NULL: ignora índice UNIQUE parcial (ex.: soft-delete) —
+#     não é garantia de unicidade da tabela inteira.
+#   - indisvalid: ignora índice inválido (ex.: CONCURRENTLY que falhou).
+_RESTRICOES_UNICAS_SCHEMA_SQL = """
+    SELECT t.relname, i.indexrelid, a.attname
     FROM pg_catalog.pg_index i
     JOIN pg_catalog.pg_class t ON t.oid = i.indrelid
     JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
+    JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
     JOIN pg_catalog.pg_attribute a
-        ON a.attrelid = t.oid AND a.attnum = i.indkey[0]
+        ON a.attrelid = t.oid AND a.attnum = k.attnum
     WHERE i.indisunique AND NOT i.indisprimary
-        AND array_length(i.indkey, 1) = 1
+        AND i.indexprs IS NULL
+        AND i.indpred IS NULL
+        AND i.indisvalid
+        AND k.ord <= i.indnkeyatts
         AND n.nspname = %s
+    ORDER BY t.relname, i.indexrelid, k.ord
 """
