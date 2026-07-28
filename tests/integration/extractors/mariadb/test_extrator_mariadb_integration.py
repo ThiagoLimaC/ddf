@@ -2,6 +2,7 @@
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado
 from ddf.domain.shared.resultado import Falha, Sucesso
 from ddf.infrastructure.adapters.extractors.mariadb.extrator_mariadb import (
@@ -282,6 +283,9 @@ def test_extrair_tabela_com_unique_composta_nao_marca_colunas_individuais(
     assert coluna_cep.unica is False
     assert coluna_pais.nao_nulavel is True
     assert coluna_cep.nao_nulavel is True
+    assert resultado.valor.restricoes_unicas == [
+        RestricaoUnica(colunas=("pais", "cep"))
+    ]
 
 
 def test_listar_tabelas_escopo_vazio_retorna_lista_vazia(

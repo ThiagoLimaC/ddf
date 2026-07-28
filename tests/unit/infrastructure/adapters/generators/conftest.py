@@ -13,6 +13,7 @@ from ddf.domain.model.analysis import (
 )
 from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 
 
@@ -61,6 +62,7 @@ def construir_tabela() -> Callable[..., TabelaAnalisada]:
         papel_de_negocio: str | None = None,
         regras_de_negocio: list[str] | None = None,
         metricas: list[MetricasBaseTabela] | None = None,
+        restricoes_unicas: list[RestricaoUnica] | None = None,
     ) -> TabelaAnalisada:
         return TabelaAnalisada(
             nome_tabela=nome_tabela,
@@ -76,6 +78,7 @@ def construir_tabela() -> Callable[..., TabelaAnalisada]:
                 seed=seed,
             ),
             metricas=list(metricas) if metricas is not None else [],
+            restricoes_unicas=restricoes_unicas or [],
         )
 
     return _construir

@@ -10,6 +10,9 @@ Cada model faz `CAST` explícito dos tipos originais e replica as colunas
 ## Como usar
 
 ```
+{% if usa_dbt_utils %}
+dbt deps
+{% endif %}
 dbt run
 dbt test
 ```
@@ -17,6 +20,11 @@ dbt test
 > Os testes `accepted_values` usam `severity: warn` — são calculados sobre
 > uma amostra dos dados, não a população completa, então um valor de cauda
 > longa fora da amostra não deve quebrar o build.
+{% if usa_dbt_utils %}
+> Este projeto depende do pacote `dbt_utils` (`packages.yml`) para o teste
+> `dbt_utils.unique_combination_of_columns` — rode `dbt deps` antes de
+> `dbt run`/`dbt test`.
+{% endif %}
 
 ## Escopos e tabelas
 

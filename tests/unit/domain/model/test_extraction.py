@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import TipoDeDado
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
 
@@ -47,6 +48,30 @@ def test_cria_tabela_extraida_com_amostra(
 
     assert tabela.nome_tabela == "pedidos"
     assert tabela.amostra.height == 2
+
+
+def test_cria_tabela_extraida_com_restricao_unica_composta(
+    tipo_integer: TipoDeDado,
+    metadados_de_amostra: MetadadosDeAmostra,
+    amostra_df: pl.DataFrame,
+) -> None:
+    """Caminho feliz: TabelaExtraida guarda UNIQUE composto de colunas reais."""
+    tabela = TabelaExtraida(
+        nome_tabela="enderecos",
+        nome_escopo="public",
+        colunas=[
+            ColunaExtraida(nome="codigo_pais", tipo_dado=tipo_integer),
+            ColunaExtraida(nome="codigo_local", tipo_dado=tipo_integer),
+        ],
+        total_linhas=10,
+        amostra=amostra_df,
+        metadados_amostra=metadados_de_amostra,
+        restricoes_unicas=[RestricaoUnica(colunas=("codigo_pais", "codigo_local"))],
+    )
+
+    assert tabela.restricoes_unicas == [
+        RestricaoUnica(colunas=("codigo_pais", "codigo_local"))
+    ]
 
 
 # Erro esperado
@@ -126,6 +151,24 @@ def test_tabela_extraida_sem_amostra_levanta_validation_error(
         )  # type: ignore[call-arg]
 
 
+def test_tabela_extraida_restricao_unica_com_coluna_inexistente_e_invalida(
+    tipo_integer: TipoDeDado,
+    metadados_de_amostra: MetadadosDeAmostra,
+    amostra_df: pl.DataFrame,
+) -> None:
+    """Erro esperado: RestricaoUnica citando coluna que a tabela não tem."""
+    with pytest.raises(ValidationError, match="inexistente"):
+        TabelaExtraida(
+            nome_tabela="enderecos",
+            nome_escopo="public",
+            colunas=[ColunaExtraida(nome="codigo_pais", tipo_dado=tipo_integer)],
+            total_linhas=10,
+            amostra=amostra_df,
+            metadados_amostra=metadados_de_amostra,
+            restricoes_unicas=[RestricaoUnica(colunas=("codigo_pais", "codigo_local"))],
+        )
+
+
 # Borda
 def test_coluna_extraida_sem_chaves_usa_defaults(tipo_integer: TipoDeDado) -> None:
     """Borda: coluna comum, sem chave primária/estrangeira, usa defaults False/None."""
@@ -134,3 +177,21 @@ def test_coluna_extraida_sem_chaves_usa_defaults(tipo_integer: TipoDeDado) -> No
     assert coluna.chave_primaria is False
     assert coluna.chave_estrangeira is False
     assert coluna.referencia is None
+
+
+def test_tabela_extraida_sem_restricoes_unicas_usa_lista_vazia(
+    tipo_integer: TipoDeDado,
+    metadados_de_amostra: MetadadosDeAmostra,
+    amostra_df: pl.DataFrame,
+) -> None:
+    """Borda: tabela sem nenhum UNIQUE composto tem restricoes_unicas == []."""
+    tabela = TabelaExtraida(
+        nome_tabela="pedidos",
+        nome_escopo="public",
+        colunas=[ColunaExtraida(nome="id", tipo_dado=tipo_integer)],
+        total_linhas=10,
+        amostra=amostra_df,
+        metadados_amostra=metadados_de_amostra,
+    )
+
+    assert tabela.restricoes_unicas == []

@@ -18,6 +18,7 @@ from ddf.domain.model.common.requisicao_de_amostragem import (
     AmostragemProbabilistica,
     RequisicaoDeAmostragem,
 )
+from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.extractors.construir_colunas_fk import (
@@ -30,9 +31,9 @@ from ddf.infrastructure.adapters.extractors.postgres._queries import (
     _CHAVES_ESTRANGEIRAS_SCHEMA_SQL,
     _CHAVES_PRIMARIAS_SCHEMA_SQL,
     _COLUNAS_SCHEMA_SQL,
-    _COLUNAS_UNICAS_SCHEMA_SQL,
     _LISTAR_ESCOPOS_SQL,
     _LISTAR_TABELAS_SQL,
+    _RESTRICOES_UNICAS_SCHEMA_SQL,
     _TOTAL_LINHAS_SCHEMA_SQL,
 )
 from ddf.infrastructure.adapters.extractors.postgres.mapeamento_de_tipos import (
@@ -74,6 +75,7 @@ class _MetadadosDoSchema(NamedTuple):
     pks_por_tabela: dict[str, set[str]]
     fks_por_tabela: dict[str, list[tuple[str, str, str, str]]]
     unicas_por_tabela: dict[str, set[str]]
+    restricoes_unicas_por_tabela: dict[str, list[RestricaoUnica]]
     total_linhas_por_tabela: dict[str, int]
 
 
@@ -261,10 +263,25 @@ class ExtratorPostgres:
                         nome_tabela, *resto_fk = linha_fk
                         fks_por_tabela[nome_tabela].append(tuple(resto_fk))
 
-                    cursor.execute(_COLUNAS_UNICAS_SCHEMA_SQL, (schema,))
+                    cursor.execute(_RESTRICOES_UNICAS_SCHEMA_SQL, (schema,))
+                    grupos_unicos: dict[str, dict[int, list[str]]] = defaultdict(
+                        lambda: defaultdict(list)
+                    )
+                    for nome_tabela, indexrelid, nome_coluna in cursor.fetchall():
+                        grupos_unicos[nome_tabela][indexrelid].append(nome_coluna)
+
                     unicas_por_tabela: dict[str, set[str]] = defaultdict(set)
-                    for nome_tabela, nome_coluna_unica in cursor.fetchall():
-                        unicas_por_tabela[nome_tabela].add(nome_coluna_unica)
+                    restricoes_unicas_por_tabela: dict[str, list[RestricaoUnica]] = (
+                        defaultdict(list)
+                    )
+                    for nome_tabela, indices in grupos_unicos.items():
+                        for colunas_do_indice in indices.values():
+                            if len(colunas_do_indice) == 1:
+                                unicas_por_tabela[nome_tabela].add(colunas_do_indice[0])
+                            else:
+                                restricoes_unicas_por_tabela[nome_tabela].append(
+                                    RestricaoUnica(colunas=tuple(colunas_do_indice))
+                                )
 
                     cursor.execute(_TOTAL_LINHAS_SCHEMA_SQL, (schema,))
                     total_linhas_por_tabela: dict[str, int] = {}
@@ -278,6 +295,7 @@ class ExtratorPostgres:
                 pks_por_tabela=dict(pks_por_tabela),
                 fks_por_tabela=dict(fks_por_tabela),
                 unicas_por_tabela=dict(unicas_por_tabela),
+                restricoes_unicas_por_tabela=dict(restricoes_unicas_por_tabela),
                 total_linhas_por_tabela=total_linhas_por_tabela,
             )
             self._cache_schemas[schema] = metadados
@@ -304,6 +322,7 @@ class ExtratorPostgres:
             metadados.fks_por_tabela.get(tabela, []), origem="ExtratorPostgres"
         )
         colunas_unicas = metadados.unicas_por_tabela.get(tabela, set())
+        restricoes_unicas = metadados.restricoes_unicas_por_tabela.get(tabela, [])
         total_linhas = metadados.total_linhas_por_tabela.get(tabela, 0)
 
         colunas: list[ColunaExtraida] = []
@@ -384,6 +403,7 @@ class ExtratorPostgres:
                     total_linhas=total_linhas_final,
                     amostra=amostra,
                     metadados_amostra=metadados_amostra,
+                    restricoes_unicas=restricoes_unicas,
                 ),
                 avisos=avisos,
             )

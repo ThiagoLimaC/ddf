@@ -106,6 +106,41 @@ _SETUP_SQL = """
     ANALYZE restricoes.contas;
     ANALYZE restricoes.enderecos;
 
+    -- Índices UNIQUE "especiais" (issue #89, achados da banca de revisão
+    -- contra Postgres 16 real): nenhum dos 3 deve virar RestricaoUnica nem
+    -- marcar coluna como unica=True — cada um seria uma classificação
+    -- estruturalmente falsa sem os predicados indexprs/indnkeyatts/indpred.
+    CREATE TABLE restricoes.indices_especiais (
+        id SERIAL PRIMARY KEY,
+        col_a INTEGER NOT NULL,
+        col_b VARCHAR(50) NOT NULL,
+        col_c INTEGER NOT NULL,
+        deletado BOOLEAN NOT NULL DEFAULT false
+    );
+
+    -- Índice de expressão: UNIQUE(col_a, lower(col_b)) — sem
+    -- indexprs IS NULL, o JOIN de attnum falharia pra entrada de
+    -- expressão, sobrando só col_a no grupo e marcando-a unica=True à toa.
+    CREATE UNIQUE INDEX idx_expressao
+        ON restricoes.indices_especiais (col_a, lower(col_b));
+
+    -- Índice covering: só col_c é chave; col_a é coluna INCLUDE, não
+    -- participa da unicidade. Sem k.ord <= indnkeyatts, indkey traria as
+    -- duas e formaria uma RestricaoUnica(col_c, col_a) inexistente.
+    CREATE UNIQUE INDEX idx_covering
+        ON restricoes.indices_especiais (col_c) INCLUDE (col_a);
+
+    -- Índice parcial (soft-delete): só garante unicidade condicional
+    -- (deletado = false), não da tabela inteira. Sem indpred IS NULL,
+    -- viraria RestricaoUnica(col_a, col_b) mesmo sem essa garantia.
+    CREATE UNIQUE INDEX idx_parcial
+        ON restricoes.indices_especiais (col_a, col_b) WHERE deletado = false;
+
+    INSERT INTO restricoes.indices_especiais (col_a, col_b, col_c)
+        VALUES (1, 'x', 100);
+
+    ANALYZE restricoes.indices_especiais;
+
     -- Colunas ARRAY (issue #56, Fase 1): tags/numeros cobrem elemento
     -- reconhecido (TEXT/INTEGER), array vazio (linha 2) e array nulo
     -- (linha 3) — reproduz o crash de InvalidOperationError encontrado na

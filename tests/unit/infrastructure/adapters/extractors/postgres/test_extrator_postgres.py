@@ -9,6 +9,7 @@ from psycopg2 import OperationalError
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado
 from ddf.domain.ports.extrator import Extrator
 from ddf.domain.shared.resultado import Falha, Sucesso
@@ -164,7 +165,7 @@ def test_extrair_tabela_retorna_estrutura_completa(
         [
             ("pedidos", "cliente_id", "vendas", "clientes", "id")
         ],  # FK, schema cross-referenciado (schema inteiro)
-        [("pedidos", "nome")],  # UNIQUE, single-column (schema inteiro)
+        [("pedidos", 5001, "nome")],  # UNIQUE, single-column (schema inteiro)
         [("pedidos", 1000.0)],  # total_linhas (schema inteiro)
         [(1, "ana", 10), (2, "bia", 20)],  # amostra (só desta tabela)
     ]
@@ -391,6 +392,53 @@ def test_extrair_tabela_com_duas_fks_na_mesma_coluna_emite_aviso(
     assert len(resultado.avisos) == 2
     assert resultado.avisos[0].origem == "ExtratorPostgres"
     assert "mais de uma FK" in resultado.avisos[0].mensagem
+
+
+def test_extrair_tabela_com_unique_composto_monta_restricao_unica(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: UNIQUE(a, b) vira uma RestricaoUnica, sem marcar a/b como `unica`.
+
+    Mesma tabela também tem uma coluna com UNIQUE single-column (índice
+    diferente, indexrelid distinto) — prova que o agrupamento por
+    (nome_tabela, indexrelid) não mistura os dois índices.
+    """
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.side_effect = [
+        [
+            ("enderecos", "codigo_pais", "varchar", 2, None, None, "NO"),
+            ("enderecos", "codigo_local", "varchar", 10, None, None, "NO"),
+            ("enderecos", "apelido", "varchar", 50, None, None, "YES"),
+        ],  # colunas
+        [],  # PK
+        [],  # FK
+        [
+            ("enderecos", 5001, "codigo_pais"),
+            ("enderecos", 5001, "codigo_local"),
+            ("enderecos", 5002, "apelido"),
+        ],  # UNIQUE — índice composto (5001) + índice single-column (5002)
+        [("enderecos", 0.0)],  # total_linhas
+        [],  # amostra
+    ]
+    cursor_fake.description = [
+        SimpleNamespace(name="codigo_pais"),
+        SimpleNamespace(name="codigo_local"),
+        SimpleNamespace(name="apelido"),
+    ]
+    pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+    extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
+    resultado = extrator.extrair_tabela("public", "enderecos")
+
+    assert isinstance(resultado, Sucesso)
+    tabela = resultado.valor
+    assert tabela.restricoes_unicas == [
+        RestricaoUnica(colunas=("codigo_pais", "codigo_local"))
+    ]
+    assert tabela.colunas[0].unica is False
+    assert tabela.colunas[1].unica is False
+    assert tabela.colunas[2].unica is True
 
 
 def test_listar_escopos_sem_escopos_de_usuario_retorna_lista_vazia(

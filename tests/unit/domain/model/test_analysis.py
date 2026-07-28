@@ -13,6 +13,7 @@ from ddf.domain.model.analysis import (
 )
 from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import TipoDeDado
 from ddf.domain.model.curation import BancoCurado, ColunaCurada, TabelaCurada
 
@@ -126,6 +127,36 @@ def test_iniciar_contexto_cria_banco_analisado_vazio_a_partir_do_curado(
     coluna_analisada = tabela_analisada.colunas[0]
     assert coluna_analisada.papel_de_negocio == "Identificador"
     assert coluna_analisada.metricas == []
+
+
+def test_iniciar_contexto_propaga_restricoes_unicas_sem_mudanca_de_codigo(
+    tipo_integer: TipoDeDado, metadados_de_amostra: MetadadosDeAmostra
+) -> None:
+    """Caminho feliz: restricoes_unicas atravessa model_dump/model_validate.
+
+    Regressão do padrão já documentado em iniciar_contexto (issue #9): um
+    campo novo em TabelaCurada que também existe em TabelaAnalisada é
+    copiado automaticamente, sem tocar nesta função.
+    """
+    tabela_curada = TabelaCurada(
+        nome_tabela="enderecos",
+        nome_escopo="public",
+        colunas=[
+            ColunaCurada(nome="codigo_pais", tipo_dado=tipo_integer),
+            ColunaCurada(nome="codigo_local", tipo_dado=tipo_integer),
+        ],
+        total_linhas=10,
+        amostra=None,
+        metadados_amostra=metadados_de_amostra,
+        restricoes_unicas=[RestricaoUnica(colunas=("codigo_pais", "codigo_local"))],
+    )
+    curado = BancoCurado(tabelas=[tabela_curada])
+
+    contexto = iniciar_contexto(curado)
+
+    assert contexto.analisado.tabelas[0].restricoes_unicas == [
+        RestricaoUnica(colunas=("codigo_pais", "codigo_local"))
+    ]
 
 
 def test_iniciar_contexto_com_banco_curado_sem_tabelas() -> None:

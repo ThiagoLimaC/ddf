@@ -7,6 +7,7 @@ import pytest
 from ddf.domain.model.analysis import iniciar_contexto
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado
 from ddf.domain.model.curation import BancoCurado
 from ddf.domain.shared.resultado import Falha, Sucesso
@@ -283,6 +284,38 @@ def test_extrair_tabela_com_unique_composta_nao_marca_colunas_individuais(
     assert coluna_cep.unica is False
     assert coluna_pais.nao_nulavel is True
     assert coluna_cep.nao_nulavel is True
+    assert resultado.valor.restricoes_unicas == [
+        RestricaoUnica(colunas=("pais", "cep"))
+    ]
+
+
+def test_extrair_tabela_com_indices_especiais_nao_produz_falso_positivo(
+    dsn: str, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: índice de expressão, covering e parcial não viram unica/RestricaoUnica.
+
+    Prova contra Postgres 16 real os 3 bugs bloqueantes achados pela banca
+    de revisão da issue #89 — a versão original da query (só filtrando
+    array_length(indkey, 1) = 1) teria classificado esses 3 índices
+    errado: idx_expressao marcaria col_a como unica=True (JOIN falho na
+    entrada de expressão), idx_covering geraria RestricaoUnica(col_c,
+    col_a) (col_a é INCLUDE, não faz parte da chave), idx_parcial geraria
+    RestricaoUnica(col_a, col_b) mesmo garantindo unicidade só condicional.
+    """
+    extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+
+    resultado = extrator.extrair_tabela("restricoes", "indices_especiais")
+
+    assert isinstance(resultado, Sucesso)
+    tabela = resultado.valor
+    coluna_a = next(c for c in tabela.colunas if c.nome == "col_a")
+    coluna_b = next(c for c in tabela.colunas if c.nome == "col_b")
+    coluna_c = next(c for c in tabela.colunas if c.nome == "col_c")
+
+    assert coluna_a.unica is False  # nem via idx_expressao, nem via idx_parcial
+    assert coluna_b.unica is False  # nem via idx_parcial
+    assert coluna_c.unica is True  # única coluna-chave real de idx_covering
+    assert tabela.restricoes_unicas == []  # nenhum dos 3 índices é composto real
 
 
 def test_extrair_tabela_com_fk_composta_pareia_colunas_corretamente(

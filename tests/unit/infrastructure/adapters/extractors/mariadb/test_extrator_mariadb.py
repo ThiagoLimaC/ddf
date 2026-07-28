@@ -8,6 +8,7 @@ import pytest
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado
 from ddf.domain.ports.extrator import Extrator
 from ddf.domain.shared.resultado import Falha, Sucesso
@@ -653,6 +654,9 @@ def test_unique_composta_nao_marca_nenhuma_coluna_como_unica(
     assert isinstance(resultado, Sucesso)
     assert resultado.valor.colunas[0].unica is False
     assert resultado.valor.colunas[1].unica is False
+    assert resultado.valor.restricoes_unicas == [
+        RestricaoUnica(colunas=("codigo_pais", "codigo_local"))
+    ]
 
 
 def test_check_clause_de_outra_tabela_nao_reclassifica_coluna(
