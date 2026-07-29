@@ -916,3 +916,149 @@ def test_teste_soft_unico_abaixo_do_limite_nao_dispara(
     modelo = _modelo(schema, "stg_escopo__tabela")
     coluna_yaml = _coluna(modelo, "cpf")
     assert "tests" not in coluna_yaml
+
+
+def test_macros_matches_format_nao_gerados_sem_formato_detectado(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Sem formato_detectado no lote, macros/matches_format/ não é gerado."""
+    tabela = construir_tabela(colunas=[construir_coluna()])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    assert not (tmp_path / "macros" / "matches_format").exists()
+
+
+def test_macros_matches_format_gerados_com_formato_detectado(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Com formato_detectado no lote, os 3 arquivos de matches_format/ existem."""
+    metrica = MetricasBaseColuna(
+        percentual_nulo=0.0,
+        percentual_unico=50.0,
+        valores_frequentes=[],
+        formato_detectado="email",
+    )
+    coluna = construir_coluna(nome="email", metricas=[metrica])
+    tabela = construir_tabela(colunas=[coluna])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    pasta = tmp_path / "macros" / "matches_format"
+    assert (pasta / "matches_format.sql").read_text() == (
+        _CAMINHO_MACRO_MATCHES_FORMAT.read_text()
+    )
+    assert (pasta / "postgres__validate_format.sql").exists()
+    assert (pasta / "mariadb__validate_format.sql").exists()
+
+
+def test_macros_matches_format_orfaos_sao_removidos(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Borda: macros/matches_format/ de execução anterior é removido sem consumidor.
+
+    Mesmo cenário já validado para packages.yml na #89: formato_detectado
+    existia numa execução passada e deixou de existir no lote atual.
+    """
+    pasta = tmp_path / "macros" / "matches_format"
+    pasta.mkdir(parents=True)
+    (pasta / "matches_format.sql").write_text("-- execução anterior")
+    tabela = construir_tabela(colunas=[construir_coluna()])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    assert not pasta.exists()
+
+
+def test_macro_unique_percentage_nao_gerado_sem_consumidor(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Sem coluna na faixa soft de unicidade, unique_percentage_at_least.sql não sai."""
+    tabela = construir_tabela(colunas=[construir_coluna()])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    assert not (tmp_path / "macros" / "unique_percentage_at_least.sql").exists()
+
+
+def test_macro_unique_percentage_gerado_com_consumidor(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Com coluna na faixa soft de unicidade, unique_percentage_at_least.sql sai."""
+    metrica = MetricasBaseColuna(
+        percentual_nulo=20.0, percentual_unico=97.0, valores_frequentes=[]
+    )
+    coluna = construir_coluna(nome="cpf", metricas=[metrica])
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=100)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    assert (tmp_path / "macros" / "unique_percentage_at_least.sql").exists()
+
+
+def test_macro_unique_percentage_orfao_e_removido(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Borda: unique_percentage_at_least.sql de execução anterior some sem uso."""
+    caminho = tmp_path / "macros" / "unique_percentage_at_least.sql"
+    caminho.parent.mkdir(parents=True)
+    caminho.write_text("-- execução anterior")
+    tabela = construir_tabela(colunas=[construir_coluna()])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    assert not caminho.exists()
+
+
+def test_packages_yml_gerado_por_teste_soft_nulo_sem_restricao_unica(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """packages.yml também é gerado quando só o teste soft de nulo consome dbt_utils.
+
+    Antes da #90, usa_dbt_utils só considerava restricoes_unicas (#89).
+    dbt_utils.not_null_proportion é o segundo consumidor real possível.
+    """
+    metrica = MetricasBaseColuna(
+        percentual_nulo=5.0, percentual_unico=50.0, valores_frequentes=[]
+    )
+    coluna = construir_coluna(nome="telefone", metricas=[metrica])
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=100)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    assert (tmp_path / "packages.yml").exists()
