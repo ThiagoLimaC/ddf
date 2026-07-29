@@ -378,6 +378,33 @@
     issue por mudar contrato estrutural cross-context (mesmo risco/
     tamanho da #44) — achados incorporados ao plano antes do código,
     registrados em `plan/registry-plan/issue-89-*.md`
+- [x] `GeradorDbt` — reabertura de escopo da #77 (macros dbt customizadas,
+  issue #90): fecha duas métricas já calculadas por
+  `AnalisadorDeMetricasDeColuna` mas nunca consumidas —
+  `formato_detectado` e a faixa intermediária de nulo/unicidade que nem o
+  fato estrutural do schema nem o `unique`/`not_null` "hard" alcançam:
+  - `matches_format` (`macros/matches_format/`): dispatch por adapter, um
+    arquivo por engine (Postgres via `~*`, MariaDB via `REGEXP`) — decisão
+    da banca de revisão de planejamento de não centralizar num único
+    arquivo com dispatch embutido, pra tornar o ponto de extensão visível
+    no filesystem; engine sem implementação falha explícito
+    (`default__validate_format`). Premissa técnica original (macro
+    `dbt.regexp_like` builtin do dbt-core) verificada como incorreta pela
+    banca antes da implementação — não existe, o dispatch precisou ser
+    escrito do zero
+  - Teste soft de nulo via `dbt_utils.not_null_proportion` (dependência já
+    condicional desde a #89, sem macro novo); teste soft de unicidade via
+    macro custom `unique_percentage_at_least.sql` (`dbt_utils` não tem
+    equivalente de "% único") — thresholds 10%/95% (não 5%/90% como
+    cogitado inicialmente), mais afastados da fronteira de ruído amostral
+    perto do piso de 100 linhas, decisão confirmada com o usuário após
+    exemplo numérico do erro padrão da proporção
+  - `packages.yml` estendido: antes só `restricoes_unicas` (#89) acionava
+    a escrita condicional, agora também `dbt_utils.not_null_proportion`
+  - Banca de revisão do plano (Arquiteto de Software + Engenheiro de
+    Dados + PO) antes da implementação, apesar de a própria issue não
+    exigir isso — achados incorporados ao plano antes do código,
+    registrados em `plan/registry-plan/issue-90-*.md`
 
 ## 7. CLI real wizard (issue #16) — concluída
 
