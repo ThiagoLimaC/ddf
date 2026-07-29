@@ -1270,12 +1270,17 @@ gerado e, por escopo, uma subpasta autocontida em
 tabela, e `schema.yml` — convenção real dbt-labs pra staging multi-source
 ("as you add more source systems, create a subdirectory per source"),
 substituindo o layout achatado original (`models/staging/sources.yml`
-único pra todos os escopos). `packages.yml` (issue #89) é **condicional**:
-só escrito quando alguma tabela do lote tem `restricoes_unicas` — sem
-consumidor real (o teste model-level abaixo), declarar a dependência seria
-decoração no artefato gerado. Se uma execução anterior gerou `packages.yml`
-e a constraint UNIQUE composta correspondente deixou de existir no lote
-atual, o Gerador remove o arquivo órfão explicitamente.
+único pra todos os escopos). `packages.yml` é **condicional**: só escrito
+quando há pelo menos um consumidor real de `dbt_utils` no lote — hoje dois
+possíveis, `dbt_utils.unique_combination_of_columns` (`restricoes_unicas`,
+issue #89) ou `dbt_utils.not_null_proportion` (teste soft de nulo, issue
+#90) — sem nenhum dos dois, declarar a dependência seria decoração no
+artefato gerado. Se uma execução anterior gerou `packages.yml` e nenhum
+consumidor sobrou no lote atual, o Gerador remove o arquivo órfão
+explicitamente. `macros/matches_format/` (3 arquivos) e
+`macros/unique_percentage_at_least.sql` (issue #90, ver seção própria
+abaixo) seguem o mesmo princípio de escrita condicional + remoção de
+órfão.
 
 **Nome do staging model (issue #14, desvio deliberado do `stg_<tabela>`
 originalmente cogitado):** `stg_<nome_escopo>__<nome_tabela>` (duplo
@@ -1342,6 +1347,68 @@ não estimativa sobre amostra — não há razão estatística para suavizar.
 Requer `packages.yml` declarando `dbt-labs/dbt_utils` (ver "Saída" acima),
 por isso só é sugerido quando `restricoes_unicas` não é vazio — o mesmo
 UNIQUE composto que aciona a geração condicional de `packages.yml`.
+
+**Macros custom — `matches_format` e testes soft de nulo/unicidade (issue
+#90):** adiada da #77 (junto da #89), fecha a lacuna de duas métricas já
+calculadas por `AnalisadorDeMetricasDeColuna` mas nunca consumidas pelo
+`GeradorDbt`: `formato_detectado` e a faixa intermediária de
+`percentual_nulo`/`percentual_unico` entre "sem sinal" e o `unique`/
+`not_null` hard da tabela acima.
+
+| Condição | Teste |
+|---|---|
+| `formato_detectado` presente | `matches_format`, `config: {severity: warn}` |
+| `0 < percentual_nulo <= 10.0` **e** `tamanho_amostra >= 100`, coluna não é PK nem `nao_nulavel` | `dbt_utils.not_null_proportion` (`at_least: 0.9`), `config: {severity: warn}` |
+| `95.0 <= percentual_unico < 100.0` **e** `tamanho_amostra >= 100`, coluna não é PK nem `unica` | `unique_percentage_at_least` (`at_least: 0.95`), `config: {severity: warn}` |
+
+*`matches_format` — dispatch por adapter, um arquivo por engine.*
+`macros/matches_format/matches_format.sql` define o teste genérico e o
+dict de patterns (cópia literal de `_REGEXES` em
+`infrastructure/adapters/analyzers/detector_de_formato.py`) e delega a
+validação via `adapter.dispatch('validate_format', 'ddf_staging')`.
+`postgres__validate_format.sql` (via `~*`) e `mariadb__validate_format.sql`
+(via `REGEXP`) são arquivos **separados**, um por engine suportada — decisão
+deliberada de não centralizar as implementações num único arquivo com
+`if`/dispatch embutido: dar suporte a uma engine nova nesta v1 significa
+literalmente criar `macros/matches_format/<adapter>__validate_format.sql`,
+o ponto de extensão fica visível no filesystem. Engine sem implementação
+cai em `default__validate_format`, que falha explícito via
+`exceptions.raise_compiler_error` — nunca silenciosamente. `severity: warn`
+por padrão porque o detector que gerou a sugestão já tolera até 20% de
+não-match na amostra (`_THRESHOLD` em `detector_de_formato.py`); `error`
+quebraria `dbt test` sistematicamente contra dado de produção real (CPF
+mascarado, e-mail de sistema, telefone internacional). `~*` no Postgres (não
+`~`) dá paridade com o `re.IGNORECASE` do regex fonte de email — MariaDB
+`REGEXP` é case-insensitive por padrão só sob collation `_ci`, limitação
+documentada no README do projeto gerado quando `matches_format` está em
+uso. `set(_REGEXES.keys())` e as chaves embutidas no macro são duas fontes
+de verdade mantidas manualmente em paralelo (Python vs. SQL estático) — um
+teste de contrato em `tests/unit` compara as duas, porque um formato
+adicionado só de um lado quebraria em `dbt compile`/`dbt test` do usuário
+final, nunca no `pytest` do próprio ddf.
+
+*Testes soft de nulo/unicidade — thresholds 10%/95%, não 5%/90%.* Perto do
+piso de amostra (`_TAMANHO_AMOSTRA_MINIMO_SOFT = 100`, mesmo valor de
+`_TAMANHO_AMOSTRA_MINIMO_AVISO` em `AnalisadorDeMetricasDeColuna`, mas
+redefinido localmente — mesmo padrão já usado por
+`GeradorContextoDeIA._TAMANHO_AMOSTRA_MINIMO_ENUM`), o erro padrão de uma
+proporção é da mesma ordem de um threshold mais apertado: em N=100, o erro
+padrão perto de p=0.05 é de ~2,2 pontos percentuais, e perto de p=0.90 é de
+~3 pontos. Um threshold de 5%/90% faria a sugestão oscilar entre
+reextrações por ruído de amostragem — não mudança real do dado — e isso
+aparece como diff no `schema.yml` versionado que o curador revisa a cada
+PR. 10%/95% ficam deliberadamente mais longe dessa fronteira ruidosa.
+`dbt_utils.not_null_proportion` (dependência já presente no pacote) cobre o
+caso de nulo, sem macro novo; unicidade não tem equivalente pronto no
+`dbt_utils` (o `unique` builtin conta duplicatas, não proporção), por isso
+usa o macro custom `unique_percentage_at_least.sql` — SQL ANSI puro
+(`count(distinct ...) * 1.0 / count(...)`), sem dispatch por adapter porque,
+ao contrário de regex, divisão/`COUNT(DISTINCT)` é portável sem sintaxe
+específica de engine. Ambos mutuamente exclusivos com o teste hard
+correspondente por construção (faixas `(0, 10]`/`[95, 100)` vs. hard em
+exatamente `0.0`/`100.0` ou fato estrutural do schema), e suprimidos quando
+a coluna é `chave_primaria` ou já tem o fato estrutural equivalente
+(`nao_nulavel`/`unica`).
 
 **Limitação conhecida — `relationships` em FK composta (issue #56):** o
 teste é gerado por coluna, uma `relationships` independente por coluna
