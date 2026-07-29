@@ -1,18 +1,5 @@
 {% test matches_format(model, column_name, format) %}
-{#
-    Teste genérico dbt: valida que uma coluna casa com um dos formatos
-    conhecidos (email/cpf/cnpj/phone/cep). `format` é o valor de
-    `formato_detectado` que o AnalisadorDeMetricasDeColuna do ddf já calculou
-    sobre a amostra — os patterns abaixo são cópia literal dos regex fonte em
-    detector_de_formato.py, não uma reinvenção.
-
-    A validação real (`{{ column_expression }} <op> <pattern>`) é delegada por
-    engine via adapter.dispatch — cada warehouse de destino tem sintaxe de
-    regex própria. Ver postgres__validate_format.sql/mariadb__validate_format.sql
-    neste mesmo diretório para as implementações suportadas nesta v1; engines
-    fora dessas duas caem no default__validate_format abaixo, que falha
-    explicitamente em vez de silenciosamente.
-#}
+{# Valida a coluna contra o regex de `format` (patterns = cópia de detector_de_formato.py). Validação real por engine em <adapter>__validate_format.sql. #}
 
 {% set patterns = {
     'email': '^[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}$',

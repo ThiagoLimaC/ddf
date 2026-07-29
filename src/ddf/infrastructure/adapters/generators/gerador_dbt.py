@@ -8,6 +8,7 @@ do código Python (ver `docs/engineer_guidelines.md`, "Nomenclatura: idioma
 como contrato").
 """
 
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -56,8 +57,19 @@ _PACKAGES_YML: dict[str, Any] = {
 _CATEGORIAS_COM_TIMEZONE = {CategoriaDeDado.TIMESTAMP, CategoriaDeDado.TIME}
 _CATEGORIAS_SEM_EQUIVALENTE_ANSI = {CategoriaDeDado.ENUM, CategoriaDeDado.SET}
 
+# Testes "soft" (issue #90) — thresholds fixos, não configuráveis nesta v1.
+# Mais afastados da fronteira (10%/95%, não 5%/90%) de propósito: perto do
+# piso de amostra (_TAMANHO_AMOSTRA_MINIMO_SOFT), o erro padrão de uma
+# proporção é da mesma ordem de um threshold mais apertado — a sugestão
+# "piscaria" entre reextrações por ruído amostral, não mudança real de dado.
+_LIMITE_NULO_SOFT = 10.0
+_LIMITE_UNICO_SOFT = 95.0
+_TAMANHO_AMOSTRA_MINIMO_SOFT = 100
+
+_TEMPLATES_DIR = Path(__file__).parent / "templates"
+
 _ambiente = Environment(
-    loader=FileSystemLoader(Path(__file__).parent / "templates"),
+    loader=FileSystemLoader(_TEMPLATES_DIR),
     trim_blocks=True,
     lstrip_blocks=True,
     keep_trailing_newline=True,
@@ -65,6 +77,23 @@ _ambiente = Environment(
 )
 _TEMPLATE_SQL = _ambiente.get_template("stg_tabela.sql.jinja2")
 _TEMPLATE_README = _ambiente.get_template("readme.md.jinja2")
+
+# Macros dbt (issue #90): conteúdo estático, lido direto do disco — não
+# passam pelo _ambiente acima porque `{% test %}`/`{% macro %}` são tags que
+# só o dbt-core (em runtime do dbt, no ambiente do usuário) sabe interpretar;
+# o Environment deste projeto não tem essa extensão e falharia ao parsear.
+_ARQUIVOS_MATCHES_FORMAT = (
+    "matches_format.sql",
+    "postgres__validate_format.sql",
+    "mariadb__validate_format.sql",
+)
+_CONTEUDO_MATCHES_FORMAT: dict[str, str] = {
+    nome: (_TEMPLATES_DIR / "macros" / "matches_format" / nome).read_text()
+    for nome in _ARQUIVOS_MATCHES_FORMAT
+}
+_CONTEUDO_UNIQUE_PERCENTAGE_AT_LEAST = (
+    _TEMPLATES_DIR / "macros" / "unique_percentage_at_least.sql"
+).read_text()
 
 
 def _nome_model(escopo: str, tabela: str) -> str:
@@ -185,6 +214,54 @@ def _metrica_de_coluna(coluna: ColunaAnalisada) -> MetricasBaseColuna | None:
     return metricas[0] if metricas else None
 
 
+def _precisa_teste_soft_nulo(
+    coluna: ColunaAnalisada, metrica: MetricasBaseColuna | None, tamanho_amostra: int
+) -> bool:
+    """Decide se a coluna cai na faixa "nulo baixo mas não-zero" (issue #90).
+
+    Mutuamente exclusivo com o `not_null` hard por construção: hard cobre
+    `percentual_nulo == 0.0` ou `coluna.nao_nulavel`; aqui a faixa exige
+    `percentual_nulo > 0` e a coluna não ser estruturalmente not-nullable.
+
+    Args:
+        coluna: coluna analisada a avaliar.
+        metrica: MetricasBaseColuna da coluna, se já calculada.
+        tamanho_amostra: total de linhas amostradas da tabela desta coluna.
+
+    Returns:
+        True se o teste soft de nulo deve ser sugerido.
+    """
+    if coluna.chave_primaria or coluna.nao_nulavel:
+        return False
+    if metrica is None or tamanho_amostra < _TAMANHO_AMOSTRA_MINIMO_SOFT:
+        return False
+    return 0 < metrica.percentual_nulo <= _LIMITE_NULO_SOFT
+
+
+def _precisa_teste_soft_unico(
+    coluna: ColunaAnalisada, metrica: MetricasBaseColuna | None, tamanho_amostra: int
+) -> bool:
+    """Decide se a coluna cai na faixa "quase única" (issue #90).
+
+    Mutuamente exclusivo com o `unique` hard por construção: hard cobre
+    `percentual_unico == 100.0` ou `coluna.unica`; aqui a faixa exige
+    `percentual_unico < 100.0` e a coluna não ser estruturalmente única.
+
+    Args:
+        coluna: coluna analisada a avaliar.
+        metrica: MetricasBaseColuna da coluna, se já calculada.
+        tamanho_amostra: total de linhas amostradas da tabela desta coluna.
+
+    Returns:
+        True se o teste soft de unicidade deve ser sugerido.
+    """
+    if coluna.chave_primaria or coluna.unica:
+        return False
+    if metrica is None or tamanho_amostra < _TAMANHO_AMOSTRA_MINIMO_SOFT:
+        return False
+    return _LIMITE_UNICO_SOFT <= metrica.percentual_unico < 100.0
+
+
 def _sugestoes_de_teste(
     coluna: ColunaAnalisada,
     presentes: set[tuple[str, str]],
@@ -231,6 +308,15 @@ def _sugestoes_de_teste(
     — e uma cobertura baixa é sinal de que a lista está longe de ser
     exaustiva mesmo dentro do próprio universo não-nulo amostrado.
 
+    `matches_format` (issue #90) é sugerido quando `formato_detectado` está
+    presente, com `severity: warn` (ver `docs/low_level_design.md` para a
+    justificativa e o escopo de engines suportadas).
+
+    Testes "soft" de nulo/unicidade (issue #90) cobrem a faixa intermediária
+    entre "sem sinal" e o `not_null`/`unique` hard — ver
+    `_precisa_teste_soft_nulo`/`_precisa_teste_soft_unico` para as condições
+    exatas e `docs/low_level_design.md` para a justificativa dos thresholds.
+
     Args:
         coluna: coluna analisada a avaliar.
         presentes: pares (nome_escopo, nome_tabela) de todas as tabelas do
@@ -258,6 +344,35 @@ def _sugestoes_de_teste(
         testes.append("unique")
     if nao_nulo and not coluna.chave_primaria:
         testes.append("not_null")
+
+    if metrica is not None and metrica.formato_detectado is not None:
+        testes.append(
+            {
+                "matches_format": {
+                    "format": metrica.formato_detectado,
+                    "config": {"severity": "warn"},
+                }
+            }
+        )
+
+    if _precisa_teste_soft_nulo(coluna, metrica, tamanho_amostra):
+        testes.append(
+            {
+                "dbt_utils.not_null_proportion": {
+                    "at_least": round(1 - _LIMITE_NULO_SOFT / 100, 4),
+                    "config": {"severity": "warn"},
+                }
+            }
+        )
+    if _precisa_teste_soft_unico(coluna, metrica, tamanho_amostra):
+        testes.append(
+            {
+                "unique_percentage_at_least": {
+                    "at_least": round(_LIMITE_UNICO_SOFT / 100, 4),
+                    "config": {"severity": "warn"},
+                }
+            }
+        )
 
     if coluna.chave_estrangeira and coluna.referencia is not None:
         referencia = coluna.referencia
@@ -410,6 +525,68 @@ def _agrupar_por_escopo(
     return tabelas_por_escopo
 
 
+def _precisa_matches_format(tabelas: list[TabelaAnalisada]) -> bool:
+    """Indica se algum consumidor real de `macros/matches_format/` existe no lote.
+
+    Args:
+        tabelas: tabelas do lote analisado.
+
+    Returns:
+        True se pelo menos uma coluna tem `formato_detectado` calculado —
+        escrever os macros sem isso seria decoração no artefato gerado.
+    """
+    for tabela in tabelas:
+        for coluna in tabela.colunas:
+            metrica = _metrica_de_coluna(coluna)
+            if metrica is not None and metrica.formato_detectado is not None:
+                return True
+    return False
+
+
+def _precisa_unique_percentage_at_least(tabelas: list[TabelaAnalisada]) -> bool:
+    """Indica se algum consumidor de `unique_percentage_at_least.sql` existe no lote.
+
+    Args:
+        tabelas: tabelas do lote analisado.
+
+    Returns:
+        True se pelo menos uma coluna cai na faixa "soft" de unicidade (ver
+        `_precisa_teste_soft_unico`).
+    """
+    for tabela in tabelas:
+        tamanho_amostra = tabela.metadados_amostra.tamanho_amostra
+        for coluna in tabela.colunas:
+            metrica = _metrica_de_coluna(coluna)
+            if _precisa_teste_soft_unico(coluna, metrica, tamanho_amostra):
+                return True
+    return False
+
+
+def _precisa_dbt_utils(tabelas: list[TabelaAnalisada]) -> bool:
+    """Indica se `packages.yml` (dependência `dbt_utils`) precisa ser escrito.
+
+    Dois consumidores reais possíveis: `dbt_utils.unique_combination_of_columns`
+    (UNIQUE composto, issue #89) e `dbt_utils.not_null_proportion` (teste soft
+    de nulo, issue #90) — sem nenhum dos dois, declarar a dependência seria
+    decoração no artefato gerado (mesmo critério já aplicado na #89).
+
+    Args:
+        tabelas: tabelas do lote analisado.
+
+    Returns:
+        True se houver ao menos um consumidor real de `dbt_utils` no lote.
+    """
+    if any(tabela.restricoes_unicas for tabela in tabelas):
+        return True
+    for tabela in tabelas:
+        tamanho_amostra = tabela.metadados_amostra.tamanho_amostra
+        for coluna in tabela.colunas:
+            metrica = _metrica_de_coluna(coluna)
+            if _precisa_teste_soft_nulo(coluna, metrica, tamanho_amostra):
+                return True
+    return False
+
+
 def _montar_sources(
     escopo: str, tabelas_do_escopo: list[TabelaAnalisada]
 ) -> dict[str, Any]:
@@ -440,6 +617,7 @@ def _renderizar_readme(
     tabelas_por_escopo: dict[str, list[TabelaAnalisada]],
     gerado_em: str,
     usa_dbt_utils: bool,
+    usa_matches_format: bool,
 ) -> str:
     """Renderiza o README.md do projeto dbt gerado, na raiz do projeto.
 
@@ -451,6 +629,9 @@ def _renderizar_readme(
         usa_dbt_utils: se `packages.yml` foi gerado nesta execução — o bloco
             de comandos só menciona `dbt deps` quando há dependência real
             a instalar (issue #89).
+        usa_matches_format: se `macros/matches_format/` foi gerado nesta
+            execução — a nota sobre engines suportadas (Postgres/MariaDB
+            nesta v1) só aparece quando há consumidor real (issue #90).
 
     Returns:
         Markdown listando os escopos e tabelas cobertos, com o caminho real
@@ -475,7 +656,10 @@ def _renderizar_readme(
         for escopo, tabelas in tabelas_por_escopo.items()
     ]
     return _TEMPLATE_README.render(
-        escopos=escopos, gerado_em=gerado_em, usa_dbt_utils=usa_dbt_utils
+        escopos=escopos,
+        gerado_em=gerado_em,
+        usa_dbt_utils=usa_dbt_utils,
+        usa_matches_format=usa_matches_format,
     )
 
 
@@ -512,7 +696,9 @@ class GeradorDbt:
         tabelas = sorted(entrada.tabelas, key=lambda t: (t.nome_escopo, t.nome_tabela))
         presentes = {(tabela.nome_escopo, tabela.nome_tabela) for tabela in tabelas}
         tabelas_por_escopo = _agrupar_por_escopo(tabelas)
-        usa_dbt_utils = any(tabela.restricoes_unicas for tabela in tabelas)
+        usa_dbt_utils = _precisa_dbt_utils(tabelas)
+        usa_matches_format = _precisa_matches_format(tabelas)
+        usa_unique_percentage_at_least = _precisa_unique_percentage_at_least(tabelas)
 
         gerado_em = datetime.now(UTC).isoformat()
         projeto = {**_DBT_PROJECT, "meta": {"generated_at": gerado_em}}
@@ -538,9 +724,38 @@ class GeradorDbt:
         else:
             caminho_packages.unlink(missing_ok=True)
 
+        # macros/matches_format/ e macros/unique_percentage_at_least.sql
+        # (issue #90) seguem o mesmo princípio do packages.yml acima: só
+        # existem com consumidor real no lote, removidos explicitamente
+        # quando ficam órfãos numa execução nova.
+        pasta_matches_format = destino / "macros" / "matches_format"
+        if usa_matches_format:
+            for nome_arquivo, conteudo in _CONTEUDO_MATCHES_FORMAT.items():
+                resultado_macro = escrever_arquivo(
+                    pasta_matches_format / nome_arquivo, conteudo
+                )
+                if isinstance(resultado_macro, Falha):
+                    return resultado_macro
+        elif pasta_matches_format.exists():
+            shutil.rmtree(pasta_matches_format)
+
+        caminho_unique_percentage = (
+            destino / "macros" / "unique_percentage_at_least.sql"
+        )
+        if usa_unique_percentage_at_least:
+            resultado_macro_unico = escrever_arquivo(
+                caminho_unique_percentage, _CONTEUDO_UNIQUE_PERCENTAGE_AT_LEAST
+            )
+            if isinstance(resultado_macro_unico, Falha):
+                return resultado_macro_unico
+        else:
+            caminho_unique_percentage.unlink(missing_ok=True)
+
         resultado_readme = escrever_arquivo(
             destino / "README.md",
-            _renderizar_readme(tabelas_por_escopo, gerado_em, usa_dbt_utils),
+            _renderizar_readme(
+                tabelas_por_escopo, gerado_em, usa_dbt_utils, usa_matches_format
+            ),
         )
         if isinstance(resultado_readme, Falha):
             return resultado_readme
