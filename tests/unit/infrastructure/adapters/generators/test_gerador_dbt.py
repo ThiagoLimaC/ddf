@@ -1,5 +1,6 @@
 """Testes de GeradorDbt: caminho feliz, erro de disco, bordas e determinismo."""
 
+import re
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -7,6 +8,7 @@ from typing import Any
 
 import yaml
 
+import ddf.infrastructure.adapters.generators.gerador_dbt as gerador_dbt_modulo
 from ddf.domain.model.analysis import (
     BancoAnalisado,
     ColunaAnalisada,
@@ -17,7 +19,16 @@ from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.shared.resultado import Falha, Sucesso
+from ddf.infrastructure.adapters.analyzers.detector_de_formato import _REGEXES
 from ddf.infrastructure.adapters.generators.gerador_dbt import GeradorDbt
+
+_CAMINHO_MACRO_MATCHES_FORMAT = (
+    Path(gerador_dbt_modulo.__file__).parent
+    / "templates"
+    / "macros"
+    / "matches_format"
+    / "matches_format.sql"
+)
 
 
 def _schema_yml(destino: Path, escopo: str = "escopo") -> dict[str, Any]:
@@ -435,9 +446,14 @@ def test_accepted_values_omitido_quando_top10_cobre_pouco_da_amostra(
     frequentes somam só uma fração pequena da amostra (aqui, 8 de 100
     linhas), a lista está longe de ser exaustiva mesmo dentro da própria
     amostra — sugerir o teste seria enumerar um universo que não foi visto.
+
+    `percentual_nulo=20.0` (fora da faixa hard `== 0.0` e da faixa soft
+    `0 < x <= 10.0`, issue #90) para isolar essa asserção do teste soft de
+    nulo, que dispararia à parte e tornaria o `"tests" not in coluna_yaml`
+    abaixo falso por um motivo alheio ao que este teste verifica.
     """
     metrica_baixa_cobertura = MetricasBaseColuna(
-        percentual_nulo=1.0,
+        percentual_nulo=20.0,
         percentual_unico=5.0,
         valores_frequentes=[("a", 5), ("b", 3)],
     )
@@ -603,3 +619,19 @@ def test_geracao_e_deterministica(
     del projeto_a["meta"]["generated_at"]
     del projeto_b["meta"]["generated_at"]
     assert projeto_a == projeto_b
+
+
+def test_macro_matches_format_cobre_todos_os_formatos_do_detector() -> None:
+    """Contrato: os formatos embutidos no macro SQL casam com _REGEXES.
+
+    detector_de_formato.py e matches_format.sql são duas fontes de verdade
+    mantidas manualmente em paralelo (Python vs. SQL estático) — sem este
+    teste, um formato novo adicionado a _REGEXES sem replicar no macro só
+    quebraria em `dbt compile`/`dbt test` do usuário final, nunca no pytest
+    do próprio ddf.
+    """
+    conteudo = _CAMINHO_MACRO_MATCHES_FORMAT.read_text()
+    bloco_patterns = conteudo.split("{% set patterns = {")[1].split("} %}")[0]
+    formatos_no_macro = set(re.findall(r"'(\w+)':", bloco_patterns))
+
+    assert formatos_no_macro == set(_REGEXES.keys())
