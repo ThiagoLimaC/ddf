@@ -635,3 +635,284 @@ def test_macro_matches_format_cobre_todos_os_formatos_do_detector() -> None:
     formatos_no_macro = set(re.findall(r"'(\w+)':", bloco_patterns))
 
     assert formatos_no_macro == set(_REGEXES.keys())
+
+
+def test_matches_format_sugerido_quando_formato_detectado(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Feliz: coluna com formato_detectado sugere matches_format com severity warn."""
+    metrica = MetricasBaseColuna(
+        percentual_nulo=20.0,
+        percentual_unico=50.0,
+        valores_frequentes=[],
+        formato_detectado="email",
+    )
+    coluna = construir_coluna(nome="email", metricas=[metrica])
+    tabela = construir_tabela(colunas=[coluna])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "email")
+    matches = next(
+        t for t in coluna_yaml["tests"] if isinstance(t, dict) and "matches_format" in t
+    )
+    assert matches["matches_format"] == {
+        "format": "email",
+        "config": {"severity": "warn"},
+    }
+
+
+def test_teste_soft_nulo_sugerido_entre_zero_e_limite(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Feliz: percentual_nulo dentro de (0, 10] sugere dbt_utils.not_null_proportion."""
+    metrica = MetricasBaseColuna(
+        percentual_nulo=5.0, percentual_unico=50.0, valores_frequentes=[]
+    )
+    coluna = construir_coluna(nome="telefone", metricas=[metrica])
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=100)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "telefone")
+    soft = next(
+        t
+        for t in coluna_yaml["tests"]
+        if isinstance(t, dict) and "dbt_utils.not_null_proportion" in t
+    )
+    assert soft["dbt_utils.not_null_proportion"] == {
+        "at_least": 0.9,
+        "config": {"severity": "warn"},
+    }
+
+
+def test_teste_soft_nulo_nao_duplica_quando_coluna_estruturalmente_not_nullable(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Estrutural: nao_nulavel=True recebe só not_null hard, sem soft duplicado."""
+    metrica = MetricasBaseColuna(
+        percentual_nulo=5.0, percentual_unico=50.0, valores_frequentes=[]
+    )
+    coluna = construir_coluna(nome="telefone", nao_nulavel=True, metricas=[metrica])
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=100)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "telefone")
+    assert coluna_yaml["tests"] == ["not_null"]
+
+
+def test_teste_soft_nulo_omitido_com_amostra_abaixo_do_piso(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Borda: amostra abaixo de 100 linhas não sugere o teste soft de nulo."""
+    metrica = MetricasBaseColuna(
+        percentual_nulo=5.0, percentual_unico=50.0, valores_frequentes=[]
+    )
+    coluna = construir_coluna(nome="telefone", metricas=[metrica])
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=50)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "telefone")
+    assert "tests" not in coluna_yaml
+
+
+def test_teste_soft_nulo_no_limite_exato_ainda_dispara(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Borda: percentual_nulo == 10.0 (limite inclusivo) ainda dispara o teste soft."""
+    metrica = MetricasBaseColuna(
+        percentual_nulo=10.0, percentual_unico=50.0, valores_frequentes=[]
+    )
+    coluna = construir_coluna(nome="telefone", metricas=[metrica])
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=100)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "telefone")
+    assert any(
+        isinstance(t, dict) and "dbt_utils.not_null_proportion" in t
+        for t in coluna_yaml["tests"]
+    )
+
+
+def test_teste_soft_nulo_acima_do_limite_nao_dispara(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Borda: percentual_nulo acima de 10.0 não dispara nem o teste hard nem o soft."""
+    metrica = MetricasBaseColuna(
+        percentual_nulo=10.5, percentual_unico=50.0, valores_frequentes=[]
+    )
+    coluna = construir_coluna(nome="telefone", metricas=[metrica])
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=100)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "telefone")
+    assert "tests" not in coluna_yaml
+
+
+def test_teste_soft_nulo_omitido_para_chave_primaria(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Estrutural: PK não recebe o teste soft de nulo mesmo dentro da faixa."""
+    metrica = MetricasBaseColuna(
+        percentual_nulo=5.0, percentual_unico=100.0, valores_frequentes=[]
+    )
+    coluna = construir_coluna(nome="id", chave_primaria=True, metricas=[metrica])
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=100)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "id")
+    assert "tests" not in coluna_yaml
+
+
+def test_teste_soft_unico_sugerido_entre_limite_e_cem(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Feliz: percentual_unico dentro de [95, 100) sugere unique_percentage_at_least."""
+    metrica = MetricasBaseColuna(
+        percentual_nulo=20.0, percentual_unico=97.0, valores_frequentes=[]
+    )
+    coluna = construir_coluna(nome="cpf", metricas=[metrica])
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=100)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "cpf")
+    soft = next(
+        t
+        for t in coluna_yaml["tests"]
+        if isinstance(t, dict) and "unique_percentage_at_least" in t
+    )
+    assert soft["unique_percentage_at_least"] == {
+        "at_least": 0.95,
+        "config": {"severity": "warn"},
+    }
+
+
+def test_teste_soft_unico_nao_duplica_quando_coluna_estruturalmente_unica(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Estrutural: coluna unica=True recebe só unique hard, sem soft duplicado."""
+    metrica = MetricasBaseColuna(
+        percentual_nulo=20.0, percentual_unico=97.0, valores_frequentes=[]
+    )
+    coluna = construir_coluna(nome="cpf", unica=True, metricas=[metrica])
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=100)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "cpf")
+    assert coluna_yaml["tests"] == ["unique"]
+
+
+def test_teste_soft_unico_omitido_com_amostra_abaixo_do_piso(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Borda: amostra abaixo de 100 linhas não sugere o teste soft de unicidade."""
+    metrica = MetricasBaseColuna(
+        percentual_nulo=20.0, percentual_unico=97.0, valores_frequentes=[]
+    )
+    coluna = construir_coluna(nome="cpf", metricas=[metrica])
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=50)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "cpf")
+    assert "tests" not in coluna_yaml
+
+
+def test_teste_soft_unico_abaixo_do_limite_nao_dispara(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Borda: percentual_unico logo abaixo de 95.0 não dispara o teste soft."""
+    metrica = MetricasBaseColuna(
+        percentual_nulo=20.0, percentual_unico=94.9, valores_frequentes=[]
+    )
+    coluna = construir_coluna(nome="cpf", metricas=[metrica])
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=100)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "cpf")
+    assert "tests" not in coluna_yaml
