@@ -9,6 +9,7 @@ from psycopg2 import OperationalError
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado
 from ddf.domain.ports.extrator import Extrator
@@ -163,7 +164,7 @@ def test_extrair_tabela_retorna_estrutura_completa(
         ],  # colunas (schema inteiro)
         [("pedidos", "id")],  # PK (schema inteiro)
         [
-            ("pedidos", "cliente_id", "vendas", "clientes", "id")
+            ("pedidos", "cliente_id", "vendas", "clientes", "id", "fk_pedidos_cliente")
         ],  # FK, schema cross-referenciado (schema inteiro)
         [("pedidos", 5001, "nome")],  # UNIQUE, single-column (schema inteiro)
         [("pedidos", 1000.0)],  # total_linhas (schema inteiro)
@@ -372,9 +373,23 @@ def test_extrair_tabela_com_duas_fks_na_mesma_coluna_emite_aviso(
         [("movimentos", "entidade_id", "int4", None, None, None, "YES")],  # colunas
         [],  # PK
         [
-            ("movimentos", "entidade_id", "vendas", "clientes", "id"),
-            ("movimentos", "entidade_id", "vendas", "fornecedores", "id"),
-        ],  # FK duplicada na mesma coluna
+            (
+                "movimentos",
+                "entidade_id",
+                "vendas",
+                "clientes",
+                "id",
+                "fk_movimentos_clientes",
+            ),
+            (
+                "movimentos",
+                "entidade_id",
+                "vendas",
+                "fornecedores",
+                "id",
+                "fk_movimentos_fornecedores",
+            ),
+        ],  # FK duplicada na mesma coluna (2 constraints distintas)
         [],  # UNIQUE
         [("movimentos", 0.0)],  # total_linhas
         [],  # amostra
@@ -439,6 +454,65 @@ def test_extrair_tabela_com_unique_composto_monta_restricao_unica(
     assert tabela.colunas[0].unica is False
     assert tabela.colunas[1].unica is False
     assert tabela.colunas[2].unica is True
+
+
+def test_extrair_tabela_com_fk_composta_monta_restricao_de_fk_composta(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: FK(a, b) vira uma RestricaoDeFkComposta, sem afetar `.referencia`.
+
+    Mesma tabela também tem uma FK single-column (constraint diferente) —
+    prova que o agrupamento por constraint_name não mistura os dois casos,
+    e que `ColunaExtraida.referencia` continua populado por coluna mesmo
+    para as que fazem parte da constraint composta.
+    """
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.side_effect = [
+        [
+            ("pedidos", "pais_id", "int4", None, None, None, "NO"),
+            ("pedidos", "estado_id", "int4", None, None, None, "NO"),
+            ("pedidos", "cliente_id", "int4", None, None, None, "NO"),
+        ],  # colunas
+        [],  # PK
+        [
+            ("pedidos", "pais_id", "geografia", "estados", "pais_id", "fk_estado"),
+            ("pedidos", "estado_id", "geografia", "estados", "id", "fk_estado"),
+            ("pedidos", "cliente_id", "vendas", "clientes", "id", "fk_cliente"),
+        ],  # FK — constraint composta (fk_estado) + single-column (fk_cliente)
+        [],  # UNIQUE
+        [("pedidos", 0.0)],  # total_linhas
+        [],  # amostra
+    ]
+    cursor_fake.description = [
+        SimpleNamespace(name="pais_id"),
+        SimpleNamespace(name="estado_id"),
+        SimpleNamespace(name="cliente_id"),
+    ]
+    pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+    extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
+    resultado = extrator.extrair_tabela("public", "pedidos")
+
+    assert isinstance(resultado, Sucesso)
+    tabela = resultado.valor
+    assert tabela.restricoes_fk_compostas == [
+        RestricaoDeFkComposta(
+            colunas_locais=("pais_id", "estado_id"),
+            nome_escopo_referenciado="geografia",
+            nome_tabela_referenciada="estados",
+            colunas_referenciadas=("pais_id", "id"),
+        )
+    ]
+    assert tabela.colunas[0].referencia == ReferenciaDeColuna(
+        nome_escopo="geografia", nome_tabela="estados", nome_coluna="pais_id"
+    )
+    assert tabela.colunas[1].referencia == ReferenciaDeColuna(
+        nome_escopo="geografia", nome_tabela="estados", nome_coluna="id"
+    )
+    assert tabela.colunas[2].referencia == ReferenciaDeColuna(
+        nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
+    )
 
 
 def test_listar_escopos_sem_escopos_de_usuario_retorna_lista_vazia(

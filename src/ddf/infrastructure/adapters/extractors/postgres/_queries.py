@@ -34,9 +34,17 @@ _CHAVES_PRIMARIAS_SCHEMA_SQL = """
         AND tc.table_schema = %s
 """
 
+# tc.constraint_name/kcu.ordinal_position (issue #95): a query já lia
+# constraint_name internamente pro JOIN, mas não o expunha no SELECT — sem
+# ele, o código Python não sabia agrupar colunas de uma mesma FK composta.
+# ORDER BY estabiliza a ordem das colunas dentro de uma constraint composta
+# entre execuções (mesmo achado da banca da #89 pra restrições únicas —
+# sem ordem garantida, o hash estrutural oscilaria sem mudança real de
+# schema).
 _CHAVES_ESTRANGEIRAS_SCHEMA_SQL = """
     SELECT tc.table_name AS tabela_de_origem, kcu.column_name,
-           ccu.table_schema, ccu.table_name, ccu.column_name
+           ccu.table_schema, ccu.table_name, ccu.column_name,
+           tc.constraint_name
     FROM information_schema.table_constraints tc
     JOIN information_schema.key_column_usage kcu
         ON tc.constraint_name = kcu.constraint_name
@@ -50,6 +58,7 @@ _CHAVES_ESTRANGEIRAS_SCHEMA_SQL = """
         AND kcu.position_in_unique_constraint = ccu.ordinal_position
     WHERE tc.constraint_type = 'FOREIGN KEY'
         AND tc.table_schema = %s
+    ORDER BY tc.table_name, tc.constraint_name, kcu.ordinal_position
 """
 
 # relkind IN ('r', 'p'): sem isso, tabela particionada (relkind='p') tinha
