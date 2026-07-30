@@ -46,6 +46,7 @@ class ExtratorFake:
         tabelas_por_escopo: dict[str, Resultado[list[tuple[str, str]]]],
         falhas_de_extracao: dict[tuple[str, str], str] | None = None,
         excecoes_de_extracao: dict[tuple[str, str], Exception] | None = None,
+        tabelas_customizadas: dict[tuple[str, str], TabelaExtraida] | None = None,
     ) -> None:
         """Guarda as respostas fixas de listar_tabelas/extrair_tabela por chave.
 
@@ -57,10 +58,15 @@ class ExtratorFake:
                 levantar em vez de retornar um Resultado — simula um bug
                 não previsto no Extrator concreto (issue #56, boundary de
                 exceção do OrquestradorParalelo).
+            tabelas_customizadas: mapeia (escopo, tabela) -> TabelaExtraida
+                completa a devolver em vez da tabela mínima padrão — usado
+                por testes que precisam de colunas/restrições reais (ex.:
+                `restricoes_fk_compostas`, issue #95).
         """
         self._tabelas_por_escopo = tabelas_por_escopo
         self._falhas_de_extracao = falhas_de_extracao or {}
         self._excecoes_de_extracao = excecoes_de_extracao or {}
+        self._tabelas_customizadas = tabelas_customizadas or {}
 
     def listar_escopos(self) -> Resultado[list[str]]:
         """Não é exercitado pelos testes de OrquestradorParalelo — sem corpo real."""
@@ -78,6 +84,9 @@ class ExtratorFake:
         erro = self._falhas_de_extracao.get((escopo, tabela))
         if erro is not None:
             return Falha(erro)
+        tabela_customizada = self._tabelas_customizadas.get((escopo, tabela))
+        if tabela_customizada is not None:
+            return Sucesso(tabela_customizada)
         return Sucesso(_tabela_extraida(escopo, tabela))
 
 
@@ -131,9 +140,13 @@ def construir_extrator_fake() -> Callable[..., ExtratorFake]:
         tabelas_por_escopo: dict[str, Resultado[list[tuple[str, str]]]],
         falhas_de_extracao: dict[tuple[str, str], str] | None = None,
         excecoes_de_extracao: dict[tuple[str, str], Exception] | None = None,
+        tabelas_customizadas: dict[tuple[str, str], TabelaExtraida] | None = None,
     ) -> ExtratorFake:
         return ExtratorFake(
-            tabelas_por_escopo, falhas_de_extracao, excecoes_de_extracao
+            tabelas_por_escopo,
+            falhas_de_extracao,
+            excecoes_de_extracao,
+            tabelas_customizadas,
         )
 
     return _construir

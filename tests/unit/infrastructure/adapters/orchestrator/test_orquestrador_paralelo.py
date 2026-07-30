@@ -5,10 +5,15 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+import polars as pl
 import pytest
 
+from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
+from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
+from ddf.domain.model.common.restricao_unica import RestricaoUnica
+from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.model.curation import BancoCurado, ColunaCurada, TabelaCurada
-from ddf.domain.model.extraction import TabelaExtraida
+from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.orchestrator.orquestrador_paralelo import (
@@ -227,8 +232,7 @@ def test_aplicar_sobrescritas_com_falha_devolve_sucesso_parcial(
     assert resultado.avisos == [
         Aviso(
             mensagem=(
-                "Falha ao aplicar sobrescrita em 'vendas.clientes': "
-                "YAML malformado"
+                "Falha ao aplicar sobrescrita em 'vendas.clientes': YAML malformado"
             ),
             origem="OrquestradorParalelo",
         )
@@ -319,3 +323,157 @@ def test_aplicar_sobrescritas_chama_progresso_uma_vez_por_tabela_concluida(
     )
 
     assert sorted(chamadas) == ["vendas.clientes", "vendas.pedidos"]
+
+
+def _tabela_com_colunas(
+    nome_escopo: str,
+    nome_tabela: str,
+    colunas: list[ColunaExtraida],
+    restricoes_unicas: list[RestricaoUnica] | None = None,
+    restricoes_fk_compostas: list[RestricaoDeFkComposta] | None = None,
+) -> TabelaExtraida:
+    """Constrói uma TabelaExtraida com colunas/restrições sob medida para o teste."""
+    return TabelaExtraida(
+        nome_tabela=nome_tabela,
+        nome_escopo=nome_escopo,
+        colunas=colunas,
+        total_linhas=1,
+        amostra=pl.DataFrame({coluna.nome: [1] for coluna in colunas}),
+        metadados_amostra=MetadadosDeAmostra(
+            estrategia="percentual_de_linhas", tamanho_amostra=1
+        ),
+        restricoes_unicas=restricoes_unicas or [],
+        restricoes_fk_compostas=restricoes_fk_compostas or [],
+    )
+
+
+def test_extrair_fk_composta_sem_chave_candidata_emite_aviso(
+    construir_extrator_fake: Callable[..., ExtratorFake],
+) -> None:
+    """Borda: FK composta sem PK/UNIQUE do lado referenciado emite Aviso.
+
+    Checagem cross-table (issue #95): "estados" está no lote, mas
+    (pais_id, id) não é nem a PK nem um UNIQUE composto dela — sinal de
+    banco legado malformado, não deve ser consumido em silêncio.
+    """
+    tipo = TipoDeDado(categoria=CategoriaDeDado.INTEGER)
+    pedidos = _tabela_com_colunas(
+        "vendas",
+        "pedidos",
+        colunas=[
+            ColunaExtraida(nome="pais_id", tipo_dado=tipo),
+            ColunaExtraida(nome="estado_id", tipo_dado=tipo),
+        ],
+        restricoes_fk_compostas=[
+            RestricaoDeFkComposta(
+                colunas_locais=("pais_id", "estado_id"),
+                nome_escopo_referenciado="vendas",
+                nome_tabela_referenciada="estados",
+                colunas_referenciadas=("pais_id", "id"),
+            )
+        ],
+    )
+    estados = _tabela_com_colunas(
+        "vendas",
+        "estados",
+        colunas=[
+            ColunaExtraida(nome="id", tipo_dado=tipo, chave_primaria=True),
+            ColunaExtraida(nome="pais_id", tipo_dado=tipo),
+        ],
+    )
+    extrator = construir_extrator_fake(
+        {"vendas": Sucesso([("vendas", "pedidos"), ("vendas", "estados")])},
+        tabelas_customizadas={
+            ("vendas", "pedidos"): pedidos,
+            ("vendas", "estados"): estados,
+        },
+    )
+    orquestrador = OrquestradorParalelo(max_trabalhadores=4)
+
+    resultado = orquestrador.extrair(["vendas"], extrator)
+
+    assert isinstance(resultado, Sucesso)
+    assert len(resultado.avisos) == 1
+    assert resultado.avisos[0].origem == "OrquestradorParalelo"
+    assert "vendas.pedidos" in resultado.avisos[0].mensagem
+    assert "vendas.estados" in resultado.avisos[0].mensagem
+
+
+def test_extrair_fk_composta_com_chave_candidata_nao_emite_aviso(
+    construir_extrator_fake: Callable[..., ExtratorFake],
+) -> None:
+    """Caminho feliz: FK composta que aponta para a PK composta real não emite Aviso."""
+    tipo = TipoDeDado(categoria=CategoriaDeDado.INTEGER)
+    pedidos = _tabela_com_colunas(
+        "vendas",
+        "pedidos",
+        colunas=[
+            ColunaExtraida(nome="pais_id", tipo_dado=tipo),
+            ColunaExtraida(nome="estado_id", tipo_dado=tipo),
+        ],
+        restricoes_fk_compostas=[
+            RestricaoDeFkComposta(
+                colunas_locais=("pais_id", "estado_id"),
+                nome_escopo_referenciado="vendas",
+                nome_tabela_referenciada="estados",
+                colunas_referenciadas=("pais_id", "id"),
+            )
+        ],
+    )
+    estados = _tabela_com_colunas(
+        "vendas",
+        "estados",
+        colunas=[
+            ColunaExtraida(nome="pais_id", tipo_dado=tipo, chave_primaria=True),
+            ColunaExtraida(nome="id", tipo_dado=tipo, chave_primaria=True),
+        ],
+    )
+    extrator = construir_extrator_fake(
+        {"vendas": Sucesso([("vendas", "pedidos"), ("vendas", "estados")])},
+        tabelas_customizadas={
+            ("vendas", "pedidos"): pedidos,
+            ("vendas", "estados"): estados,
+        },
+    )
+    orquestrador = OrquestradorParalelo(max_trabalhadores=4)
+
+    resultado = orquestrador.extrair(["vendas"], extrator)
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.avisos == []
+
+
+def test_extrair_fk_composta_fora_do_lote_nao_emite_aviso(
+    construir_extrator_fake: Callable[..., ExtratorFake],
+) -> None:
+    """Borda: tabela referenciada fora do lote não gera Aviso — sem visibilidade.
+
+    Mesma regra já aplicada ao `relationships` single-column do GeradorDbt.
+    """
+    tipo = TipoDeDado(categoria=CategoriaDeDado.INTEGER)
+    pedidos = _tabela_com_colunas(
+        "vendas",
+        "pedidos",
+        colunas=[
+            ColunaExtraida(nome="pais_id", tipo_dado=tipo),
+            ColunaExtraida(nome="estado_id", tipo_dado=tipo),
+        ],
+        restricoes_fk_compostas=[
+            RestricaoDeFkComposta(
+                colunas_locais=("pais_id", "estado_id"),
+                nome_escopo_referenciado="geografia",
+                nome_tabela_referenciada="estados",
+                colunas_referenciadas=("pais_id", "id"),
+            )
+        ],
+    )
+    extrator = construir_extrator_fake(
+        {"vendas": Sucesso([("vendas", "pedidos")])},
+        tabelas_customizadas={("vendas", "pedidos"): pedidos},
+    )
+    orquestrador = OrquestradorParalelo(max_trabalhadores=4)
+
+    resultado = orquestrador.extrair(["vendas"], extrator)
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.avisos == []
