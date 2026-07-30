@@ -1311,7 +1311,7 @@ componentes.
 | `percentual_nulo == 0.0` **ou** `coluna.nao_nulavel` | `not_null` |
 | `chave_estrangeira == True` **e** tabela referenciada presente no lote analisado | `relationships` → `ref()` do staging model referenciado |
 | `chave_estrangeira == True` **e** tabela referenciada ausente do lote | sem teste + `Aviso` |
-| `valores_frequentes` não vazio, `percentual_unico < 10.0` **e** cobertura da amostra ≥ 90% | `accepted_values`, com `config: {severity: warn}` |
+| `_elegivel_para_enumeracao` aprova a coluna (ver critérios abaixo) | `accepted_values`, com `config: {severity: warn}` |
 
 `unique`/`not_null` são suprimidos quando a coluna já é `chave_primaria`
 (PK implica os dois). Combinar o fato estrutural do schema
@@ -1321,16 +1321,58 @@ sugerir teste só a partir de amostra tem o mesmo viés estatístico que
 motivou aquela issue. `accepted_values` usa `severity: warn` porque é
 enumeração exaustiva calculada sobre `valores_frequentes` (top-10
 **amostral**, não a população completa) — um valor de cauda longa fora da
-amostra não deve quebrar CI silenciosamente. Além disso, só é sugerido
-quando a soma das contagens dos top-10 (`_cobertura_dos_valores_frequentes`)
-cobre pelo menos 90% dos valores **não-nulos** de
-`MetadadosDeAmostra.tamanho_amostra` — o denominador exclui os nulos porque
-`valores_frequentes` também é calculado só sobre não-nulos
-(`AnalisadorDeMetricasDeColuna`); dividir pelo total penalizaria
-injustamente uma coluna categórica com muitos nulos cujos valores presentes
-já são exaustivos. Cobertura baixa é sinal de que a lista está longe de ser
-exaustiva mesmo dentro do universo não-nulo amostrado, então nem o `warn`
-compensa sugerir o teste. `relationships` aponta para
+amostra não deve quebrar CI silenciosamente.
+
+**Cinco critérios de elegibilidade — `_elegivel_para_enumeracao` (issue
+#95):** rodando o wizard contra um banco de teste real, os critérios
+originais (só `percentual_unico < 10.0` + cobertura) sugeriram
+`accepted_values` para `criado_em` (TIMESTAMP travado em 2 valores
+literais na amostra), `produto_codigo` (código de catálogo crescente,
+`PRD-1..4` na amostra) e `quantidade` (INTEGER de baixa cardinalidade só
+na amostra, alta variação esperada na população). `_elegivel_para_enumeracao`
+(`generators/_metricas.py`, compartilhada entre `GeradorDbt` e
+`GeradorContextoDeIA`) combina, todos obrigatórios:
+
+1. **Categoria não excluída** — `_CATEGORIAS_EXCLUIDAS_DE_ENUMERACAO =
+   {TIMESTAMP, DATE, TIME, UUID, JSON, ARRAY}`: monotônicas por natureza
+   (`TIMESTAMP`/`DATE`/`TIME` — nenhuma amostra torna um "criado em" um
+   universo fechado), defesa barata (`UUID` — identidade, nunca categoria)
+   ou semanticamente incompatíveis com enum (`JSON`/`ARRAY`).
+   Deliberadamente **sem** `INTEGER`/`NUMERIC` em bloco —
+   `quantidade`/`status_code`/`rating` podem ser categóricos reais; o
+   problema desses é amostra pequena (critério 2), não o tipo.
+2. **Piso de amostra** — `tamanho_amostra >= _TAMANHO_AMOSTRA_MINIMO_ENUMERACAO
+   (100)`, mesmo valor do `Aviso` de baixo sinal do
+   `AnalisadorDeMetricasDeColuna`. Antes desta issue, só o
+   `GeradorContextoDeIA` tinha esse piso (`_TAMANHO_AMOSTRA_MINIMO_ENUM`,
+   local); o `GeradorDbt` não tinha nenhum.
+3. **Teto de cardinalidade real** — contagem de valores distintos
+   reconstruída via `_contagem_de_distintos` (`percentual_unico` aplicado
+   sobre os não-nulos da amostra inteira, **não** `len(valores_frequentes)`)
+   menor que `_CARDINALIDADE_MAXIMA_ACCEPTED_VALUES (10)`.
+   `valores_frequentes` é truncado em top-10 pelo Analisador, então contar
+   o tamanho da lista não distingue "a coluna tem exatamente 10 distintos"
+   de "tem 200 e só vemos os 10 mais frequentes"; a contagem reconstruída
+   resolve essa ambiguidade sem campo novo em `MetricasBaseColuna`.
+4. **`percentual_unico < 10.0`** — sinal de baixa cardinalidade relativa
+   (critério original).
+5. **Cobertura** — soma das contagens dos top-10
+   (`_cobertura_dos_valores_frequentes`) cobre pelo menos 90% dos valores
+   **não-nulos** de `MetadadosDeAmostra.tamanho_amostra` (critério
+   original) — o denominador exclui os nulos porque `valores_frequentes`
+   também é calculado só sobre não-nulos; dividir pelo total penalizaria
+   injustamente uma coluna categórica com muitos nulos cujos valores
+   presentes já são exaustivos. Cobertura baixa é sinal de que a lista está
+   longe de ser exaustiva mesmo dentro do universo não-nulo amostrado.
+
+Detectar um código de catálogo crescente disfarçado de categórico (ex.
+`produto_codigo` com prefixo fixo + sufixo numérico) via parsing de
+string foi avaliado e adiado — exigiria inferir a forma do dado, mais
+próximo da heurística de análise automática que a Restrição 5 do PRD
+veda nesta versão do que uma regra determinística simples; documentado
+como limitação conhecida.
+
+`relationships` aponta para
 `ref()` (não `source()`) porque testa o dado já castado pelo staging, não o
 bruto; só é gerado quando a tabela referenciada também foi analisada nesta
 execução — apontar `ref()` para um model que este Gerador não produziu
@@ -1390,8 +1432,9 @@ final, nunca no `pytest` do próprio ddf.
 *Testes soft de nulo/unicidade — thresholds 10%/95%, não 5%/90%.* Perto do
 piso de amostra (`_TAMANHO_AMOSTRA_MINIMO_SOFT = 100`, mesmo valor de
 `_TAMANHO_AMOSTRA_MINIMO_AVISO` em `AnalisadorDeMetricasDeColuna`, mas
-redefinido localmente — mesmo padrão já usado por
-`GeradorContextoDeIA._TAMANHO_AMOSTRA_MINIMO_ENUM`), o erro padrão de uma
+redefinido localmente — mesmo padrão do piso compartilhado
+`_TAMANHO_AMOSTRA_MINIMO_ENUMERACAO` em `generators/_metricas.py`, issue
+#95), o erro padrão de uma
 proporção é da mesma ordem de um threshold mais apertado: em N=100, o erro
 padrão perto de p=0.05 é de ~2,2 pontos percentuais, e perto de p=0.90 é de
 ~3 pontos. Um threshold de 5%/90% faria a sugestão oscilar entre
@@ -1486,16 +1529,16 @@ de rodapé de `MetadadosDeAmostra` no `GeradorMarkdown`.
 tabela (chunk endereçável independentemente, para um agente carregar só o
 subconjunto do schema relevante à tarefa) e, quando aplicável, uma seção
 `esquema_de_consulta.colunas_filtraveis` (tool/function-calling schema):
-sugestão de filtro `enum` quando a coluna não é PK, a amostra tem
-`tamanho_amostra >= 100` (mesmo piso do `Aviso` de baixo sinal do
-`AnalisadorDeMetricasDeColuna`) e a cobertura dos top-10 `valores_frequentes`
-sobre os não-nulos da amostra é `>= 0.9` — reaproveita **exatamente** a
-função `_cobertura_dos_valores_frequentes` e a constante
-`_COBERTURA_MINIMA_ACCEPTED_VALUES`, extraídas de `gerador_dbt.py` para
-`generators/_metricas.py`, já que é a mesma pergunta estatística que o
-`GeradorDbt` resolveu para `accepted_values`. `esquema_de_consulta` fica em
-chave própria, nunca misturada nos campos descritivos da coluna — separa
-"dado passivo" de "contrato de execução".
+sugestão de filtro `enum` quando a coluna não é PK **e**
+`_elegivel_para_enumeracao` aprova a coluna (ver os 5 critérios na seção
+do `GeradorDbt` acima — issue #95) — reaproveita **exatamente** a mesma
+função de `generators/_metricas.py`, já que é a mesma pergunta estatística
+que o `GeradorDbt` resolveu para `accepted_values`. A checagem de
+`chave_primaria` fica fora da função compartilhada (PK é identificador,
+não filtro de enum — regra específica deste Gerador, não de elegibilidade
+estatística). `esquema_de_consulta` fica em chave própria, nunca misturada
+nos campos descritivos da coluna — separa "dado passivo" de "contrato de
+execução".
 
 Fora de escopo (decisão registrada, não implícita): inferência de
 `papel_de_negocio`/`regras_de_negocio` a partir de estatísticas exigiria
