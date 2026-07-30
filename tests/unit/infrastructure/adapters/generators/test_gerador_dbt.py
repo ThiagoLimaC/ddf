@@ -45,6 +45,12 @@ def _coluna(modelo: dict[str, Any], nome: str) -> dict[str, Any]:
     return next(c for c in modelo["columns"] if c["name"] == nome)
 
 
+def _accepted_values(coluna_yaml: dict[str, Any]) -> dict[str, Any] | None:
+    testes = coluna_yaml.get("tests", [])
+    dicts = [t for t in testes if isinstance(t, dict) and "accepted_values" in t]
+    return dicts[0]["accepted_values"] if dicts else None
+
+
 def test_caminho_feliz_gera_artefatos_por_escopo(
     tmp_path: Path,
     construir_coluna: Callable[..., ColunaAnalisada],
@@ -503,6 +509,138 @@ def test_accepted_values_considera_apenas_nao_nulos_no_denominador(
     testes = coluna_yaml["tests"]
     accepted = next(t for t in testes if isinstance(t, dict))
     assert accepted["accepted_values"]["values"] == ["ativo", "inativo"]
+
+
+def test_timestamp_nunca_sugere_accepted_values_mesmo_com_cobertura_total(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """TIMESTAMP nunca sugere accepted_values, mesmo com cobertura/cardinalidade ok.
+
+    Issue #95.
+
+    Achado real: `criado_em` travado em 2 valores literais de data/hora
+    numa amostra pequena passava nos critérios antigos (percentual_unico<10
+    + cobertura>=0.9), mas datas são monotônicas por natureza — nenhuma
+    amostra torna um "criado em" um universo fechado.
+    """
+    metrica = MetricasBaseColuna(
+        percentual_nulo=0.0,
+        percentual_unico=2.0,
+        valores_frequentes=[("2024-01-01T00:00:00", 60), ("2024-01-02T00:00:00", 40)],
+    )
+    coluna = construir_coluna(
+        nome="criado_em",
+        tipo_dado=TipoDeDado(categoria=CategoriaDeDado.TIMESTAMP),
+        metricas=[metrica],
+    )
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=100)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "criado_em")
+    assert _accepted_values(coluna_yaml) is None
+
+
+def test_amostra_abaixo_do_piso_nao_sugere_accepted_values(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Amostra abaixo do piso não sugere accepted_values, mesmo com cobertura total.
+
+    Issue #95.
+
+    Antes desta issue, o `GeradorDbt` não tinha piso de amostra — só
+    `GeradorContextoDeIA` tinha (`_TAMANHO_AMOSTRA_MINIMO_ENUM`), e os dois
+    divergiam por isso.
+    """
+    metrica = MetricasBaseColuna(
+        percentual_nulo=0.0,
+        percentual_unico=5.0,
+        valores_frequentes=[("a", 10), ("b", 10)],
+    )
+    coluna = construir_coluna(nome="flag", metricas=[metrica])
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=20)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "flag")
+    assert _accepted_values(coluna_yaml) is None
+
+
+def test_exatamente_dez_distintos_reconstruidos_nao_sugere_accepted_values(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Teto de cardinalidade pega o que `percentual_unico<10` sozinho não pegaria (#95).
+
+    200 linhas, `percentual_unico=5.0` (passaria no critério antigo), mas a
+    contagem de distintos reconstruída (`200 * 0.05 = 10`) bate o teto —
+    `valores_frequentes` truncado em 10 não distingue "tem exatamente 10
+    distintos" de "tem 200 e só vemos os 10 mais frequentes".
+    """
+    metrica = MetricasBaseColuna(
+        percentual_nulo=0.0,
+        percentual_unico=5.0,
+        valores_frequentes=[(str(v), 20) for v in range(10)],
+    )
+    coluna = construir_coluna(nome="codigo", metricas=[metrica])
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=200)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "codigo")
+    assert _accepted_values(coluna_yaml) is None
+
+
+def test_nove_distintos_com_amostra_e_cobertura_ok_sugere_accepted_values(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Abaixo do teto de cardinalidade, com amostra e cobertura ok, ainda sugere (#95).
+
+    200 linhas, `percentual_unico=4.5` reconstrói pra 9 distintos — abaixo
+    do teto de 10 — e os 9 valores cobrem 190/200 (95%) da amostra.
+    """
+    valores_frequentes = [(str(v), 21) for v in range(8)] + [("8", 22)]
+    metrica = MetricasBaseColuna(
+        percentual_nulo=0.0,
+        percentual_unico=4.5,
+        valores_frequentes=valores_frequentes,
+    )
+    coluna = construir_coluna(nome="codigo", metricas=[metrica])
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=200)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "codigo")
+    testes = coluna_yaml["tests"]
+    accepted = next(t for t in testes if isinstance(t, dict))
+    assert accepted["accepted_values"]["values"] == [str(v) for v in range(9)]
 
 
 def test_coluna_unknown_nao_recebe_cast(

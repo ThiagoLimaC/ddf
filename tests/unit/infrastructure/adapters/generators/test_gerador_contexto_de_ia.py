@@ -14,6 +14,7 @@ from ddf.domain.model.analysis import (
 )
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
+from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.shared.resultado import Falha, Sucesso
 from ddf.infrastructure.adapters.generators.gerador_contexto_de_ia import (
     GeradorContextoDeIA,
@@ -223,6 +224,103 @@ def test_amostra_pequena_nao_sugere_enum_mesmo_com_cobertura_total(
     assert "esquema_de_consulta" not in chunk
 
 
+def test_timestamp_nunca_sugere_enum_mesmo_com_cobertura_total(
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    tmp_path: Path,
+) -> None:
+    """TIMESTAMP nunca sugere enum, mesmo com cobertura/cardinalidade favoráveis (#95).
+
+    Datas são monotônicas por natureza — nenhuma amostra torna um "criado
+    em" um universo fechado, mesmo que a amostra pequena só tenha visto 2
+    valores literais.
+    """
+    metrica = MetricasBaseColuna(
+        percentual_nulo=0.0,
+        percentual_unico=2.0,
+        valores_frequentes=[("2024-01-01T00:00:00", 60), ("2024-01-02T00:00:00", 40)],
+    )
+    coluna = construir_coluna(
+        nome="criado_em",
+        tipo_dado=TipoDeDado(categoria=CategoriaDeDado.TIMESTAMP),
+        metricas=[metrica],
+    )
+    tabela = construir_tabela(
+        colunas=[coluna], nome_tabela="pedidos", tamanho_amostra=100
+    )
+    banco = construir_banco([tabela])
+
+    resultado = GeradorContextoDeIA()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    chunk = _ler_json(tmp_path / "tabelas" / "escopo" / "pedidos.json")
+    assert "esquema_de_consulta" not in chunk
+
+
+def test_exatamente_dez_distintos_reconstruidos_nao_sugere_enum(
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    tmp_path: Path,
+) -> None:
+    """Teto de cardinalidade pega o que `percentual_unico<10` sozinho não pegaria (#95).
+
+    200 linhas, `percentual_unico=5.0` (< 10, passaria no critério antigo),
+    mas a contagem de distintos reconstruída (`200 * 0.05 = 10`) bate o
+    teto — a lista de `valores_frequentes` (truncada em 10) não distingue
+    "tem exatamente 10 distintos" de "tem 200 e só vemos os 10 mais
+    frequentes", então o teto de cardinalidade real evita a enumeração.
+    """
+    metrica = MetricasBaseColuna(
+        percentual_nulo=0.0,
+        percentual_unico=5.0,
+        valores_frequentes=[(str(v), 20) for v in range(10)],
+    )
+    coluna = construir_coluna(nome="codigo", metricas=[metrica])
+    tabela = construir_tabela(
+        colunas=[coluna], nome_tabela="pedidos", tamanho_amostra=200
+    )
+    banco = construir_banco([tabela])
+
+    resultado = GeradorContextoDeIA()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    chunk = _ler_json(tmp_path / "tabelas" / "escopo" / "pedidos.json")
+    assert "esquema_de_consulta" not in chunk
+
+
+def test_nove_distintos_com_amostra_e_cobertura_ok_sugere_enum(
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    tmp_path: Path,
+) -> None:
+    """Abaixo do teto de cardinalidade, com amostra e cobertura ok, ainda sugere (#95).
+
+    200 linhas, `percentual_unico=4.5` reconstrói pra 9 distintos — abaixo
+    do teto de 10 — e os 9 valores cobrem 190/200 (95%) da amostra.
+    """
+    valores_frequentes = [(str(v), 21) for v in range(8)] + [("8", 22)]
+    metrica = MetricasBaseColuna(
+        percentual_nulo=0.0,
+        percentual_unico=4.5,
+        valores_frequentes=valores_frequentes,
+    )
+    coluna = construir_coluna(nome="codigo", metricas=[metrica])
+    tabela = construir_tabela(
+        colunas=[coluna], nome_tabela="pedidos", tamanho_amostra=200
+    )
+    banco = construir_banco([tabela])
+
+    resultado = GeradorContextoDeIA()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    chunk = _ler_json(tmp_path / "tabelas" / "escopo" / "pedidos.json")
+    filtraveis = chunk["esquema_de_consulta"]["colunas_filtraveis"]
+    assert filtraveis[0]["coluna"] == "codigo"
+
+
 def test_chave_primaria_nunca_vira_sugestao_de_enum(
     construir_coluna: Callable[..., ColunaAnalisada],
     construir_tabela: Callable[..., TabelaAnalisada],
@@ -235,9 +333,7 @@ def test_chave_primaria_nunca_vira_sugestao_de_enum(
         percentual_unico=0.03,
         valores_frequentes=[("1", 60), ("2", 35)],
     )
-    coluna = construir_coluna(
-        nome="id", chave_primaria=True, metricas=[metrica]
-    )
+    coluna = construir_coluna(nome="id", chave_primaria=True, metricas=[metrica])
     tabela = construir_tabela(
         colunas=[coluna], nome_tabela="pedidos", tamanho_amostra=100
     )
