@@ -13,6 +13,7 @@ from ddf.domain.model.analysis import (
     TabelaAnalisada,
 )
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.shared.resultado import Falha, Sucesso
 from ddf.infrastructure.adapters.generators.gerador_contexto_de_ia import (
     GeradorContextoDeIA,
@@ -353,6 +354,50 @@ def test_amostra_vazia_sinaliza_completude_sem_evidencia(
     assert isinstance(resultado, Sucesso)
     chunk = _ler_json(tmp_path / "tabelas" / "escopo" / "pedidos.json")
     assert chunk["metricas_tabela"] == {"completude": 100.0, "amostra_vazia": True}
+
+
+def test_restricoes_unicas_presente_e_ordenada_no_chunk(
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    tmp_path: Path,
+) -> None:
+    """UNIQUE composto aparece como lista de listas, ordenada por colunas."""
+    tabela = construir_tabela(
+        colunas=[construir_coluna(nome="loja_id"), construir_coluna(nome="sku")],
+        nome_tabela="estoque_por_loja",
+        restricoes_unicas=[
+            RestricaoUnica(colunas=("sku", "loja_id")),
+            RestricaoUnica(colunas=("loja_id", "sku")),
+        ],
+    )
+    banco = construir_banco([tabela])
+
+    resultado = GeradorContextoDeIA()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    chunk = _ler_json(tmp_path / "tabelas" / "escopo" / "estoque_por_loja.json")
+    assert chunk["restricoes_unicas"] == [
+        ["loja_id", "sku"],
+        ["sku", "loja_id"],
+    ]
+
+
+def test_restricoes_unicas_ausente_omite_chave(
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    tmp_path: Path,
+) -> None:
+    """Borda: tabela sem UNIQUE composto não inclui a chave `restricoes_unicas`."""
+    tabela = construir_tabela(colunas=[construir_coluna()], nome_tabela="pedidos")
+    banco = construir_banco([tabela])
+
+    resultado = GeradorContextoDeIA()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    chunk = _ler_json(tmp_path / "tabelas" / "escopo" / "pedidos.json")
+    assert "restricoes_unicas" not in chunk
 
 
 def test_geracao_e_deterministica(

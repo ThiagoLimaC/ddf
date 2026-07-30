@@ -405,6 +405,26 @@
     Dados + PO) antes da implementação, apesar de a própria issue não
     exigir isso — achados incorporados ao plano antes do código,
     registrados em `plan/registry-plan/issue-90-*.md`
+- [x] `GeradorMarkdown`/`GeradorContextoDeIA` — reabertura de escopo da #89
+  (issue #93): fecha a assimetria apontada pelo PO na revisão da #89 —
+  `restricoes_unicas` (nível tabela) só era consumido pelo `GeradorDbt`:
+  - `GeradorMarkdown`: marcador `"UNIQUE (composto)"` por coluna em
+    `_marcadores_de_restricao` (participação, não mutuamente exclusivo com
+    `"UNIQUE"` single-column) + bullet "Restrições UNIQUE compostas" em
+    "Fatos extraídos" com os grupos completos
+  - `GeradorContextoDeIA`: `restricoes_unicas: list[list[str]]` na raiz do
+    JSON por tabela, chave omitida quando vazia (mesma convenção de
+    `metricas_tabela`/`esquema_de_consulta`)
+  - Grupos ordenados deterministicamente (`sorted` por tupla de colunas)
+    nos dois Geradores — a ordem de extração vem do catálogo (OID/posição
+    do índice), sem significado humano; sem ordenar, reextrações do mesmo
+    schema lógico gerariam diff espúrio no artefato versionado. `GeradorDbt`
+    não é tocado, mantém a ordem atual — fora do escopo desta issue
+  - Banca de revisão do plano (Arquiteto de Software + Engenheiro de
+    Dados + PO) rodada antes da implementação, apesar de a própria issue
+    classificar o escopo como pequeno e dispensar banca completa —
+    achados incorporados ao plano antes do código, registrados em
+    `plan/registry-plan/issue-93-*.md`
 
 ## 7. CLI real wizard (issue #16) — concluída
 

@@ -242,7 +242,15 @@ def _montar_tabela_json(tabela: TabelaAnalisada) -> dict[str, Any]:
         confirmada pela amostra" de "nenhuma linha inspecionada"
         já que o valor numérico de `completude` é o mesmo nos dois
         casos. `esquema_de_consulta` fica ausente se nenhuma coluna sugerir
-        filtro de enum.
+        filtro de enum. `restricoes_unicas` fica ausente se a tabela não
+        tem UNIQUE composto; quando presente, é lista de listas de nomes de
+        coluna (não lista de dicts nomeados) — `RestricaoUnica` só carrega
+        `colunas`, sem metadado adicional que justifique um wrapper, ao
+        contrário das arestas de `grafo_de_relacionamentos`. Grupos
+        ordenados por `colunas` — a ordem de extração vem do catálogo
+        (posição do índice), sem significado humano, e reextrações do
+        mesmo schema lógico não deveriam gerar diff espúrio no artefato
+        versionado.
     """
     tamanho_amostra = tabela.metadados_amostra.tamanho_amostra
     conteudo: dict[str, Any] = {
@@ -265,6 +273,12 @@ def _montar_tabela_json(tabela: TabelaAnalisada) -> dict[str, Any]:
             "completude": metrica_tabela.completude,
             "amostra_vazia": tamanho_amostra == 0,
         }
+
+    if tabela.restricoes_unicas:
+        conteudo["restricoes_unicas"] = [
+            list(restricao.colunas)
+            for restricao in sorted(tabela.restricoes_unicas, key=lambda r: r.colunas)
+        ]
 
     conteudo["colunas"] = [_serializar_coluna(coluna) for coluna in tabela.colunas]
 
