@@ -4,6 +4,7 @@ from pathlib import Path
 
 import yaml
 
+from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
@@ -191,6 +192,42 @@ def test_hash_muda_quando_unique_composto_e_criado(
     )
 
     resultado = sobrescrita(tabela_com_unique_composto)
+
+    assert isinstance(resultado, Sucesso)
+    assert "algum campo estrutural foi" in resultado.avisos[0].mensagem
+    hash_novo = yaml.safe_load(caminho.read_text(encoding="utf-8"))["hash"]
+    assert hash_novo != hash_original
+
+
+def test_hash_muda_quando_fk_composta_e_criada(
+    tmp_path: Path, tabela_extraida: TabelaExtraida
+) -> None:
+    """Borda: restricoes_fk_compostas entra no hash estrutural.
+
+    Sem isso, criar/remover uma FK composta no banco não dispararia aviso
+    de mudança estrutural nem regeneração do skeleton (issue #95, mesmo
+    tratamento já dado a restricoes_unicas na #89).
+    """
+    sobrescrita = SobrescritaDeTabela(tmp_path)
+    sobrescrita(tabela_extraida)
+
+    caminho = tmp_path / "public" / "clientes.yaml"
+    hash_original = yaml.safe_load(caminho.read_text(encoding="utf-8"))["hash"]
+
+    tabela_com_fk_composta = tabela_extraida.model_copy(
+        update={
+            "restricoes_fk_compostas": [
+                RestricaoDeFkComposta(
+                    colunas_locais=("id", "nome"),
+                    nome_escopo_referenciado="vendas",
+                    nome_tabela_referenciada="pedidos",
+                    colunas_referenciadas=("cliente_id", "cliente_nome"),
+                )
+            ],
+        }
+    )
+
+    resultado = sobrescrita(tabela_com_fk_composta)
 
     assert isinstance(resultado, Sucesso)
     assert "algum campo estrutural foi" in resultado.avisos[0].mensagem

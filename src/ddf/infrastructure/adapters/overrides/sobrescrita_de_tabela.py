@@ -54,6 +54,17 @@ def _calcular_hash_estrutural(tabela: TabelaExtraida) -> str:
         )
     for restricao in tabela.restricoes_unicas:
         partes.append("restricao_unica:" + ",".join(restricao.colunas))
+    for restricao_fk in tabela.restricoes_fk_compostas:
+        partes.append(
+            "restricao_fk_composta:"
+            + ",".join(restricao_fk.colunas_locais)
+            + "->"
+            + restricao_fk.nome_escopo_referenciado
+            + "."
+            + restricao_fk.nome_tabela_referenciada
+            + ":"
+            + ",".join(restricao_fk.colunas_referenciadas)
+        )
     bruto = "|".join(partes).encode("utf-8")
     return hashlib.sha256(bruto).hexdigest()
 
