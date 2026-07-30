@@ -28,11 +28,9 @@ from ddf.domain.model.analysis import (
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.generators._escrita import escrever_arquivo
 from ddf.infrastructure.adapters.generators._metricas import (
-    _COBERTURA_MINIMA_ACCEPTED_VALUES,
     _cobertura_dos_valores_frequentes,
+    _elegivel_para_enumeracao,
 )
-
-_TAMANHO_AMOSTRA_MINIMO_ENUM = 100
 
 
 def _nome_arquivo(tabela: str) -> str:
@@ -156,15 +154,14 @@ def _sugestao_de_filtro(
 ) -> dict[str, Any] | None:
     """Sugere um filtro `enum` para a coluna, se a amostra sustentar a enumeração.
 
-    Reaproveita `_cobertura_dos_valores_frequentes` (mesma pergunta
-    estatística já resolvida pelo `GeradorDbt` para `accepted_values`):
-    exige `percentual_unico < 10.0` (parece categórica), cobertura dos
-    top-10 valores não-nulos `>= _COBERTURA_MINIMA_ACCEPTED_VALUES`, e um
-    piso de `tamanho_amostra >= _TAMANHO_AMOSTRA_MINIMO_ENUM` (mesmo piso já
-    usado pelo AnalisadorDeMetricasDeColuna para emitir Aviso de baixo sinal)
-    — sem o piso, uma amostra pequena pode parecer 100% categórica só por
-    coincidência de tamanho. Colunas já `chave_primaria=True` nunca entram:
-    PK é identificador, não filtro de enum.
+    Reaproveita `_elegivel_para_enumeracao` (issue #95, mesma pergunta
+    resolvida pelo `GeradorDbt` para `accepted_values`): categoria de dado
+    não monotônica/incompatível, piso de amostra, teto de cardinalidade real,
+    `percentual_unico < 10.0` e cobertura dos top-10 valores não-nulos.
+    Colunas já `chave_primaria=True` nunca entram: PK é identificador, não
+    filtro de enum — checagem específica deste Gerador, fora da função
+    compartilhada (não é sobre "isso é enumerável", é sobre "isso é um
+    filtro de UI útil").
 
     Args:
         coluna: coluna analisada a avaliar.
@@ -174,21 +171,21 @@ def _sugestao_de_filtro(
         Dict com `coluna`, `tipo`, `valores` e `cobertura_amostral`, ou
         `None` se a coluna não atingir os critérios.
     """
-    if coluna.chave_primaria or tamanho_amostra < _TAMANHO_AMOSTRA_MINIMO_ENUM:
+    if coluna.chave_primaria:
         return None
     metrica = _metrica_de_coluna(coluna)
-    if metrica is None or not metrica.valores_frequentes:
-        return None
-    if metrica.percentual_unico >= 10.0:
-        return None
-    cobertura = _cobertura_dos_valores_frequentes(metrica, tamanho_amostra)
-    if cobertura < _COBERTURA_MINIMA_ACCEPTED_VALUES:
+    elegivel = metrica is not None and _elegivel_para_enumeracao(
+        coluna, metrica, tamanho_amostra
+    )
+    if metrica is None or not elegivel:
         return None
     return {
         "coluna": coluna.nome,
         "tipo": "enum",
         "valores": [valor for valor, _ in metrica.valores_frequentes],
-        "cobertura_amostral": round(cobertura, 4),
+        "cobertura_amostral": round(
+            _cobertura_dos_valores_frequentes(metrica, tamanho_amostra), 4
+        ),
     }
 
 
@@ -335,9 +332,7 @@ class GeradorContextoDeIA:
             ],
             "grafo_de_relacionamentos": _montar_grafo(tabelas),
         }
-        resultado_indice = escrever_arquivo(
-            destino / "index.json", _dump_json(indice)
-        )
+        resultado_indice = escrever_arquivo(destino / "index.json", _dump_json(indice))
         if isinstance(resultado_indice, Falha):
             return resultado_indice
 

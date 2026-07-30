@@ -28,10 +28,7 @@ from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.generators._escrita import escrever_arquivo
-from ddf.infrastructure.adapters.generators._metricas import (
-    _COBERTURA_MINIMA_ACCEPTED_VALUES,
-    _cobertura_dos_valores_frequentes,
-)
+from ddf.infrastructure.adapters.generators._metricas import _elegivel_para_enumeracao
 
 _ORIGEM = "GeradorDbt"
 
@@ -299,14 +296,18 @@ def _sugestoes_de_teste(
     mesma constraint composta já no Extraction Context — mudança de escopo
     maior, avaliada e adiada nesta issue.
 
-    `accepted_values` usa `severity: warn` e só é sugerido quando os top-10
-    `valores_frequentes` cobrem pelo menos `_COBERTURA_MINIMA_ACCEPTED_VALUES`
-    dos valores **não-nulos** da amostra (ver
-    `_cobertura_dos_valores_frequentes`): é um teste de enumeração exaustiva
+    `accepted_values` usa `severity: warn` e só é sugerido quando
+    `_elegivel_para_enumeracao` aprova a coluna (issue #95): categoria de
+    dado não monotônica/incompatível (`TIMESTAMP`/`DATE`/`TIME`/`UUID`/
+    `JSON`/`ARRAY` excluídas), amostra acima do piso mínimo, contagem real
+    de distintos abaixo do teto de cardinalidade, `percentual_unico < 10.0`
+    e cobertura dos top-10 `valores_frequentes` sobre os não-nulos da
+    amostra acima do mínimo exigido — é um teste de enumeração exaustiva
     calculado sobre uma amostra parcial, não a população completa, então um
-    valor de cauda longa fora da amostra não deve quebrar CI silenciosamente
-    — e uma cobertura baixa é sinal de que a lista está longe de ser
-    exaustiva mesmo dentro do próprio universo não-nulo amostrado.
+    valor de cauda longa fora da amostra não deve quebrar CI silenciosamente,
+    e os critérios adicionais evitam sugerir enumeração pra colunas que só
+    pareciam categóricas por amostra pequena ou tipo incompatível (ver
+    `_metricas.py` para a justificativa completa de cada critério).
 
     `matches_format` (issue #90) é sugerido quando `formato_detectado` está
     presente, com `severity: warn` (ver `docs/low_level_design.md` para a
@@ -401,22 +402,16 @@ def _sugestoes_de_teste(
                 )
             )
 
-    categorica = (
-        metrica is not None
-        and metrica.valores_frequentes
-        and metrica.percentual_unico < 10.0
-    )
-    if categorica and metrica is not None:
-        cobertura = _cobertura_dos_valores_frequentes(metrica, tamanho_amostra)
-        if cobertura >= _COBERTURA_MINIMA_ACCEPTED_VALUES:
-            testes.append(
-                {
-                    "accepted_values": {
-                        "values": [valor for valor, _ in metrica.valores_frequentes],
-                        "config": {"severity": "warn"},
-                    }
+    elegivel = _elegivel_para_enumeracao(coluna, metrica, tamanho_amostra)
+    if elegivel and metrica is not None:
+        testes.append(
+            {
+                "accepted_values": {
+                    "values": [valor for valor, _ in metrica.valores_frequentes],
+                    "config": {"severity": "warn"},
                 }
-            )
+            }
+        )
 
     return testes
 
