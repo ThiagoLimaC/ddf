@@ -12,6 +12,7 @@ from ddf.domain.model.analysis import (
     TabelaAnalisada,
 )
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.shared.resultado import Falha, Sucesso
 from ddf.infrastructure.adapters.generators.gerador_markdown import GeradorMarkdown
@@ -677,6 +678,106 @@ def test_coluna_totalmente_nula_recebe_nota_em_vez_de_ser_omitida(
     assert "#### observacao" in conteudo
     secao = conteudo.split("#### observacao")[1]
     assert "100% nula" in secao
+
+
+def test_restricoes_unicas_composta_aparece_em_fatos_extraidos(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """UNIQUE composto aparece como bullet em Fatos extraídos, grupos ordenados."""
+    coluna_a = construir_coluna(nome="loja_id")
+    coluna_b = construir_coluna(nome="sku")
+    tabela = construir_tabela(
+        colunas=[coluna_a, coluna_b],
+        restricoes_unicas=[
+            RestricaoUnica(colunas=("sku", "loja_id")),
+            RestricaoUnica(colunas=("loja_id", "sku")),
+        ],
+    )
+    banco = construir_banco([tabela])
+
+    resultado = GeradorMarkdown()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    conteudo = (tmp_path / "escopo" / "tabela.md").read_text()
+    secao_fatos = conteudo.split("## Fatos extraídos")[1].split("## Colunas")[0]
+    assert "Restrições UNIQUE compostas" in secao_fatos
+    assert (
+        "(`loja_id`, `sku`), (`sku`, `loja_id`)" in secao_fatos
+    )  # ordenado por tupla, não pela ordem de origem
+
+
+def test_restricoes_unicas_ausente_omite_bullet(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Borda: tabela sem UNIQUE composto não mostra o bullet."""
+    tabela = construir_tabela(colunas=[construir_coluna()])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorMarkdown()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    conteudo = (tmp_path / "escopo" / "tabela.md").read_text()
+    assert "Restrições UNIQUE compostas" not in conteudo
+
+
+def test_coluna_em_restricao_composta_recebe_marcador_na_tabela_de_colunas(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Coluna participante de UNIQUE composto ganha marcador na coluna Restrição."""
+    coluna_composta = construir_coluna(nome="loja_id")
+    coluna_fora = construir_coluna(nome="descricao")
+    tabela = construir_tabela(
+        colunas=[coluna_composta, coluna_fora],
+        restricoes_unicas=[RestricaoUnica(colunas=("loja_id", "sku"))],
+    )
+    banco = construir_banco([tabela])
+
+    resultado = GeradorMarkdown()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    conteudo = (tmp_path / "escopo" / "tabela.md").read_text()
+    secao_colunas = conteudo.split("## Colunas")[1].split("## Qualidade")[0]
+    linha_loja_id = next(
+        linha for linha in secao_colunas.splitlines() if "loja_id" in linha
+    )
+    linha_descricao = next(
+        linha for linha in secao_colunas.splitlines() if "descricao" in linha
+    )
+    assert "UNIQUE (composto)" in linha_loja_id
+    assert "UNIQUE (composto)" not in linha_descricao
+
+
+def test_coluna_pk_e_em_restricao_composta_nao_mostra_marcador_composto(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Borda: PK que também participa de UNIQUE composto não duplica marcador."""
+    coluna_pk = construir_coluna(nome="id", chave_primaria=True)
+    tabela = construir_tabela(
+        colunas=[coluna_pk],
+        restricoes_unicas=[RestricaoUnica(colunas=("id", "versao"))],
+    )
+    banco = construir_banco([tabela])
+
+    resultado = GeradorMarkdown()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    conteudo = (tmp_path / "escopo" / "tabela.md").read_text()
+    secao_colunas = conteudo.split("## Colunas")[1].split("## Qualidade")[0]
+    linha_id = next(linha for linha in secao_colunas.splitlines() if "id" in linha)
+    assert "PK" in linha_id
+    assert "UNIQUE (composto)" not in linha_id
 
 
 def test_secao_de_valores_frequentes_vazia_explica_o_motivo(

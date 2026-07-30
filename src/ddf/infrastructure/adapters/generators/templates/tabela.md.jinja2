@@ -15,13 +15,16 @@
 - **Total de linhas:** {{ tabela.total_linhas }}
 - **Completude:** {{ tabela | completude }}
 - **Amostra analisada:** {{ tabela.metadados_amostra.tamanho_amostra }} de {{ tabela.total_linhas }} linhas
+{% if tabela.restricoes_unicas %}
+- **Restrições UNIQUE compostas:** {{ tabela | formatar_restricoes_unicas }}
+{% endif %}
 
 ## Colunas
 
 | Nome | Tipo | Restrição | Papel de negócio |
 |---|---|---|---|
 {% for coluna in tabela.colunas %}
-| {{ coluna.nome | escapar }} | {{ coluna.tipo_dado | formatar_tipo | escapar }} | {{ coluna | marcadores_de_restricao | escapar }} | {{ (coluna.papel_de_negocio or "N/D") | escapar }} |
+| {{ coluna.nome | escapar }} | {{ coluna.tipo_dado | formatar_tipo | escapar }} | {{ coluna | marcadores_de_restricao(colunas_compostas) | escapar }} | {{ (coluna.papel_de_negocio or "N/D") | escapar }} |
 {% endfor %}
 
 ## Qualidade dos dados
