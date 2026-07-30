@@ -30,12 +30,18 @@ _CHAVES_PRIMARIAS_SQL = """
     ORDER BY ordinal_position
 """
 
+# constraint_name/ORDER BY (issue #95): a query já filtrava por tabela,
+# mas não expunha constraint_name nem garantia ordem — sem os dois, o
+# código Python não tinha como agrupar colunas de uma mesma FK composta de
+# forma estável entre execuções (mesmo achado da banca da #89 pro
+# agrupamento de UNIQUE composto em _COLUNAS_UNICAS_SQL).
 _CHAVES_ESTRANGEIRAS_SQL = """
     SELECT column_name, referenced_table_schema, referenced_table_name,
-           referenced_column_name
+           referenced_column_name, constraint_name
     FROM information_schema.key_column_usage
     WHERE table_schema = %s AND table_name = %s
       AND referenced_table_name IS NOT NULL
+    ORDER BY constraint_name, ordinal_position
 """
 
 _TOTAL_LINHAS_SQL = """

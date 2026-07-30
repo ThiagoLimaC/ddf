@@ -26,6 +26,9 @@ from ddf.infrastructure.adapters.extractors.construir_colunas_fk import (
 from ddf.infrastructure.adapters.extractors.construir_metadados_de_amostra import (
     construir_metadados_de_amostra,
 )
+from ddf.infrastructure.adapters.extractors.construir_restricoes_fk_compostas import (
+    construir_restricoes_fk_compostas,
+)
 from ddf.infrastructure.adapters.extractors.mariadb._queries import (
     _CHAVES_ESTRANGEIRAS_SQL,
     _CHAVES_PRIMARIAS_SQL,
@@ -354,9 +357,16 @@ class ExtratorMariaDB:
                     colunas_pk.add(nome_coluna_pk)
 
                 cursor.execute(_CHAVES_ESTRANGEIRAS_SQL, (escopo, tabela))
+                linhas_fk = cursor.fetchall()
+                linhas_fk_por_coluna: list[tuple[str, str, str, str]] = []
+                for nome_coluna, escopo_ref, tabela_ref, coluna_ref, _ in linhas_fk:
+                    linhas_fk_por_coluna.append(
+                        (nome_coluna, escopo_ref, tabela_ref, coluna_ref)
+                    )
                 colunas_fk, avisos = construir_colunas_fk(
-                    cursor.fetchall(), origem="ExtratorMariaDB"
+                    linhas_fk_por_coluna, origem="ExtratorMariaDB"
                 )
+                restricoes_fk_compostas = construir_restricoes_fk_compostas(linhas_fk)
 
                 cursor.execute(_COLUNAS_UNICAS_SQL, (escopo, tabela))
                 colunas_unicas, restricoes_unicas = _particionar_colunas_unicas(
@@ -468,6 +478,7 @@ class ExtratorMariaDB:
                     amostra=amostra,
                     metadados_amostra=metadados_amostra,
                     restricoes_unicas=restricoes_unicas,
+                    restricoes_fk_compostas=restricoes_fk_compostas,
                 ),
                 avisos=avisos,
             )
