@@ -87,18 +87,25 @@ def _formatar_tipo(tipo: TipoDeDado) -> str:
     return str(categoria.value)
 
 
-def _marcadores_de_restricao(coluna: ColunaAnalisada) -> str:
-    """Filtro Jinja: combina PK, FK, UNIQUE e NOT NULL numa mesma coluna.
+def _marcadores_de_restricao(
+    coluna: ColunaAnalisada, colunas_compostas: frozenset[str]
+) -> str:
+    """Filtro Jinja: combina PK, FK, UNIQUE (simples/composto) e NOT NULL.
 
     Args:
         coluna: coluna analisada.
+        colunas_compostas: nomes de colunas da tabela que participam de
+            algum UNIQUE composto (ver `_colunas_com_restricao_composta`).
 
     Returns:
-        "PK", "FK → escopo.tabela.coluna", "UNIQUE", "NOT NULL", combinados
-        por vírgula conforme aplicável, ou string vazia se a coluna não tem
-        nenhuma restrição real do schema. "UNIQUE"/"NOT NULL" são omitidos
-        quando a coluna já é PK — PK implica único e não-nulo, marcar os
-        dois seria redundante.
+        "PK", "FK → escopo.tabela.coluna", "UNIQUE", "UNIQUE (composto)",
+        "NOT NULL", combinados por vírgula conforme aplicável, ou string
+        vazia se a coluna não tem nenhuma restrição real do schema.
+        "UNIQUE"/"UNIQUE (composto)"/"NOT NULL" são omitidos quando a
+        coluna já é PK — PK implica único e não-nulo, marcar os dois seria
+        redundante. "UNIQUE (composto)" só sinaliza participação — o
+        agrupamento completo de colunas está no bullet de
+        "Restrições UNIQUE compostas" em "Fatos extraídos".
     """
     marcadores: list[str] = []
     if coluna.chave_primaria:
@@ -111,9 +118,49 @@ def _marcadores_de_restricao(coluna: ColunaAnalisada) -> str:
         )
     if coluna.unica and not coluna.chave_primaria:
         marcadores.append("UNIQUE")
+    if coluna.nome in colunas_compostas and not coluna.chave_primaria:
+        marcadores.append("UNIQUE (composto)")
     if coluna.nao_nulavel and not coluna.chave_primaria:
         marcadores.append("NOT NULL")
     return ", ".join(marcadores)
+
+
+def _colunas_com_restricao_composta(tabela: TabelaAnalisada) -> frozenset[str]:
+    """Nomes de colunas da tabela que participam de algum UNIQUE composto.
+
+    Args:
+        tabela: tabela analisada.
+
+    Returns:
+        Conjunto de nomes de coluna cobertos por algum `RestricaoUnica` da
+        tabela; vazio se a tabela não tem nenhuma constraint composta.
+    """
+    return frozenset(
+        nome for restricao in tabela.restricoes_unicas for nome in restricao.colunas
+    )
+
+
+def _formatar_restricoes_unicas(tabela: TabelaAnalisada) -> str:
+    """Filtro Jinja: formata as constraints UNIQUE compostas da tabela.
+
+    Args:
+        tabela: tabela analisada.
+
+    Returns:
+        Grupos de colunas formatados como "(`col_a`, `col_b`), (`col_c`,
+        `col_d`)", ou string vazia se a tabela não tem nenhuma. Grupos
+        ordenados por `colunas` (ordem estável e determinística) — a ordem
+        de extração vem do catálogo (posição do índice/OID), sem
+        significado humano, e reextrações do mesmo schema lógico não
+        deveriam gerar diff espúrio no artefato versionado. Nomes de
+        coluna passam por `_escapar_celula` e vão entre crase — identifi-
+        cador do Postgres pode conter caractere que quebra ênfase Markdown.
+    """
+    grupos = sorted(tabela.restricoes_unicas, key=lambda r: r.colunas)
+    return ", ".join(
+        "(" + ", ".join(f"`{_escapar_celula(nome)}`" for nome in grupo.colunas) + ")"
+        for grupo in grupos
+    )
 
 
 def _metrica_de_coluna(coluna: ColunaAnalisada) -> MetricasBaseColuna | None:
@@ -286,6 +333,7 @@ _ambiente = Environment(
 _ambiente.filters["escapar"] = _escapar_celula
 _ambiente.filters["formatar_tipo"] = _formatar_tipo
 _ambiente.filters["marcadores_de_restricao"] = _marcadores_de_restricao
+_ambiente.filters["formatar_restricoes_unicas"] = _formatar_restricoes_unicas
 _ambiente.filters["completude"] = _formatar_completude
 _ambiente.filters["linha_qualidade"] = _linha_qualidade
 _ambiente.filters["secoes_valores_frequentes"] = _secoes_valores_frequentes
@@ -314,7 +362,11 @@ class GeradorMarkdown:
         avisos: list[Aviso] = []
         for tabela in entrada.tabelas:
             caminho_tabela = destino / tabela.nome_escopo / f"{tabela.nome_tabela}.md"
-            conteudo = _TEMPLATE_TABELA.render(tabela=tabela, gerado_em=gerado_em)
+            conteudo = _TEMPLATE_TABELA.render(
+                tabela=tabela,
+                gerado_em=gerado_em,
+                colunas_compostas=_colunas_com_restricao_composta(tabela),
+            )
             resultado = escrever_arquivo(caminho_tabela, conteudo)
             if isinstance(resultado, Falha):
                 return resultado
