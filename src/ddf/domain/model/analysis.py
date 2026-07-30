@@ -5,6 +5,7 @@ from typing_extensions import Self
 
 from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import TipoDeDado
 from ddf.domain.model.curation import BancoCurado
@@ -102,6 +103,14 @@ class TabelaAnalisada(BaseModel):
         description=(
             "UNIQUE composto (2+ colunas) real do schema. UNIQUE "
             "single-column continua representado por ColunaAnalisada.unica."
+        ),
+    )
+    restricoes_fk_compostas: list[RestricaoDeFkComposta] = Field(
+        default_factory=list,
+        description=(
+            "FK composta (2+ colunas locais) real do schema, agrupada por "
+            "constraint. FK de coluna única continua representada por "
+            "ColunaAnalisada.referencia."
         ),
     )
 

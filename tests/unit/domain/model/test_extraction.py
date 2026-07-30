@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import TipoDeDado
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
@@ -71,6 +72,42 @@ def test_cria_tabela_extraida_com_restricao_unica_composta(
 
     assert tabela.restricoes_unicas == [
         RestricaoUnica(colunas=("codigo_pais", "codigo_local"))
+    ]
+
+
+def test_cria_tabela_extraida_com_restricao_fk_composta(
+    tipo_integer: TipoDeDado,
+    metadados_de_amostra: MetadadosDeAmostra,
+    amostra_df: pl.DataFrame,
+) -> None:
+    """Caminho feliz: TabelaExtraida guarda FK composta de colunas reais."""
+    tabela = TabelaExtraida(
+        nome_tabela="pedidos",
+        nome_escopo="vendas",
+        colunas=[
+            ColunaExtraida(nome="pais_id", tipo_dado=tipo_integer),
+            ColunaExtraida(nome="estado_id", tipo_dado=tipo_integer),
+        ],
+        total_linhas=10,
+        amostra=amostra_df,
+        metadados_amostra=metadados_de_amostra,
+        restricoes_fk_compostas=[
+            RestricaoDeFkComposta(
+                colunas_locais=("pais_id", "estado_id"),
+                nome_escopo_referenciado="geografia",
+                nome_tabela_referenciada="estados",
+                colunas_referenciadas=("pais_id", "id"),
+            )
+        ],
+    )
+
+    assert tabela.restricoes_fk_compostas == [
+        RestricaoDeFkComposta(
+            colunas_locais=("pais_id", "estado_id"),
+            nome_escopo_referenciado="geografia",
+            nome_tabela_referenciada="estados",
+            colunas_referenciadas=("pais_id", "id"),
+        )
     ]
 
 
@@ -169,6 +206,31 @@ def test_tabela_extraida_restricao_unica_com_coluna_inexistente_e_invalida(
         )
 
 
+def test_tabela_extraida_restricao_fk_composta_com_coluna_inexistente_e_invalida(
+    tipo_integer: TipoDeDado,
+    metadados_de_amostra: MetadadosDeAmostra,
+    amostra_df: pl.DataFrame,
+) -> None:
+    """Erro esperado: RestricaoDeFkComposta citando coluna local inexistente."""
+    with pytest.raises(ValidationError, match="inexistente"):
+        TabelaExtraida(
+            nome_tabela="pedidos",
+            nome_escopo="vendas",
+            colunas=[ColunaExtraida(nome="pais_id", tipo_dado=tipo_integer)],
+            total_linhas=10,
+            amostra=amostra_df,
+            metadados_amostra=metadados_de_amostra,
+            restricoes_fk_compostas=[
+                RestricaoDeFkComposta(
+                    colunas_locais=("pais_id", "estado_id"),
+                    nome_escopo_referenciado="geografia",
+                    nome_tabela_referenciada="estados",
+                    colunas_referenciadas=("pais_id", "id"),
+                )
+            ],
+        )
+
+
 # Borda
 def test_coluna_extraida_sem_chaves_usa_defaults(tipo_integer: TipoDeDado) -> None:
     """Borda: coluna comum, sem chave primária/estrangeira, usa defaults False/None."""
@@ -195,3 +257,21 @@ def test_tabela_extraida_sem_restricoes_unicas_usa_lista_vazia(
     )
 
     assert tabela.restricoes_unicas == []
+
+
+def test_tabela_extraida_sem_restricoes_fk_compostas_usa_lista_vazia(
+    tipo_integer: TipoDeDado,
+    metadados_de_amostra: MetadadosDeAmostra,
+    amostra_df: pl.DataFrame,
+) -> None:
+    """Borda: tabela sem nenhuma FK composta tem restricoes_fk_compostas == []."""
+    tabela = TabelaExtraida(
+        nome_tabela="pedidos",
+        nome_escopo="public",
+        colunas=[ColunaExtraida(nome="id", tipo_dado=tipo_integer)],
+        total_linhas=10,
+        amostra=amostra_df,
+        metadados_amostra=metadados_de_amostra,
+    )
+
+    assert tabela.restricoes_fk_compostas == []

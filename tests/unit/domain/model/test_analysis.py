@@ -13,6 +13,7 @@ from ddf.domain.model.analysis import (
 )
 from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import TipoDeDado
 from ddf.domain.model.curation import BancoCurado, ColunaCurada, TabelaCurada
@@ -156,6 +157,47 @@ def test_iniciar_contexto_propaga_restricoes_unicas_sem_mudanca_de_codigo(
 
     assert contexto.analisado.tabelas[0].restricoes_unicas == [
         RestricaoUnica(colunas=("codigo_pais", "codigo_local"))
+    ]
+
+
+def test_iniciar_contexto_propaga_restricoes_fk_compostas_sem_mudanca_de_codigo(
+    tipo_integer: TipoDeDado, metadados_de_amostra: MetadadosDeAmostra
+) -> None:
+    """Caminho feliz: restricoes_fk_compostas atravessa model_dump/model_validate.
+
+    Mesma regressão de `test_iniciar_contexto_propaga_restricoes_unicas_
+    sem_mudanca_de_codigo` (issue #9), agora pro campo novo da issue #95.
+    """
+    tabela_curada = TabelaCurada(
+        nome_tabela="pedidos",
+        nome_escopo="vendas",
+        colunas=[
+            ColunaCurada(nome="pais_id", tipo_dado=tipo_integer),
+            ColunaCurada(nome="estado_id", tipo_dado=tipo_integer),
+        ],
+        total_linhas=10,
+        amostra=None,
+        metadados_amostra=metadados_de_amostra,
+        restricoes_fk_compostas=[
+            RestricaoDeFkComposta(
+                colunas_locais=("pais_id", "estado_id"),
+                nome_escopo_referenciado="geografia",
+                nome_tabela_referenciada="estados",
+                colunas_referenciadas=("pais_id", "id"),
+            )
+        ],
+    )
+    curado = BancoCurado(tabelas=[tabela_curada])
+
+    contexto = iniciar_contexto(curado)
+
+    assert contexto.analisado.tabelas[0].restricoes_fk_compostas == [
+        RestricaoDeFkComposta(
+            colunas_locais=("pais_id", "estado_id"),
+            nome_escopo_referenciado="geografia",
+            nome_tabela_referenciada="estados",
+            colunas_referenciadas=("pais_id", "id"),
+        )
     ]
 
 
