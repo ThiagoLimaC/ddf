@@ -443,12 +443,16 @@ def test_extrair_fk_composta_com_chave_candidata_nao_emite_aviso(
     assert resultado.avisos == []
 
 
-def test_extrair_fk_composta_fora_do_lote_nao_emite_aviso(
+def test_extrair_fk_composta_fora_do_lote_emite_aviso_informativo(
     construir_extrator_fake: Callable[..., ExtratorFake],
 ) -> None:
-    """Borda: tabela referenciada fora do lote não gera Aviso — sem visibilidade.
+    """Borda: tabela referenciada fora do lote emite Aviso de "não verificado".
 
-    Mesma regra já aplicada ao `relationships` single-column do GeradorDbt.
+    Decisão da banca de revisão pós-implementação da #95: um `continue`
+    silencioso aqui seria indistinguível de "checado e ok" — o Aviso deixa
+    explícito que a integridade referencial não pôde ser verificada, sem
+    afirmar que ela está malformada (mensagem/teor diferentes do caso
+    "sem chave candidata", que já foi de fato checado e reprovado).
     """
     tipo = TipoDeDado(categoria=CategoriaDeDado.INTEGER)
     pedidos = _tabela_com_colunas(
@@ -476,4 +480,8 @@ def test_extrair_fk_composta_fora_do_lote_nao_emite_aviso(
     resultado = orquestrador.extrair(["vendas"], extrator)
 
     assert isinstance(resultado, Sucesso)
-    assert resultado.avisos == []
+    assert len(resultado.avisos) == 1
+    assert resultado.avisos[0].origem == "OrquestradorParalelo"
+    assert "vendas.pedidos" in resultado.avisos[0].mensagem
+    assert "geografia.estados" in resultado.avisos[0].mensagem
+    assert "não verificada" in resultado.avisos[0].mensagem

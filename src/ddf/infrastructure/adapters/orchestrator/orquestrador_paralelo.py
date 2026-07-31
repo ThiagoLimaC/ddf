@@ -68,17 +68,19 @@ def _avisos_de_fk_composta_sem_chave_candidata(
     `RestricaoDeFkComposta` seria consumida silenciosamente como se a
     integridade referencial estivesse garantida.
 
-    Tabela referenciada fora do lote analisado nesta execução não gera
-    Aviso aqui — sem visibilidade sobre ela, mesma regra já aplicada ao
-    `relationships` single-column do `GeradorDbt`.
+    Tabela referenciada fora do lote analisado nesta execução também gera
+    um Aviso, mas de teor distinto (não verificável, não "verificado e
+    correto") — decisão da banca de revisão pós-implementação da #95: um
+    `continue` silencioso aqui seria indistinguível de "checado e ok".
 
     Args:
         tabelas: tabelas já extraídas neste lote, mesma lista que `extrair`
             devolve.
 
     Returns:
-        Um Aviso por `RestricaoDeFkComposta` cujo lado referenciado está no
-        lote mas não corresponde a nenhum grupo de chave candidata.
+        Um Aviso por `RestricaoDeFkComposta` cujo lado referenciado está
+        fora do lote (não verificável) ou está no lote mas não corresponde
+        a nenhum grupo de chave candidata (verificado e malformado).
     """
     tabelas_por_chave = {(t.nome_escopo, t.nome_tabela): t for t in tabelas}
     avisos: list[Aviso] = []
@@ -88,21 +90,34 @@ def _avisos_de_fk_composta_sem_chave_candidata(
                 restricao.nome_escopo_referenciado,
                 restricao.nome_tabela_referenciada,
             )
+            origem_tabela = f"{tabela.nome_escopo}.{tabela.nome_tabela}"
+            colunas_locais = ", ".join(restricao.colunas_locais)
+            destino_tabela = f"{chave_referenciada[0]}.{chave_referenciada[1]}"
+
             tabela_referenciada = tabelas_por_chave.get(chave_referenciada)
             if tabela_referenciada is None:
+                avisos.append(
+                    Aviso(
+                        mensagem=(
+                            f"FK composta de '{origem_tabela}' ({colunas_locais}) "
+                            f"aponta para '{destino_tabela}', fora do lote "
+                            "analisado nesta execução — integridade "
+                            "referencial não verificada."
+                        ),
+                        origem=_ORIGEM,
+                    )
+                )
                 continue
+
             grupos_chave = _grupos_de_chave_candidata(tabela_referenciada)
             colunas_referenciadas = frozenset(restricao.colunas_referenciadas)
             if colunas_referenciadas not in grupos_chave:
-                origem_tabela = f"{tabela.nome_escopo}.{tabela.nome_tabela}"
-                colunas_locais = ", ".join(restricao.colunas_locais)
-                destino_tabela = f"{chave_referenciada[0]}.{chave_referenciada[1]}"
                 colunas_ref = ", ".join(restricao.colunas_referenciadas)
                 avisos.append(
                     Aviso(
                         mensagem=(
                             f"FK composta de '{origem_tabela}' ({colunas_locais}) "
-                            f"aponta para '{destino_tabela}' ({colunas_ref})', que "
+                            f"aponta para '{destino_tabela}' ({colunas_ref}), que "
                             "não corresponde a nenhuma chave primária/UNIQUE "
                             "conhecida do lado referenciado — integridade "
                             "referencial pode não estar garantida pelo schema."
