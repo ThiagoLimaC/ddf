@@ -38,81 +38,85 @@ class OrquestradorFake:
 # curar() — caminho feliz
 
 
-def test_curar_gera_skeletons_e_pausa_para_edicao_manual(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    fabrica_tabela_extraida: Callable[[str, str], TabelaExtraida],
-) -> None:
-    """Caminho feliz: gera skeletons, pausa e devolve a SobrescritaDeTabela."""
-    tabela = fabrica_tabela_extraida("public", "clientes")
-    orquestrador = OrquestradorFake(Sucesso(valor=BancoCurado(tabelas=[])))
-    pausas: list[str] = []
-    monkeypatch.setattr(
-        "ddf.infrastructure.adapters.cli.prompts.pausar", pausas.append
-    )
+class TestFeliz:
+    """Caminho feliz."""
 
-    sobrescrita = curadoria.curar(orquestrador, tmp_path, [tabela])  # type: ignore[arg-type]
+    def test_curar_gera_skeletons_e_pausa_para_edicao_manual(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        fabrica_tabela_extraida: Callable[[str, str], TabelaExtraida],
+    ) -> None:
+        """Gera skeletons, pausa e devolve a SobrescritaDeTabela."""
+        tabela = fabrica_tabela_extraida("public", "clientes")
+        orquestrador = OrquestradorFake(Sucesso(valor=BancoCurado(tabelas=[])))
+        pausas: list[str] = []
+        monkeypatch.setattr(
+            "ddf.infrastructure.adapters.cli.prompts.pausar", pausas.append
+        )
 
-    assert isinstance(sobrescrita, SobrescritaDeTabela)
-    assert len(pausas) == 1
+        sobrescrita = curadoria.curar(orquestrador, tmp_path, [tabela])  # type: ignore[arg-type]
 
+        assert isinstance(sobrescrita, SobrescritaDeTabela)
+        assert len(pausas) == 1
 
-# _gerar_skeletons() — caminho feliz e borda
+    def test_gerar_skeletons_conta_criados_e_preservados(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        fabrica_tabela_extraida: Callable[[str, str], TabelaExtraida],
+    ) -> None:
+        """Skeletons com Aviso contam como criados/atualizados."""
+        tabelas = [
+            fabrica_tabela_extraida("public", "clientes"),
+            fabrica_tabela_extraida("public", "pedidos"),
+        ]
+        resultado = Sucesso(
+            valor=BancoCurado(tabelas=[]),
+            avisos=[
+                Aviso(mensagem="skeleton criado para 'public.clientes'", origem="X")
+            ],
+        )
+        orquestrador = OrquestradorFake(resultado)
 
+        curadoria._gerar_skeletons(orquestrador, object(), tabelas)  # type: ignore[arg-type]
 
-def test_gerar_skeletons_conta_criados_e_preservados(
-    capsys: pytest.CaptureFixture[str],
-    fabrica_tabela_extraida: Callable[[str, str], TabelaExtraida],
-) -> None:
-    """Caminho feliz: skeletons com Aviso contam como criados/atualizados."""
-    tabelas = [
-        fabrica_tabela_extraida("public", "clientes"),
-        fabrica_tabela_extraida("public", "pedidos"),
-    ]
-    resultado = Sucesso(
-        valor=BancoCurado(tabelas=[]),
-        avisos=[Aviso(mensagem="skeleton criado para 'public.clientes'", origem="X")],
-    )
-    orquestrador = OrquestradorFake(resultado)
+        saida = capsys.readouterr().out
+        assert "1 skeleton(s) criado(s)/atualizado(s)" in saida
+        assert "1 preservado(s) sem mudança." in saida
 
-    curadoria._gerar_skeletons(orquestrador, object(), tabelas)  # type: ignore[arg-type]
+    def test_aplicar_sobrescritas_devolve_o_banco_curado(
+        self,
+    ) -> None:
+        """Devolve o BancoCurado produzido pelo orquestrador."""
+        banco = BancoCurado(tabelas=[])
+        orquestrador = OrquestradorFake(Sucesso(valor=banco))
 
-    saida = capsys.readouterr().out
-    assert "1 skeleton(s) criado(s)/atualizado(s)" in saida
-    assert "1 preservado(s) sem mudança." in saida
+        resultado = curadoria.aplicar_sobrescritas(orquestrador, object(), [])  # type: ignore[arg-type]
 
-
-def test_gerar_skeletons_com_falha_sai_com_codigo_1() -> None:
-    """Erro esperado: Falha do orquestrador sai com código 1 antes de contar nada."""
-    orquestrador = OrquestradorFake(Falha(erro="disco cheio"))
-
-    with pytest.raises(SystemExit) as excinfo:
-        curadoria._gerar_skeletons(orquestrador, object(), [])  # type: ignore[arg-type]
-
-    assert excinfo.value.code == 1
-
-
-# aplicar_sobrescritas() — caminho feliz
-
-
-def test_aplicar_sobrescritas_devolve_o_banco_curado() -> None:
-    """Caminho feliz: devolve o BancoCurado produzido pelo orquestrador."""
-    banco = BancoCurado(tabelas=[])
-    orquestrador = OrquestradorFake(Sucesso(valor=banco))
-
-    resultado = curadoria.aplicar_sobrescritas(orquestrador, object(), [])  # type: ignore[arg-type]
-
-    assert resultado == banco
+        assert resultado == banco
 
 
-# aplicar_sobrescritas() — erro esperado
+class TestErro:
+    """Erro esperado."""
 
+    def test_gerar_skeletons_com_falha_sai_com_codigo_1(
+        self,
+    ) -> None:
+        """Falha do orquestrador sai com código 1 antes de contar nada."""
+        orquestrador = OrquestradorFake(Falha(erro="disco cheio"))
 
-def test_aplicar_sobrescritas_com_falha_sai_com_codigo_1() -> None:
-    """Erro esperado: Falha do orquestrador sai com código 1."""
-    orquestrador = OrquestradorFake(Falha(erro="nenhuma tabela curada"))
+        with pytest.raises(SystemExit) as excinfo:
+            curadoria._gerar_skeletons(orquestrador, object(), [])  # type: ignore[arg-type]
 
-    with pytest.raises(SystemExit) as excinfo:
-        curadoria.aplicar_sobrescritas(orquestrador, object(), [])  # type: ignore[arg-type]
+        assert excinfo.value.code == 1
 
-    assert excinfo.value.code == 1
+    def test_aplicar_sobrescritas_com_falha_sai_com_codigo_1(
+        self,
+    ) -> None:
+        """Falha do orquestrador sai com código 1."""
+        orquestrador = OrquestradorFake(Falha(erro="nenhuma tabela curada"))
+
+        with pytest.raises(SystemExit) as excinfo:
+            curadoria.aplicar_sobrescritas(orquestrador, object(), [])  # type: ignore[arg-type]
+
+        assert excinfo.value.code == 1

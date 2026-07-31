@@ -41,9 +41,7 @@ class ExtratorFake:
         """Devolve a resposta programada para o escopo informado."""
         return self._respostas_tabelas[escopo]
 
-    def extrair_tabela(
-        self, escopo: str, tabela: str
-    ) -> Resultado[TabelaExtraida]:
+    def extrair_tabela(self, escopo: str, tabela: str) -> Resultado[TabelaExtraida]:
         """Não é exercitado por estes testes."""
         raise NotImplementedError
 
@@ -89,139 +87,137 @@ class OrquestradorFake:
 # configurar_amostragem() — caminho feliz
 
 
-def test_configurar_amostragem_usa_a_estrategia_escolhida(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Caminho feliz: atribui a estratégia escolhida à configuração recebida."""
-    registro = {
-        "Percentual de linhas": EstrategiaRegistrada(
-            construir=lambda: PercentualDeLinhas(percentual=10.0),
+class TestFeliz:
+    """Caminho feliz."""
+
+    def test_configurar_amostragem_usa_a_estrategia_escolhida(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Atribui a estratégia escolhida à configuração recebida."""
+        registro = {
+            "Percentual de linhas": EstrategiaRegistrada(
+                construir=lambda: PercentualDeLinhas(percentual=10.0),
+            )
+        }
+        monkeypatch.setattr(extracao, "ESTRATEGIAS_REGISTRADAS", registro)
+        monkeypatch.setattr(
+            "ddf.infrastructure.adapters.cli.prompts.selecionar",
+            lambda mensagem, escolhas: "Percentual de linhas",
         )
-    }
-    monkeypatch.setattr(extracao, "ESTRATEGIAS_REGISTRADAS", registro)
-    monkeypatch.setattr(
-        "ddf.infrastructure.adapters.cli.prompts.selecionar",
-        lambda mensagem, escolhas: "Percentual de linhas",
-    )
-    configuracao = ConfiguracaoDeExtracao()
+        configuracao = ConfiguracaoDeExtracao()
 
-    extracao.configurar_amostragem(configuracao)
+        extracao.configurar_amostragem(configuracao)
 
-    assert isinstance(configuracao.estrategia, PercentualDeLinhas)
+        assert isinstance(configuracao.estrategia, PercentualDeLinhas)
 
-
-# conectar() / _testar_conexao() — caminho feliz
-
-
-def test_conectar_com_sucesso_na_primeira_tentativa(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Caminho feliz: conecta e devolve escopos na 1ª tentativa, sem estratégia."""
-    extrator_fake = ExtratorFake([Sucesso(valor=["public", "vendas"])])
-    registro = {
-        "Fake": ExtratorRegistrado(
-            classe_extrator=type(extrator_fake), construir=lambda cfg: extrator_fake
+    def test_conectar_com_sucesso_na_primeira_tentativa(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Conecta e devolve escopos na 1ª tentativa, sem estratégia."""
+        extrator_fake = ExtratorFake([Sucesso(valor=["public", "vendas"])])
+        registro = {
+            "Fake": ExtratorRegistrado(
+                classe_extrator=type(extrator_fake), construir=lambda cfg: extrator_fake
+            )
+        }
+        monkeypatch.setattr(extracao, "EXTRATORES_REGISTRADOS", registro)
+        monkeypatch.setattr(
+            "ddf.infrastructure.adapters.cli.prompts.selecionar", lambda *a: "Fake"
         )
-    }
-    monkeypatch.setattr(extracao, "EXTRATORES_REGISTRADOS", registro)
-    monkeypatch.setattr(
-        "ddf.infrastructure.adapters.cli.prompts.selecionar", lambda *a: "Fake"
-    )
 
-    extrator, configuracao, escopos = extracao.conectar()
+        extrator, configuracao, escopos = extracao.conectar()
 
-    assert extrator is extrator_fake
-    assert configuracao.estrategia is None
-    assert escopos == ["public", "vendas"]
+        assert extrator is extrator_fake
+        assert configuracao.estrategia is None
+        assert escopos == ["public", "vendas"]
 
+    def test_extrair_devolve_as_tabelas_do_orquestrador(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        fabrica_tabela_extraida: Callable[[str, str], TabelaExtraida],
+    ) -> None:
+        """Devolve as tabelas extraídas pelo orquestrador."""
+        tabela = fabrica_tabela_extraida("public", "clientes")
+        orquestrador = OrquestradorFake(Sucesso(valor=[tabela]))
+        extrator_fake = ExtratorFake(
+            respostas_escopos=[], respostas_tabelas={"public": Sucesso(valor=[])}
+        )
 
-# _testar_conexao() — erro esperado (esgota tentativas e sai)
+        tabelas = extracao.extrair(orquestrador, extrator_fake, ["public"])  # type: ignore[arg-type]
 
-
-def test_testar_conexao_esgota_tentativas_e_sai(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Erro esperado: 3 falhas seguidas de conexão saem com código 1, sem retry cego."""
-    extrator_fake = ExtratorFake(
-        [
-            Falha(erro="senha incorreta"),
-            Falha(erro="senha incorreta"),
-            Falha(erro="senha incorreta"),
-        ]
-    )
-    monkeypatch.setattr(
-        "ddf.infrastructure.adapters.cli.prompts.selecionar",
-        lambda *a: "Tentar novamente",
-    )
-
-    with pytest.raises(SystemExit) as excinfo:
-        extracao._testar_conexao(extrator_fake)  # type: ignore[arg-type]
-
-    assert excinfo.value.code == 1
+        assert tabelas == [tabela]
 
 
-# _testar_conexao() — borda (usuário escolhe sair antes de esgotar tentativas)
+class TestErro:
+    """Erro esperado."""
+
+    def test_testar_conexao_esgota_tentativas_e_sai(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """3 falhas seguidas de conexão saem com código 1, sem retry cego."""
+        extrator_fake = ExtratorFake(
+            [
+                Falha(erro="senha incorreta"),
+                Falha(erro="senha incorreta"),
+                Falha(erro="senha incorreta"),
+            ]
+        )
+        monkeypatch.setattr(
+            "ddf.infrastructure.adapters.cli.prompts.selecionar",
+            lambda *a: "Tentar novamente",
+        )
+
+        with pytest.raises(SystemExit) as excinfo:
+            extracao._testar_conexao(extrator_fake)  # type: ignore[arg-type]
+
+        assert excinfo.value.code == 1
+
+    def test_extrair_com_falha_sai_com_codigo_1(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Falha do orquestrador sai com código 1."""
+        orquestrador = OrquestradorFake(Falha(erro="nenhuma tabela extraída"))
+        extrator_fake = ExtratorFake(
+            respostas_escopos=[], respostas_tabelas={"public": Sucesso(valor=[])}
+        )
+
+        with pytest.raises(SystemExit) as excinfo:
+            extracao.extrair(orquestrador, extrator_fake, ["public"])  # type: ignore[arg-type]
+
+        assert excinfo.value.code == 1
 
 
-def test_testar_conexao_usuario_escolhe_sair_antes_do_limite(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Borda: usuário escolhe 'Sair' após 1 falha, sem esperar as 3 tentativas."""
-    extrator_fake = ExtratorFake([Falha(erro="conexão recusada")])
-    monkeypatch.setattr(
-        "ddf.infrastructure.adapters.cli.prompts.selecionar", lambda *a: "Sair"
-    )
+class TestBorda:
+    """Bordas."""
 
-    with pytest.raises(SystemExit) as excinfo:
-        extracao._testar_conexao(extrator_fake)  # type: ignore[arg-type]
+    def test_testar_conexao_usuario_escolhe_sair_antes_do_limite(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """usuário escolhe 'Sair' após 1 falha, sem esperar as 3 tentativas."""
+        extrator_fake = ExtratorFake([Falha(erro="conexão recusada")])
+        monkeypatch.setattr(
+            "ddf.infrastructure.adapters.cli.prompts.selecionar", lambda *a: "Sair"
+        )
 
-    assert excinfo.value.code == 1
+        with pytest.raises(SystemExit) as excinfo:
+            extracao._testar_conexao(extrator_fake)  # type: ignore[arg-type]
 
+        assert excinfo.value.code == 1
 
-# extrair() — caminho feliz
+    def test_extrair_usa_total_do_orquestrador_na_barra_de_progresso(
+        self,
+        fabrica_tabela_extraida: Callable[[str, str], TabelaExtraida],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Total exibido vem de ao_conhecer_total, sem listar tabelas por fora."""
+        tabela = fabrica_tabela_extraida("public", "clientes")
+        orquestrador = OrquestradorFake(Sucesso(valor=[tabela]))
+        extrator_fake = ExtratorFake(respostas_escopos=[], respostas_tabelas={})
 
-
-def test_extrair_devolve_as_tabelas_do_orquestrador(
-    monkeypatch: pytest.MonkeyPatch,
-    fabrica_tabela_extraida: Callable[[str, str], TabelaExtraida],
-) -> None:
-    """Caminho feliz: devolve as tabelas extraídas pelo orquestrador."""
-    tabela = fabrica_tabela_extraida("public", "clientes")
-    orquestrador = OrquestradorFake(Sucesso(valor=[tabela]))
-    extrator_fake = ExtratorFake(
-        respostas_escopos=[], respostas_tabelas={"public": Sucesso(valor=[])}
-    )
-
-    tabelas = extracao.extrair(orquestrador, extrator_fake, ["public"])  # type: ignore[arg-type]
-
-    assert tabelas == [tabela]
-
-
-def test_extrair_usa_total_do_orquestrador_na_barra_de_progresso(
-    fabrica_tabela_extraida: Callable[[str, str], TabelaExtraida],
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Borda: total exibido vem de ao_conhecer_total, sem listar tabelas por fora."""
-    tabela = fabrica_tabela_extraida("public", "clientes")
-    orquestrador = OrquestradorFake(Sucesso(valor=[tabela]))
-    extrator_fake = ExtratorFake(respostas_escopos=[], respostas_tabelas={})
-
-    extracao.extrair(orquestrador, extrator_fake, ["public"])  # type: ignore[arg-type]
-
-    assert "(1/1)" in capsys.readouterr().out
-
-
-# extrair() — erro esperado
-
-
-def test_extrair_com_falha_sai_com_codigo_1(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Erro esperado: Falha do orquestrador sai com código 1."""
-    orquestrador = OrquestradorFake(Falha(erro="nenhuma tabela extraída"))
-    extrator_fake = ExtratorFake(
-        respostas_escopos=[], respostas_tabelas={"public": Sucesso(valor=[])}
-    )
-
-    with pytest.raises(SystemExit) as excinfo:
         extracao.extrair(orquestrador, extrator_fake, ["public"])  # type: ignore[arg-type]
 
-    assert excinfo.value.code == 1
+        assert "(1/1)" in capsys.readouterr().out

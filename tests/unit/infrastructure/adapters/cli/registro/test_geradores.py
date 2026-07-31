@@ -23,25 +23,33 @@ class GeradorFake:
         ...
 
 
-# Caminho feliz
-def test_registrar_gerador_em_registro_isolado_nao_afeta_o_global() -> None:
-    """Caminho feliz: registro isolado recebe o Gerador, o global não muda."""
-    gerador = GeradorFake()
-    registro_de_teste: dict[str, Gerador] = {}
+class TestFeliz:
+    """Caminho feliz."""
 
-    registrar_gerador("Fake", gerador, registro=registro_de_teste)
+    def test_registrar_gerador_em_registro_isolado_nao_afeta_o_global(
+        self,
+    ) -> None:
+        """Registro isolado recebe o Gerador, o global não muda."""
+        gerador = GeradorFake()
+        registro_de_teste: dict[str, Gerador] = {}
 
-    assert registro_de_teste == {"Fake": gerador}
-    assert "Fake" not in GERADORES_REGISTRADOS
+        registrar_gerador("Fake", gerador, registro=registro_de_teste)
+
+        assert registro_de_teste == {"Fake": gerador}
+        assert "Fake" not in GERADORES_REGISTRADOS
 
 
-# Erro esperado
-def test_registrar_gerador_com_nome_duplicado_falha() -> None:
-    """Erro esperado: nome já registrado levanta ValueError, sem sobrescrever."""
-    gerador = GeradorFake()
-    registro_de_teste: dict[str, Gerador] = {"Fake": gerador}
+class TestErro:
+    """Erro esperado."""
 
-    with pytest.raises(ValueError, match="Fake"):
-        registrar_gerador("Fake", GeradorFake(), registro=registro_de_teste)
+    def test_registrar_gerador_com_nome_duplicado_falha(
+        self,
+    ) -> None:
+        """Nome já registrado levanta ValueError, sem sobrescrever."""
+        gerador = GeradorFake()
+        registro_de_teste: dict[str, Gerador] = {"Fake": gerador}
 
-    assert registro_de_teste == {"Fake": gerador}
+        with pytest.raises(ValueError, match="Fake"):
+            registrar_gerador("Fake", GeradorFake(), registro=registro_de_teste)
+
+        assert registro_de_teste == {"Fake": gerador}
