@@ -17,7 +17,7 @@ from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkCompos
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.shared.resultado import Falha, Sucesso
-from ddf.infrastructure.adapters.generators.gerador_contexto_de_ia import (
+from ddf.infrastructure.adapters.generators.contexto_de_ia.gerador_contexto_de_ia import (  # noqa: E501
     GeradorContextoDeIA,
 )
 
