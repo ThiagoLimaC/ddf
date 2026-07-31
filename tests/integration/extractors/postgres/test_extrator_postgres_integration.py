@@ -121,6 +121,7 @@ def test_listar_escopos_retorna_escopos_semeados(
     assert resultado == Sucesso(
         [
             "arrays",
+            "colisao_fk",
             "geografia",
             "pessoa",
             "public",
@@ -361,6 +362,38 @@ def test_extrair_tabela_com_fk_composta_pareia_colunas_corretamente(
             colunas_referenciadas=("codigo", "estado"),
         )
     ]
+
+
+def test_extrair_tabela_com_fk_de_nome_colidente_resolve_alvo_correto(
+    dsn: str, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: FK de mesmo nome em tabelas diferentes não confunde o alvo (#95).
+
+    Achado da banca de revisão pós-implementação: constraint_name de FK não
+    é único por schema no Postgres, só por tabela. `colisao_fk.filho_a` e
+    `colisao_fk.filho_b` têm FK nomeada igual (`fk_pai`), cada uma apontando
+    pra um alvo diferente (`alvo_a`/`alvo_b`). A query anterior (JOIN por
+    nome, sem OID) devolvia o alvo errado/duplicado aqui; a reescrita via
+    `pg_catalog` (por `conrelid`/`confrelid`) resolve cada uma
+    corretamente.
+    """
+    extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+
+    resultado_a = extrator.extrair_tabela("colisao_fk", "filho_a")
+    resultado_b = extrator.extrair_tabela("colisao_fk", "filho_b")
+
+    assert isinstance(resultado_a, Sucesso)
+    assert isinstance(resultado_b, Sucesso)
+
+    coluna_fk_a = next(c for c in resultado_a.valor.colunas if c.nome == "alvo_id")
+    coluna_fk_b = next(c for c in resultado_b.valor.colunas if c.nome == "alvo_id")
+
+    assert coluna_fk_a.referencia == ReferenciaDeColuna(
+        nome_escopo="colisao_fk", nome_tabela="alvo_a", nome_coluna="id"
+    )
+    assert coluna_fk_b.referencia == ReferenciaDeColuna(
+        nome_escopo="colisao_fk", nome_tabela="alvo_b", nome_coluna="id"
+    )
 
 
 def test_coluna_array_com_valores_vazios_e_nulos_nao_quebra_analisador(
