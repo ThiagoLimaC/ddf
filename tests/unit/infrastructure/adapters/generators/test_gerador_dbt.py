@@ -16,6 +16,7 @@ from ddf.domain.model.analysis import (
     TabelaAnalisada,
 )
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.shared.resultado import Falha, Sucesso
@@ -438,6 +439,110 @@ def test_fk_fora_do_lote_emite_aviso_e_omite_relationships(
     modelo = _modelo(schema, "stg_vendas__pedidos")
     coluna_yaml = _coluna(modelo, "funcionario_id")
     assert "tests" not in coluna_yaml
+
+
+def test_fk_composta_suprime_relationships_por_coluna_e_gera_teste_de_model(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """FK composta suprime relationships per-coluna e gera composite_relationships.
+
+    Issue #95.
+
+    Severidade padrão (sem `config: severity`) — mesma decisão de
+    `dbt_utils.unique_combination_of_columns`, fato estrutural do schema.
+    """
+    coluna_pais = construir_coluna(
+        nome="pais_id",
+        chave_estrangeira=True,
+        referencia=ReferenciaDeColuna(
+            nome_escopo="geografia", nome_tabela="estados", nome_coluna="pais_id"
+        ),
+    )
+    coluna_estado = construir_coluna(
+        nome="estado_id",
+        chave_estrangeira=True,
+        referencia=ReferenciaDeColuna(
+            nome_escopo="geografia", nome_tabela="estados", nome_coluna="id"
+        ),
+    )
+    tabela = construir_tabela(
+        colunas=[coluna_pais, coluna_estado],
+        nome_tabela="pedidos",
+        nome_escopo="vendas",
+        restricoes_fk_compostas=[
+            RestricaoDeFkComposta(
+                colunas_locais=("pais_id", "estado_id"),
+                nome_escopo_referenciado="geografia",
+                nome_tabela_referenciada="estados",
+                colunas_referenciadas=("pais_id", "id"),
+            )
+        ],
+    )
+    tabela_estados = construir_tabela(
+        colunas=[construir_coluna(nome="id", chave_primaria=True)],
+        nome_tabela="estados",
+        nome_escopo="geografia",
+    )
+    banco = construir_banco([tabela, tabela_estados])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path, "vendas")
+    modelo = _modelo(schema, "stg_vendas__pedidos")
+
+    coluna_pais_yaml = _coluna(modelo, "pais_id")
+    assert "tests" not in coluna_pais_yaml
+    coluna_estado_yaml = _coluna(modelo, "estado_id")
+    assert "tests" not in coluna_estado_yaml
+
+    assert modelo["tests"] == [
+        {
+            "composite_relationships": {
+                "column_names": ["pais_id", "estado_id"],
+                "to": "ref('stg_geografia__estados')",
+                "field_names": ["pais_id", "id"],
+            }
+        }
+    ]
+
+
+def test_fk_composta_fora_do_lote_emite_aviso_e_omite_teste_de_model(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """FK composta fora do lote gera Aviso, sem o teste de model."""
+    coluna_pais = construir_coluna(nome="pais_id")
+    coluna_estado = construir_coluna(nome="estado_id")
+    tabela = construir_tabela(
+        colunas=[coluna_pais, coluna_estado],
+        nome_tabela="pedidos",
+        nome_escopo="vendas",
+        restricoes_fk_compostas=[
+            RestricaoDeFkComposta(
+                colunas_locais=("pais_id", "estado_id"),
+                nome_escopo_referenciado="geografia",
+                nome_tabela_referenciada="estados",
+                colunas_referenciadas=("pais_id", "id"),
+            )
+        ],
+    )
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    assert len(resultado.avisos) == 1
+    assert "geografia.estados" in resultado.avisos[0].mensagem
+
+    schema = _schema_yml(tmp_path, "vendas")
+    modelo = _modelo(schema, "stg_vendas__pedidos")
+    assert "tests" not in modelo
 
 
 def test_accepted_values_omitido_quando_top10_cobre_pouco_da_amostra(
@@ -1167,6 +1272,74 @@ def test_macro_unique_percentage_orfao_e_removido(
 ) -> None:
     """Borda: unique_percentage_at_least.sql de execução anterior some sem uso."""
     caminho = tmp_path / "macros" / "unique_percentage_at_least.sql"
+    caminho.parent.mkdir(parents=True)
+    caminho.write_text("-- execução anterior")
+    tabela = construir_tabela(colunas=[construir_coluna()])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    assert not caminho.exists()
+
+
+def test_macro_composite_relationships_nao_gerado_sem_consumidor(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Sem FK composta referenciando o lote, composite_relationships.sql não sai."""
+    tabela = construir_tabela(colunas=[construir_coluna()])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    assert not (tmp_path / "macros" / "composite_relationships.sql").exists()
+
+
+def test_macro_composite_relationships_gerado_com_consumidor(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Com FK composta referenciando tabela do lote, composite_relationships.sql sai."""
+    tabela = construir_tabela(
+        colunas=[construir_coluna(nome="pais_id"), construir_coluna(nome="estado_id")],
+        nome_tabela="pedidos",
+        nome_escopo="vendas",
+        restricoes_fk_compostas=[
+            RestricaoDeFkComposta(
+                colunas_locais=("pais_id", "estado_id"),
+                nome_escopo_referenciado="vendas",
+                nome_tabela_referenciada="estados",
+                colunas_referenciadas=("pais_id", "id"),
+            )
+        ],
+    )
+    tabela_estados = construir_tabela(
+        colunas=[construir_coluna(nome="id", chave_primaria=True)],
+        nome_tabela="estados",
+        nome_escopo="vendas",
+    )
+    banco = construir_banco([tabela, tabela_estados])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    assert (tmp_path / "macros" / "composite_relationships.sql").exists()
+
+
+def test_macro_composite_relationships_orfao_e_removido(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Borda: composite_relationships.sql de execução anterior some sem consumidor."""
+    caminho = tmp_path / "macros" / "composite_relationships.sql"
     caminho.parent.mkdir(parents=True)
     caminho.write_text("-- execução anterior")
     tabela = construir_tabela(colunas=[construir_coluna()])
