@@ -18,6 +18,7 @@ from ddf.domain.model.common.requisicao_de_amostragem import (
     AmostragemProbabilistica,
     RequisicaoDeAmostragem,
 )
+from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
@@ -26,6 +27,9 @@ from ddf.infrastructure.adapters.extractors.construir_colunas_fk import (
 )
 from ddf.infrastructure.adapters.extractors.construir_metadados_de_amostra import (
     construir_metadados_de_amostra,
+)
+from ddf.infrastructure.adapters.extractors.construir_restricoes_fk_compostas import (
+    construir_restricoes_fk_compostas,
 )
 from ddf.infrastructure.adapters.extractors.postgres._queries import (
     _CHAVES_ESTRANGEIRAS_SCHEMA_SQL,
@@ -65,17 +69,22 @@ class _MetadadosDoSchema(NamedTuple):
 
     Populado por ExtratorPostgres._obter_metadados_schema e cacheado por
     schema — elimina o N+1 de rodar 4 queries de metadado por tabela restrita.
-    fks_por_tabela guarda linhas cruas (mesmo formato que
-    construir_colunas_fk espera), não ReferenciaDeColuna já resolvida — a
-    resolução (com Aviso de colisão) continua acontecendo por tabela, em
-    extrair_tabela, não aqui.
+    fks_por_tabela guarda linhas cruas com `constraint_name` (issue #95,
+    5º campo — não faz mais parte do formato que construir_colunas_fk
+    espera; extrair_tabela descarta esse campo antes de repassar), não
+    ReferenciaDeColuna já resolvida — a resolução por coluna (com Aviso de
+    colisão) continua acontecendo por tabela, em extrair_tabela, não aqui.
+    restricoes_fk_compostas_por_tabela já vem agrupado por constraint
+    (construir_restricoes_fk_compostas), mesmo padrão de
+    restricoes_unicas_por_tabela.
     """
 
     colunas_por_tabela: dict[str, list[_LinhaColuna]]
     pks_por_tabela: dict[str, set[str]]
-    fks_por_tabela: dict[str, list[tuple[str, str, str, str]]]
+    fks_por_tabela: dict[str, list[tuple[str, str, str, str, str]]]
     unicas_por_tabela: dict[str, set[str]]
     restricoes_unicas_por_tabela: dict[str, list[RestricaoUnica]]
+    restricoes_fk_compostas_por_tabela: dict[str, list[RestricaoDeFkComposta]]
     total_linhas_por_tabela: dict[str, int]
 
 
@@ -256,12 +265,19 @@ class ExtratorPostgres:
                         pks_por_tabela[nome_tabela].add(nome_coluna_pk)
 
                     cursor.execute(_CHAVES_ESTRANGEIRAS_SCHEMA_SQL, (schema,))
-                    fks_por_tabela: dict[str, list[tuple[str, str, str, str]]] = (
+                    fks_por_tabela: dict[str, list[tuple[str, str, str, str, str]]] = (
                         defaultdict(list)
                     )
                     for linha_fk in cursor.fetchall():
                         nome_tabela, *resto_fk = linha_fk
                         fks_por_tabela[nome_tabela].append(tuple(resto_fk))
+
+                    restricoes_fk_compostas_por_tabela: dict[
+                        str, list[RestricaoDeFkComposta]
+                    ] = {
+                        nome_tabela: construir_restricoes_fk_compostas(linhas)
+                        for nome_tabela, linhas in fks_por_tabela.items()
+                    }
 
                     cursor.execute(_RESTRICOES_UNICAS_SCHEMA_SQL, (schema,))
                     grupos_unicos: dict[str, dict[int, list[str]]] = defaultdict(
@@ -296,6 +312,7 @@ class ExtratorPostgres:
                 fks_por_tabela=dict(fks_por_tabela),
                 unicas_por_tabela=dict(unicas_por_tabela),
                 restricoes_unicas_por_tabela=dict(restricoes_unicas_por_tabela),
+                restricoes_fk_compostas_por_tabela=restricoes_fk_compostas_por_tabela,
                 total_linhas_por_tabela=total_linhas_por_tabela,
             )
             self._cache_schemas[schema] = metadados
@@ -318,11 +335,25 @@ class ExtratorPostgres:
             return Falha(f"Schema '{schema}' ou tabela '{tabela}' não encontrada.")
 
         colunas_pk = metadados.pks_por_tabela.get(tabela, set())
+        linhas_fk_por_coluna: list[tuple[str, str, str, str]] = []
+        for (
+            nome_coluna,
+            escopo_ref,
+            tabela_ref,
+            coluna_ref,
+            _,
+        ) in metadados.fks_por_tabela.get(tabela, []):
+            linhas_fk_por_coluna.append(
+                (nome_coluna, escopo_ref, tabela_ref, coluna_ref)
+            )
         colunas_fk, avisos = construir_colunas_fk(
-            metadados.fks_por_tabela.get(tabela, []), origem="ExtratorPostgres"
+            linhas_fk_por_coluna, origem="ExtratorPostgres"
         )
         colunas_unicas = metadados.unicas_por_tabela.get(tabela, set())
         restricoes_unicas = metadados.restricoes_unicas_por_tabela.get(tabela, [])
+        restricoes_fk_compostas = metadados.restricoes_fk_compostas_por_tabela.get(
+            tabela, []
+        )
         total_linhas = metadados.total_linhas_por_tabela.get(tabela, 0)
 
         colunas: list[ColunaExtraida] = []
@@ -404,6 +435,7 @@ class ExtratorPostgres:
                     amostra=amostra,
                     metadados_amostra=metadados_amostra,
                     restricoes_unicas=restricoes_unicas,
+                    restricoes_fk_compostas=restricoes_fk_compostas,
                 ),
                 avisos=avisos,
             )

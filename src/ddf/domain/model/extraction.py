@@ -6,6 +6,7 @@ from typing_extensions import Self
 
 from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import TipoDeDado
 
@@ -62,6 +63,14 @@ class TabelaExtraida(BaseModel):
             "single-column continua representado por ColunaExtraida.unica."
         ),
     )
+    restricoes_fk_compostas: list[RestricaoDeFkComposta] = Field(
+        default_factory=list,
+        description=(
+            "FK composta (2+ colunas locais) real do schema, agrupada por "
+            "constraint. FK de coluna única continua representada por "
+            "ColunaExtraida.referencia."
+        ),
+    )
 
     @model_validator(mode="after")
     def _valida_nomes_de_coluna_unicos(self) -> Self:
@@ -82,5 +91,18 @@ class TabelaExtraida(BaseModel):
                 raise ValueError(
                     f"RestricaoUnica cita coluna(s) inexistente(s) na tabela: "
                     f"{sorted(desconhecidas)}."
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _valida_colunas_das_restricoes_fk_compostas(self) -> Self:
+        """Garante que toda coluna local citada em restricoes_fk_compostas existe."""
+        nomes_das_colunas = {coluna.nome for coluna in self.colunas}
+        for restricao in self.restricoes_fk_compostas:
+            desconhecidas = set(restricao.colunas_locais) - nomes_das_colunas
+            if desconhecidas:
+                raise ValueError(
+                    f"RestricaoDeFkComposta cita coluna(s) local(is) "
+                    f"inexistente(s) na tabela: {sorted(desconhecidas)}."
                 )
         return self

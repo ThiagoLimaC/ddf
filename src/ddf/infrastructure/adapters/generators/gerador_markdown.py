@@ -88,7 +88,9 @@ def _formatar_tipo(tipo: TipoDeDado) -> str:
 
 
 def _marcadores_de_restricao(
-    coluna: ColunaAnalisada, colunas_compostas: frozenset[str]
+    coluna: ColunaAnalisada,
+    colunas_compostas: frozenset[str],
+    colunas_fk_compostas: frozenset[str],
 ) -> str:
     """Filtro Jinja: combina PK, FK, UNIQUE (simples/composto) e NOT NULL.
 
@@ -96,16 +98,22 @@ def _marcadores_de_restricao(
         coluna: coluna analisada.
         colunas_compostas: nomes de colunas da tabela que participam de
             algum UNIQUE composto (ver `_colunas_com_restricao_composta`).
+        colunas_fk_compostas: nomes de colunas da tabela que participam de
+            alguma FK composta (ver `_colunas_com_fk_composta`, issue #95).
 
     Returns:
-        "PK", "FK → escopo.tabela.coluna", "UNIQUE", "UNIQUE (composto)",
-        "NOT NULL", combinados por vírgula conforme aplicável, ou string
-        vazia se a coluna não tem nenhuma restrição real do schema.
-        "UNIQUE"/"UNIQUE (composto)"/"NOT NULL" são omitidos quando a
-        coluna já é PK — PK implica único e não-nulo, marcar os dois seria
-        redundante. "UNIQUE (composto)" só sinaliza participação — o
-        agrupamento completo de colunas está no bullet de
-        "Restrições UNIQUE compostas" em "Fatos extraídos".
+        "PK", "FK → escopo.tabela.coluna", "FK (composta)", "UNIQUE",
+        "UNIQUE (composto)", "NOT NULL", combinados por vírgula conforme
+        aplicável, ou string vazia se a coluna não tem nenhuma restrição
+        real do schema. "UNIQUE"/"UNIQUE (composto)"/"NOT NULL" são
+        omitidos quando a coluna já é PK — PK implica único e não-nulo,
+        marcar os dois seria redundante. "UNIQUE (composto)"/
+        "FK (composta)" só sinalizam participação — o agrupamento completo
+        de colunas está nos bullets de "Restrições UNIQUE compostas"/
+        "Chaves estrangeiras compostas" em "Fatos extraídos".
+        "FK (composta)" não substitui "FK → ..." — a coluna continua
+        mostrando sua própria referência individual, mais o sinal de que
+        ela participa de um grupo.
     """
     marcadores: list[str] = []
     if coluna.chave_primaria:
@@ -116,6 +124,8 @@ def _marcadores_de_restricao(
             f"FK → {referencia.nome_escopo}.{referencia.nome_tabela}."
             f"{referencia.nome_coluna}"
         )
+    if coluna.nome in colunas_fk_compostas:
+        marcadores.append("FK (composta)")
     if coluna.unica and not coluna.chave_primaria:
         marcadores.append("UNIQUE")
     if coluna.nome in colunas_compostas and not coluna.chave_primaria:
@@ -140,6 +150,24 @@ def _colunas_com_restricao_composta(tabela: TabelaAnalisada) -> frozenset[str]:
     )
 
 
+def _colunas_com_fk_composta(tabela: TabelaAnalisada) -> frozenset[str]:
+    """Nomes de colunas locais da tabela que participam de alguma FK composta.
+
+    Args:
+        tabela: tabela analisada.
+
+    Returns:
+        Conjunto de nomes de coluna cobertos por algum
+        `RestricaoDeFkComposta` da tabela; vazio se não houver nenhuma
+        (issue #95).
+    """
+    return frozenset(
+        nome
+        for restricao in tabela.restricoes_fk_compostas
+        for nome in restricao.colunas_locais
+    )
+
+
 def _formatar_restricoes_unicas(tabela: TabelaAnalisada) -> str:
     """Filtro Jinja: formata as constraints UNIQUE compostas da tabela.
 
@@ -161,6 +189,35 @@ def _formatar_restricoes_unicas(tabela: TabelaAnalisada) -> str:
         "(" + ", ".join(f"`{_escapar_celula(nome)}`" for nome in grupo.colunas) + ")"
         for grupo in grupos
     )
+
+
+def _formatar_restricoes_fk_compostas(tabela: TabelaAnalisada) -> str:
+    """Filtro Jinja: formata as FKs compostas da tabela.
+
+    Args:
+        tabela: tabela analisada.
+
+    Returns:
+        Grupos formatados como "(`pais_id`, `estado_id`) → geografia.estados
+        (`pais_id`, `id`)", separados por vírgula, ou string vazia se a
+        tabela não tem nenhuma FK composta. Grupos ordenados por
+        `colunas_locais` (mesmo motivo de determinismo de
+        `_formatar_restricoes_unicas` — issue #95).
+    """
+    grupos = sorted(tabela.restricoes_fk_compostas, key=lambda r: r.colunas_locais)
+    partes: list[str] = []
+    for grupo in grupos:
+        locais = ", ".join(
+            f"`{_escapar_celula(nome)}`" for nome in grupo.colunas_locais
+        )
+        referenciadas = ", ".join(
+            f"`{_escapar_celula(nome)}`" for nome in grupo.colunas_referenciadas
+        )
+        partes.append(
+            f"({locais}) → {grupo.nome_escopo_referenciado}."
+            f"{grupo.nome_tabela_referenciada}({referenciadas})"
+        )
+    return ", ".join(partes)
 
 
 def _metrica_de_coluna(coluna: ColunaAnalisada) -> MetricasBaseColuna | None:
@@ -334,6 +391,9 @@ _ambiente.filters["escapar"] = _escapar_celula
 _ambiente.filters["formatar_tipo"] = _formatar_tipo
 _ambiente.filters["marcadores_de_restricao"] = _marcadores_de_restricao
 _ambiente.filters["formatar_restricoes_unicas"] = _formatar_restricoes_unicas
+_ambiente.filters["formatar_restricoes_fk_compostas"] = (
+    _formatar_restricoes_fk_compostas
+)
 _ambiente.filters["completude"] = _formatar_completude
 _ambiente.filters["linha_qualidade"] = _linha_qualidade
 _ambiente.filters["secoes_valores_frequentes"] = _secoes_valores_frequentes
@@ -366,6 +426,7 @@ class GeradorMarkdown:
                 tabela=tabela,
                 gerado_em=gerado_em,
                 colunas_compostas=_colunas_com_restricao_composta(tabela),
+                colunas_fk_compostas=_colunas_com_fk_composta(tabela),
             )
             resultado = escrever_arquivo(caminho_tabela, conteudo)
             if isinstance(resultado, Falha):

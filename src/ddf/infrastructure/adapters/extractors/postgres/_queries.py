@@ -34,22 +34,35 @@ _CHAVES_PRIMARIAS_SCHEMA_SQL = """
         AND tc.table_schema = %s
 """
 
+# Via pg_constraint (contype='f'): o JOIN anterior (information_schema, por
+# constraint_name + table_schema) colidia entre tabelas do mesmo schema com
+# FK de mesmo nome (ex.: convenção `fk_parent` repetida em várias filhas), devolvendo
+# a tabela/coluna referenciada errada. `conrelid`/`confrelid` (OID) evitam
+# depender de nome. `unnest(conkey, confkey) WITH ORDINALITY` desempacota os
+# dois arrays em paralelo — cada posição `ord` pareia a coluna local
+# (`conkey[ord]`) com a coluna referenciada correspondente (`confkey[ord]`),
+# cobrindo FK single-column e composta na mesma passada (issue #95).
+# ORDER BY estabiliza a ordem das colunas dentro de uma constraint composta
+# entre execuções (mesmo achado da banca da #89 pra restrições únicas — sem
+# ordem garantida, o hash estrutural oscilaria sem mudança real de schema).
 _CHAVES_ESTRANGEIRAS_SCHEMA_SQL = """
-    SELECT tc.table_name AS tabela_de_origem, kcu.column_name,
-           ccu.table_schema, ccu.table_name, ccu.column_name
-    FROM information_schema.table_constraints tc
-    JOIN information_schema.key_column_usage kcu
-        ON tc.constraint_name = kcu.constraint_name
-        AND tc.table_schema = kcu.table_schema
-    JOIN information_schema.referential_constraints rc
-        ON tc.constraint_name = rc.constraint_name
-        AND tc.constraint_schema = rc.constraint_schema
-    JOIN information_schema.key_column_usage ccu
-        ON rc.unique_constraint_name = ccu.constraint_name
-        AND rc.unique_constraint_schema = ccu.constraint_schema
-        AND kcu.position_in_unique_constraint = ccu.ordinal_position
-    WHERE tc.constraint_type = 'FOREIGN KEY'
-        AND tc.table_schema = %s
+    SELECT t.relname, a_local.attname,
+           rn.nspname, rt.relname, a_ref.attname,
+           c.conname
+    FROM pg_catalog.pg_constraint c
+    JOIN pg_catalog.pg_class t ON t.oid = c.conrelid
+    JOIN pg_catalog.pg_namespace n ON n.oid = t.relnamespace
+    JOIN pg_catalog.pg_class rt ON rt.oid = c.confrelid
+    JOIN pg_catalog.pg_namespace rn ON rn.oid = rt.relnamespace
+    JOIN LATERAL unnest(c.conkey, c.confkey)
+        WITH ORDINALITY AS k(local_attnum, ref_attnum, ord) ON true
+    JOIN pg_catalog.pg_attribute a_local
+        ON a_local.attrelid = t.oid AND a_local.attnum = k.local_attnum
+    JOIN pg_catalog.pg_attribute a_ref
+        ON a_ref.attrelid = rt.oid AND a_ref.attnum = k.ref_attnum
+    WHERE c.contype = 'f'
+        AND n.nspname = %s
+    ORDER BY t.relname, c.conname, k.ord
 """
 
 # relkind IN ('r', 'p'): sem isso, tabela particionada (relkind='p') tinha

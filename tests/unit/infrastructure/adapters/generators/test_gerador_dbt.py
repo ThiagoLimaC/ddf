@@ -16,6 +16,7 @@ from ddf.domain.model.analysis import (
     TabelaAnalisada,
 )
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.shared.resultado import Falha, Sucesso
@@ -43,6 +44,12 @@ def _modelo(schema: dict[str, Any], nome: str) -> dict[str, Any]:
 
 def _coluna(modelo: dict[str, Any], nome: str) -> dict[str, Any]:
     return next(c for c in modelo["columns"] if c["name"] == nome)
+
+
+def _accepted_values(coluna_yaml: dict[str, Any]) -> dict[str, Any] | None:
+    testes = coluna_yaml.get("tests", [])
+    dicts = [t for t in testes if isinstance(t, dict) and "accepted_values" in t]
+    return dicts[0]["accepted_values"] if dicts else None
 
 
 def test_caminho_feliz_gera_artefatos_por_escopo(
@@ -434,6 +441,110 @@ def test_fk_fora_do_lote_emite_aviso_e_omite_relationships(
     assert "tests" not in coluna_yaml
 
 
+def test_fk_composta_suprime_relationships_por_coluna_e_gera_teste_de_model(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """FK composta suprime relationships per-coluna e gera composite_relationships.
+
+    Issue #95.
+
+    Severidade padrão (sem `config: severity`) — mesma decisão de
+    `dbt_utils.unique_combination_of_columns`, fato estrutural do schema.
+    """
+    coluna_pais = construir_coluna(
+        nome="pais_id",
+        chave_estrangeira=True,
+        referencia=ReferenciaDeColuna(
+            nome_escopo="geografia", nome_tabela="estados", nome_coluna="pais_id"
+        ),
+    )
+    coluna_estado = construir_coluna(
+        nome="estado_id",
+        chave_estrangeira=True,
+        referencia=ReferenciaDeColuna(
+            nome_escopo="geografia", nome_tabela="estados", nome_coluna="id"
+        ),
+    )
+    tabela = construir_tabela(
+        colunas=[coluna_pais, coluna_estado],
+        nome_tabela="pedidos",
+        nome_escopo="vendas",
+        restricoes_fk_compostas=[
+            RestricaoDeFkComposta(
+                colunas_locais=("pais_id", "estado_id"),
+                nome_escopo_referenciado="geografia",
+                nome_tabela_referenciada="estados",
+                colunas_referenciadas=("pais_id", "id"),
+            )
+        ],
+    )
+    tabela_estados = construir_tabela(
+        colunas=[construir_coluna(nome="id", chave_primaria=True)],
+        nome_tabela="estados",
+        nome_escopo="geografia",
+    )
+    banco = construir_banco([tabela, tabela_estados])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path, "vendas")
+    modelo = _modelo(schema, "stg_vendas__pedidos")
+
+    coluna_pais_yaml = _coluna(modelo, "pais_id")
+    assert "tests" not in coluna_pais_yaml
+    coluna_estado_yaml = _coluna(modelo, "estado_id")
+    assert "tests" not in coluna_estado_yaml
+
+    assert modelo["tests"] == [
+        {
+            "composite_relationships": {
+                "column_names": ["pais_id", "estado_id"],
+                "to": "ref('stg_geografia__estados')",
+                "field_names": ["pais_id", "id"],
+            }
+        }
+    ]
+
+
+def test_fk_composta_fora_do_lote_emite_aviso_e_omite_teste_de_model(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """FK composta fora do lote gera Aviso, sem o teste de model."""
+    coluna_pais = construir_coluna(nome="pais_id")
+    coluna_estado = construir_coluna(nome="estado_id")
+    tabela = construir_tabela(
+        colunas=[coluna_pais, coluna_estado],
+        nome_tabela="pedidos",
+        nome_escopo="vendas",
+        restricoes_fk_compostas=[
+            RestricaoDeFkComposta(
+                colunas_locais=("pais_id", "estado_id"),
+                nome_escopo_referenciado="geografia",
+                nome_tabela_referenciada="estados",
+                colunas_referenciadas=("pais_id", "id"),
+            )
+        ],
+    )
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    assert len(resultado.avisos) == 1
+    assert "geografia.estados" in resultado.avisos[0].mensagem
+
+    schema = _schema_yml(tmp_path, "vendas")
+    modelo = _modelo(schema, "stg_vendas__pedidos")
+    assert "tests" not in modelo
+
+
 def test_accepted_values_omitido_quando_top10_cobre_pouco_da_amostra(
     tmp_path: Path,
     construir_coluna: Callable[..., ColunaAnalisada],
@@ -503,6 +614,172 @@ def test_accepted_values_considera_apenas_nao_nulos_no_denominador(
     testes = coluna_yaml["tests"]
     accepted = next(t for t in testes if isinstance(t, dict))
     assert accepted["accepted_values"]["values"] == ["ativo", "inativo"]
+
+
+def test_timestamp_nunca_sugere_accepted_values_mesmo_com_cobertura_total(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """TIMESTAMP nunca sugere accepted_values, mesmo com cobertura/cardinalidade ok.
+
+    Issue #95.
+
+    Achado real: `criado_em` travado em 2 valores literais de data/hora
+    numa amostra pequena passava nos critérios antigos (percentual_unico<10
+    + cobertura>=0.9), mas datas são monotônicas por natureza — nenhuma
+    amostra torna um "criado em" um universo fechado.
+    """
+    metrica = MetricasBaseColuna(
+        percentual_nulo=0.0,
+        percentual_unico=2.0,
+        valores_frequentes=[("2024-01-01T00:00:00", 60), ("2024-01-02T00:00:00", 40)],
+    )
+    coluna = construir_coluna(
+        nome="criado_em",
+        tipo_dado=TipoDeDado(categoria=CategoriaDeDado.TIMESTAMP),
+        metricas=[metrica],
+    )
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=100)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "criado_em")
+    assert _accepted_values(coluna_yaml) is None
+
+
+def test_amostra_abaixo_do_piso_nao_sugere_accepted_values(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Amostra abaixo do piso não sugere accepted_values, mesmo com cobertura total.
+
+    Issue #95.
+
+    Antes desta issue, o `GeradorDbt` não tinha piso de amostra — só
+    `GeradorContextoDeIA` tinha (`_TAMANHO_AMOSTRA_MINIMO_ENUM`), e os dois
+    divergiam por isso.
+    """
+    metrica = MetricasBaseColuna(
+        percentual_nulo=0.0,
+        percentual_unico=5.0,
+        valores_frequentes=[("a", 10), ("b", 10)],
+    )
+    coluna = construir_coluna(nome="flag", metricas=[metrica])
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=20)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "flag")
+    assert _accepted_values(coluna_yaml) is None
+
+
+def test_exatamente_dez_distintos_reconstruidos_nao_sugere_accepted_values(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Teto de cardinalidade pega o que `percentual_unico<10` sozinho não pegaria (#95).
+
+    200 linhas, `percentual_unico=5.0` (passaria no critério antigo), mas a
+    contagem de distintos reconstruída (`200 * 0.05 = 10`) bate o teto —
+    `valores_frequentes` truncado em 10 não distingue "tem exatamente 10
+    distintos" de "tem 200 e só vemos os 10 mais frequentes".
+    """
+    metrica = MetricasBaseColuna(
+        percentual_nulo=0.0,
+        percentual_unico=5.0,
+        valores_frequentes=[(str(v), 20) for v in range(10)],
+    )
+    coluna = construir_coluna(nome="codigo", metricas=[metrica])
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=200)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "codigo")
+    assert _accepted_values(coluna_yaml) is None
+
+
+def test_nove_distintos_com_amostra_e_cobertura_ok_sugere_accepted_values(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Abaixo do teto de cardinalidade, com amostra e cobertura ok, ainda sugere (#95).
+
+    200 linhas, `percentual_unico=4.5` reconstrói pra 9 distintos — abaixo
+    do teto de 10 — e os 9 valores cobrem 190/200 (95%) da amostra.
+    """
+    valores_frequentes = [(str(v), 21) for v in range(8)] + [("8", 22)]
+    metrica = MetricasBaseColuna(
+        percentual_nulo=0.0,
+        percentual_unico=4.5,
+        valores_frequentes=valores_frequentes,
+    )
+    coluna = construir_coluna(nome="codigo", metricas=[metrica])
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=200)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "codigo")
+    testes = coluna_yaml["tests"]
+    accepted = next(t for t in testes if isinstance(t, dict))
+    assert accepted["accepted_values"]["values"] == [str(v) for v in range(9)]
+
+
+def test_alta_cardinalidade_real_mascarada_por_nulos_nao_sugere_accepted_values(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Regressão: nulos não podem mascarar cardinalidade real alta (#95).
+
+    1000 linhas, 90% nulas (100 não-nulas), `percentual_unico=6.0` — a
+    contagem real de distintos é `1000 * 0.06 = 60`, bem acima do teto de
+    10. A fórmula antiga de `_contagem_de_distintos` multiplicava de novo
+    pelo não-nulo (`100 * 0.06 = 6`), passando incorretamente no teto de
+    cardinalidade só porque a coluna tem muitos nulos — reintroduzindo o
+    falso positivo que esta issue existe para eliminar.
+    """
+    valores_frequentes = [(str(v), 9) for v in range(9)] + [("9", 14)]
+    metrica = MetricasBaseColuna(
+        percentual_nulo=90.0,
+        percentual_unico=6.0,
+        valores_frequentes=valores_frequentes,
+    )
+    coluna = construir_coluna(nome="codigo", metricas=[metrica])
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=1000)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "codigo")
+    assert _accepted_values(coluna_yaml) is None
 
 
 def test_coluna_unknown_nao_recebe_cast(
@@ -1029,6 +1306,74 @@ def test_macro_unique_percentage_orfao_e_removido(
 ) -> None:
     """Borda: unique_percentage_at_least.sql de execução anterior some sem uso."""
     caminho = tmp_path / "macros" / "unique_percentage_at_least.sql"
+    caminho.parent.mkdir(parents=True)
+    caminho.write_text("-- execução anterior")
+    tabela = construir_tabela(colunas=[construir_coluna()])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    assert not caminho.exists()
+
+
+def test_macro_composite_relationships_nao_gerado_sem_consumidor(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Sem FK composta referenciando o lote, composite_relationships.sql não sai."""
+    tabela = construir_tabela(colunas=[construir_coluna()])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    assert not (tmp_path / "macros" / "composite_relationships.sql").exists()
+
+
+def test_macro_composite_relationships_gerado_com_consumidor(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Com FK composta referenciando tabela do lote, composite_relationships.sql sai."""
+    tabela = construir_tabela(
+        colunas=[construir_coluna(nome="pais_id"), construir_coluna(nome="estado_id")],
+        nome_tabela="pedidos",
+        nome_escopo="vendas",
+        restricoes_fk_compostas=[
+            RestricaoDeFkComposta(
+                colunas_locais=("pais_id", "estado_id"),
+                nome_escopo_referenciado="vendas",
+                nome_tabela_referenciada="estados",
+                colunas_referenciadas=("pais_id", "id"),
+            )
+        ],
+    )
+    tabela_estados = construir_tabela(
+        colunas=[construir_coluna(nome="id", chave_primaria=True)],
+        nome_tabela="estados",
+        nome_escopo="vendas",
+    )
+    banco = construir_banco([tabela, tabela_estados])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    assert (tmp_path / "macros" / "composite_relationships.sql").exists()
+
+
+def test_macro_composite_relationships_orfao_e_removido(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Borda: composite_relationships.sql de execução anterior some sem consumidor."""
+    caminho = tmp_path / "macros" / "composite_relationships.sql"
     caminho.parent.mkdir(parents=True)
     caminho.write_text("-- execução anterior")
     tabela = construir_tabela(colunas=[construir_coluna()])

@@ -23,15 +23,11 @@ from ddf.domain.model.analysis import (
     TabelaAnalisada,
     TipoDeMetrica,
 )
-from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.generators._escrita import escrever_arquivo
-from ddf.infrastructure.adapters.generators._metricas import (
-    _COBERTURA_MINIMA_ACCEPTED_VALUES,
-    _cobertura_dos_valores_frequentes,
-)
+from ddf.infrastructure.adapters.generators._metricas import _elegivel_para_enumeracao
 
 _ORIGEM = "GeradorDbt"
 
@@ -93,6 +89,9 @@ _CONTEUDO_MATCHES_FORMAT: dict[str, str] = {
 }
 _CONTEUDO_UNIQUE_PERCENTAGE_AT_LEAST = (
     _TEMPLATES_DIR / "macros" / "unique_percentage_at_least.sql"
+).read_text()
+_CONTEUDO_COMPOSITE_RELATIONSHIPS = (
+    _TEMPLATES_DIR / "macros" / "composite_relationships.sql"
 ).read_text()
 
 
@@ -267,6 +266,7 @@ def _sugestoes_de_teste(
     presentes: set[tuple[str, str]],
     avisos: list[Aviso],
     tamanho_amostra: int,
+    colunas_em_fk_composta: set[str],
 ) -> list[Any]:
     """Sugere os testes dbt de qualidade aplicáveis a uma coluna.
 
@@ -286,27 +286,25 @@ def _sugestoes_de_teste(
     model que este Gerador não produziu quebraria `dbt run`. Quando a
     referência está fora do lote, emite `Aviso` e omite o teste.
 
-    **Limitação conhecida — FK composta:** o teste
-    é gerado **por coluna**, uma `relationships` independente para cada
-    coluna local apontando pro seu par referenciado. Isso testa que cada
-    valor individual existe na coluna referenciada correspondente, **não**
-    que a combinação das colunas juntas forma uma linha válida na tabela
-    referenciada — a integridade referencial real de uma FK composta.
-    `ColunaAnalisada.referencia` é modelado por coluna (`ReferenciaDeColuna`
-    não agrupa colunas de uma mesma constraint), então este Gerador não tem
-    como saber que duas colunas pertencem à mesma FK composta pra emitir um
-    teste único sobre o par. Modelar isso exigiria agrupar colunas de uma
-    mesma constraint composta já no Extraction Context — mudança de escopo
-    maior, avaliada e adiada nesta issue.
+    **FK composta (issue #95):** uma coluna que pertence a
+    `colunas_em_fk_composta` nunca recebe o `relationships` per-coluna,
+    mesmo tendo `chave_estrangeira=True`/`referencia` preenchida — o teste
+    real pra ela é o model-level `composite_relationships` (ver
+    `_testes_de_modelo`), que testa a combinação das colunas juntas, não
+    cada uma isoladamente (limitação conhecida desde a #56, fechada aqui).
 
-    `accepted_values` usa `severity: warn` e só é sugerido quando os top-10
-    `valores_frequentes` cobrem pelo menos `_COBERTURA_MINIMA_ACCEPTED_VALUES`
-    dos valores **não-nulos** da amostra (ver
-    `_cobertura_dos_valores_frequentes`): é um teste de enumeração exaustiva
+    `accepted_values` usa `severity: warn` e só é sugerido quando
+    `_elegivel_para_enumeracao` aprova a coluna (issue #95): categoria de
+    dado não monotônica/incompatível (`TIMESTAMP`/`DATE`/`TIME`/`UUID`/
+    `JSON`/`ARRAY` excluídas), amostra acima do piso mínimo, contagem real
+    de distintos abaixo do teto de cardinalidade, `percentual_unico < 10.0`
+    e cobertura dos top-10 `valores_frequentes` sobre os não-nulos da
+    amostra acima do mínimo exigido — é um teste de enumeração exaustiva
     calculado sobre uma amostra parcial, não a população completa, então um
-    valor de cauda longa fora da amostra não deve quebrar CI silenciosamente
-    — e uma cobertura baixa é sinal de que a lista está longe de ser
-    exaustiva mesmo dentro do próprio universo não-nulo amostrado.
+    valor de cauda longa fora da amostra não deve quebrar CI silenciosamente,
+    e os critérios adicionais evitam sugerir enumeração pra colunas que só
+    pareciam categóricas por amostra pequena ou tipo incompatível (ver
+    `_metricas.py` para a justificativa completa de cada critério).
 
     `matches_format` (issue #90) é sugerido quando `formato_detectado` está
     presente, com `severity: warn` (ver `docs/low_level_design.md` para a
@@ -324,6 +322,9 @@ def _sugestoes_de_teste(
         avisos: lista de avisos acumulada pelo Gerador, alimentada quando
             uma FK referencia tabela fora do lote.
         tamanho_amostra: total de linhas amostradas da tabela desta coluna.
+        colunas_em_fk_composta: nomes de coluna desta tabela que pertencem
+            a alguma `RestricaoDeFkComposta` — suprime `relationships`
+            per-coluna pra elas (issue #95).
 
     Returns:
         Lista de testes no formato aceito por `schema.yml` (strings para
@@ -374,7 +375,11 @@ def _sugestoes_de_teste(
             }
         )
 
-    if coluna.chave_estrangeira and coluna.referencia is not None:
+    if (
+        coluna.chave_estrangeira
+        and coluna.referencia is not None
+        and coluna.nome not in colunas_em_fk_composta
+    ):
         referencia = coluna.referencia
         if (referencia.nome_escopo, referencia.nome_tabela) in presentes:
             nome_model_referenciado = _nome_model(
@@ -401,22 +406,16 @@ def _sugestoes_de_teste(
                 )
             )
 
-    categorica = (
-        metrica is not None
-        and metrica.valores_frequentes
-        and metrica.percentual_unico < 10.0
-    )
-    if categorica and metrica is not None:
-        cobertura = _cobertura_dos_valores_frequentes(metrica, tamanho_amostra)
-        if cobertura >= _COBERTURA_MINIMA_ACCEPTED_VALUES:
-            testes.append(
-                {
-                    "accepted_values": {
-                        "values": [valor for valor, _ in metrica.valores_frequentes],
-                        "config": {"severity": "warn"},
-                    }
+    elegivel = _elegivel_para_enumeracao(coluna, metrica, tamanho_amostra)
+    if elegivel and metrica is not None:
+        testes.append(
+            {
+                "accepted_values": {
+                    "values": [valor for valor, _ in metrica.valores_frequentes],
+                    "config": {"severity": "warn"},
                 }
-            )
+            }
+        )
 
     return testes
 
@@ -426,6 +425,7 @@ def _coluna_schema_yaml(
     presentes: set[tuple[str, str]],
     avisos: list[Aviso],
     tamanho_amostra: int,
+    colunas_em_fk_composta: set[str],
 ) -> dict[str, Any]:
     """Monta a entrada de uma coluna em `schema.yml`.
 
@@ -434,6 +434,8 @@ def _coluna_schema_yaml(
         presentes: pares (nome_escopo, nome_tabela) do lote analisado.
         avisos: lista de avisos acumulada pelo Gerador.
         tamanho_amostra: total de linhas amostradas da tabela desta coluna.
+        colunas_em_fk_composta: nomes de coluna desta tabela que pertencem
+            a alguma `RestricaoDeFkComposta` (issue #95).
 
     Returns:
         Dict com `name`, `description` opcional (de `papel_de_negocio`) e
@@ -442,36 +444,81 @@ def _coluna_schema_yaml(
     entrada: dict[str, Any] = {"name": coluna.nome}
     if coluna.papel_de_negocio:
         entrada["description"] = coluna.papel_de_negocio
-    testes = _sugestoes_de_teste(coluna, presentes, avisos, tamanho_amostra)
+    testes = _sugestoes_de_teste(
+        coluna, presentes, avisos, tamanho_amostra, colunas_em_fk_composta
+    )
     if testes:
         entrada["tests"] = testes
     return entrada
 
 
-def _testes_de_modelo(restricoes_unicas: list[RestricaoUnica]) -> list[Any]:
+def _testes_de_modelo(
+    tabela: TabelaAnalisada,
+    presentes: set[tuple[str, str]],
+    avisos: list[Aviso],
+) -> list[Any]:
     """Sugere os testes dbt de qualidade aplicáveis no nível do model (tabela).
 
-    Diferente de `_sugestoes_de_teste` (nível coluna), hoje o único teste
-    model-level é `dbt_utils.unique_combination_of_columns` — um por
-    `RestricaoUnica` (UNIQUE composto real do schema, issue #89). Usa
-    severidade padrão (`error`), não `warn` como `accepted_values`: é fato
-    estrutural do catálogo, não estimativa sobre amostra.
+    Diferente de `_sugestoes_de_teste` (nível coluna), dois testes vivem
+    aqui — ambos fatos estruturais do catálogo, com severidade padrão
+    (`error`), não `warn` como `accepted_values` (não há razão estatística
+    pra suavizar um fato estrutural):
+
+    - `dbt_utils.unique_combination_of_columns` — um por `RestricaoUnica`
+      (UNIQUE composto real do schema, issue #89).
+    - `composite_relationships` — um por `RestricaoDeFkComposta` (FK
+      composta real do schema, issue #95), só quando a tabela referenciada
+      está no lote (mesma regra do `relationships` single-column); senão,
+      `Aviso` + omissão.
 
     Args:
-        restricoes_unicas: UNIQUE compostos reais da tabela.
+        tabela: tabela analisada a documentar.
+        presentes: pares (nome_escopo, nome_tabela) do lote analisado —
+            usado só pela checagem de `composite_relationships`.
+        avisos: lista de avisos acumulada pelo Gerador, alimentada quando
+            uma FK composta referencia tabela fora do lote.
 
     Returns:
-        Lista de testes no formato aceito por `schema.yml` (dicts), uma
-        entrada `dbt_utils.unique_combination_of_columns` por restrição.
+        Lista de testes no formato aceito por `schema.yml` (dicts).
     """
-    return [
+    testes: list[Any] = [
         {
             "dbt_utils.unique_combination_of_columns": {
                 "combination_of_columns": list(restricao.colunas),
             }
         }
-        for restricao in restricoes_unicas
+        for restricao in tabela.restricoes_unicas
     ]
+    for restricao_fk in tabela.restricoes_fk_compostas:
+        chave_referenciada = (
+            restricao_fk.nome_escopo_referenciado,
+            restricao_fk.nome_tabela_referenciada,
+        )
+        if chave_referenciada not in presentes:
+            avisos.append(
+                Aviso(
+                    mensagem=(
+                        f"FK composta de '{tabela.nome_escopo}.{tabela.nome_tabela}' "
+                        f"({', '.join(restricao_fk.colunas_locais)}) referencia "
+                        f"'{chave_referenciada[0]}.{chave_referenciada[1]}', fora do "
+                        "lote analisado nesta execução — teste "
+                        "composite_relationships omitido."
+                    ),
+                    origem=_ORIGEM,
+                )
+            )
+            continue
+        nome_model_referenciado = _nome_model(*chave_referenciada)
+        testes.append(
+            {
+                "composite_relationships": {
+                    "column_names": list(restricao_fk.colunas_locais),
+                    "to": f"ref('{nome_model_referenciado}')",
+                    "field_names": list(restricao_fk.colunas_referenciadas),
+                }
+            }
+        )
+    return testes
 
 
 def _model_schema_yaml(
@@ -492,12 +539,17 @@ def _model_schema_yaml(
     entrada: dict[str, Any] = {"name": nome_model}
     if tabela.papel_de_negocio:
         entrada["description"] = tabela.papel_de_negocio
-    testes_de_modelo = _testes_de_modelo(tabela.restricoes_unicas)
+    testes_de_modelo = _testes_de_modelo(tabela, presentes, avisos)
     if testes_de_modelo:
         entrada["tests"] = testes_de_modelo
     tamanho_amostra = tabela.metadados_amostra.tamanho_amostra
+    colunas_em_fk_composta: set[str] = set()
+    for restricao in tabela.restricoes_fk_compostas:
+        colunas_em_fk_composta.update(restricao.colunas_locais)
     entrada["columns"] = [
-        _coluna_schema_yaml(coluna, presentes, avisos, tamanho_amostra)
+        _coluna_schema_yaml(
+            coluna, presentes, avisos, tamanho_amostra, colunas_em_fk_composta
+        )
         for coluna in tabela.colunas
     ]
     return entrada
@@ -583,6 +635,32 @@ def _precisa_dbt_utils(tabelas: list[TabelaAnalisada]) -> bool:
         for coluna in tabela.colunas:
             metrica = _metrica_de_coluna(coluna)
             if _precisa_teste_soft_nulo(coluna, metrica, tamanho_amostra):
+                return True
+    return False
+
+
+def _precisa_composite_relationships(
+    tabelas: list[TabelaAnalisada], presentes: set[tuple[str, str]]
+) -> bool:
+    """Indica se algum consumidor real de `macros/composite_relationships.sql` existe.
+
+    Args:
+        tabelas: tabelas do lote analisado.
+        presentes: pares (nome_escopo, nome_tabela) do lote analisado.
+
+    Returns:
+        True se pelo menos uma `RestricaoDeFkComposta` referencia uma
+        tabela presente no lote — sem isso, `_testes_de_modelo` só emite
+        `Aviso` (fora do lote) e nunca gera o teste, então escrever o macro
+        seria decoração no artefato gerado.
+    """
+    for tabela in tabelas:
+        for restricao in tabela.restricoes_fk_compostas:
+            chave_referenciada = (
+                restricao.nome_escopo_referenciado,
+                restricao.nome_tabela_referenciada,
+            )
+            if chave_referenciada in presentes:
                 return True
     return False
 
@@ -699,6 +777,9 @@ class GeradorDbt:
         usa_dbt_utils = _precisa_dbt_utils(tabelas)
         usa_matches_format = _precisa_matches_format(tabelas)
         usa_unique_percentage_at_least = _precisa_unique_percentage_at_least(tabelas)
+        usa_composite_relationships = _precisa_composite_relationships(
+            tabelas, presentes
+        )
 
         gerado_em = datetime.now(UTC).isoformat()
         projeto = {**_DBT_PROJECT, "meta": {"generated_at": gerado_em}}
@@ -750,6 +831,22 @@ class GeradorDbt:
                 return resultado_macro_unico
         else:
             caminho_unique_percentage.unlink(missing_ok=True)
+
+        # macros/composite_relationships.sql (issue #95): mesmo princípio de
+        # órfão condicional dos macros acima — só existe com consumidor
+        # real (RestricaoDeFkComposta referenciando tabela presente no
+        # lote), removido explicitamente quando fica órfão.
+        caminho_composite_relationships = (
+            destino / "macros" / "composite_relationships.sql"
+        )
+        if usa_composite_relationships:
+            resultado_macro_composite = escrever_arquivo(
+                caminho_composite_relationships, _CONTEUDO_COMPOSITE_RELATIONSHIPS
+            )
+            if isinstance(resultado_macro_composite, Falha):
+                return resultado_macro_composite
+        else:
+            caminho_composite_relationships.unlink(missing_ok=True)
 
         resultado_readme = escrever_arquivo(
             destino / "README.md",
