@@ -322,6 +322,39 @@ def test_nove_distintos_com_amostra_e_cobertura_ok_sugere_enum(
     assert filtraveis[0]["coluna"] == "codigo"
 
 
+def test_alta_cardinalidade_real_mascarada_por_nulos_nao_sugere_enum(
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    tmp_path: Path,
+) -> None:
+    """Regressão: nulos não podem mascarar cardinalidade real alta (#95).
+
+    1000 linhas, 90% nulas (100 não-nulas), `percentual_unico=6.0` — a
+    contagem real de distintos é `1000 * 0.06 = 60`, bem acima do teto de
+    10. A fórmula antiga de `_contagem_de_distintos` multiplicava de novo
+    pelo não-nulo (`100 * 0.06 = 6`), passando incorretamente no teto de
+    cardinalidade só porque a coluna tem muitos nulos.
+    """
+    valores_frequentes = [(str(v), 9) for v in range(9)] + [("9", 14)]
+    metrica = MetricasBaseColuna(
+        percentual_nulo=90.0,
+        percentual_unico=6.0,
+        valores_frequentes=valores_frequentes,
+    )
+    coluna = construir_coluna(nome="codigo", metricas=[metrica])
+    tabela = construir_tabela(
+        colunas=[coluna], nome_tabela="pedidos", tamanho_amostra=1000
+    )
+    banco = construir_banco([tabela])
+
+    resultado = GeradorContextoDeIA()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    chunk = _ler_json(tmp_path / "tabelas" / "escopo" / "pedidos.json")
+    assert "esquema_de_consulta" not in chunk
+
+
 def test_chave_primaria_nunca_vira_sugestao_de_enum(
     construir_coluna: Callable[..., ColunaAnalisada],
     construir_tabela: Callable[..., TabelaAnalisada],

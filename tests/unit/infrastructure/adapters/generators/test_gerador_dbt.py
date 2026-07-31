@@ -748,6 +748,40 @@ def test_nove_distintos_com_amostra_e_cobertura_ok_sugere_accepted_values(
     assert accepted["accepted_values"]["values"] == [str(v) for v in range(9)]
 
 
+def test_alta_cardinalidade_real_mascarada_por_nulos_nao_sugere_accepted_values(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Regressão: nulos não podem mascarar cardinalidade real alta (#95).
+
+    1000 linhas, 90% nulas (100 não-nulas), `percentual_unico=6.0` — a
+    contagem real de distintos é `1000 * 0.06 = 60`, bem acima do teto de
+    10. A fórmula antiga de `_contagem_de_distintos` multiplicava de novo
+    pelo não-nulo (`100 * 0.06 = 6`), passando incorretamente no teto de
+    cardinalidade só porque a coluna tem muitos nulos — reintroduzindo o
+    falso positivo que esta issue existe para eliminar.
+    """
+    valores_frequentes = [(str(v), 9) for v in range(9)] + [("9", 14)]
+    metrica = MetricasBaseColuna(
+        percentual_nulo=90.0,
+        percentual_unico=6.0,
+        valores_frequentes=valores_frequentes,
+    )
+    coluna = construir_coluna(nome="codigo", metricas=[metrica])
+    tabela = construir_tabela(colunas=[coluna], tamanho_amostra=1000)
+    banco = construir_banco([tabela])
+
+    resultado = GeradorDbt()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    schema = _schema_yml(tmp_path)
+    modelo = _modelo(schema, "stg_escopo__tabela")
+    coluna_yaml = _coluna(modelo, "codigo")
+    assert _accepted_values(coluna_yaml) is None
+
+
 def test_coluna_unknown_nao_recebe_cast(
     tmp_path: Path,
     construir_coluna: Callable[..., ColunaAnalisada],
