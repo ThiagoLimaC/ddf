@@ -20,7 +20,7 @@ from typing import Any
 from ddf.domain.model.analysis import BancoAnalisado, MetricasBaseColuna, TipoDeMetrica
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
-from ddf.infrastructure.adapters.generators._escrita import escrever_arquivo
+from ddf.infrastructure.adapters.generators.comum._escrita import escrever_arquivo
 from ddf.infrastructure.adapters.generators.dbt._sql import _nome_model, _renderizar_sql
 from ddf.infrastructure.adapters.generators.dbt._templates import (
     _CONTEUDO_COMPOSITE_RELATIONSHIPS,

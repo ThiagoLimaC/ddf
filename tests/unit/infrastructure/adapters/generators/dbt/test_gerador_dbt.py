@@ -20,7 +20,7 @@ from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkCompos
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.shared.resultado import Falha, Sucesso
-from ddf.infrastructure.adapters.analyzers.detector_de_formato import _REGEXES
+from ddf.infrastructure.adapters.analyzers.comum.detector_de_formato import _REGEXES
 from ddf.infrastructure.adapters.generators.dbt.gerador_dbt import GeradorDbt
 
 _CAMINHO_MACRO_MATCHES_FORMAT = (

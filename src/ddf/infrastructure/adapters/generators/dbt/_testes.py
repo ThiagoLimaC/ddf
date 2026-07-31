@@ -19,7 +19,9 @@ from ddf.domain.model.analysis import (
     TabelaAnalisada,
 )
 from ddf.domain.shared.aviso import Aviso
-from ddf.infrastructure.adapters.generators._metricas import _elegivel_para_enumeracao
+from ddf.infrastructure.adapters.generators.comum._metricas import (
+    _elegivel_para_enumeracao,
+)
 from ddf.infrastructure.adapters.generators.dbt._sql import _nome_model
 
 _ORIGEM = "GeradorDbt"

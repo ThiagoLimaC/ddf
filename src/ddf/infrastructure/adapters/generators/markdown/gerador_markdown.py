@@ -11,7 +11,7 @@ from ddf.domain.model.analysis import (
 )
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
-from ddf.infrastructure.adapters.generators._escrita import escrever_arquivo
+from ddf.infrastructure.adapters.generators.comum._escrita import escrever_arquivo
 from ddf.infrastructure.adapters.generators.markdown._filtros import (
     _colunas_com_fk_composta,
     _colunas_com_restricao_composta,

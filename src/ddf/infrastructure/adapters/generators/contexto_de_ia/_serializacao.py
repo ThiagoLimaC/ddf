@@ -9,7 +9,7 @@ from ddf.domain.model.analysis import (
     MetricasBaseTabela,
     TabelaAnalisada,
 )
-from ddf.infrastructure.adapters.generators._metricas import (
+from ddf.infrastructure.adapters.generators.comum._metricas import (
     _cobertura_dos_valores_frequentes,
     _elegivel_para_enumeracao,
 )

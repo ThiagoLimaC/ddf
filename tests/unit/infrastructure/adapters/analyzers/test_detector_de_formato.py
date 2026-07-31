@@ -1,6 +1,8 @@
 """Testes de detectar_formato."""
 
-from ddf.infrastructure.adapters.analyzers.detector_de_formato import detectar_formato
+from ddf.infrastructure.adapters.analyzers.comum.detector_de_formato import (
+    detectar_formato,
+)
 
 # Caminho feliz
 

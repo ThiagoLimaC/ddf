@@ -22,7 +22,7 @@ from typing import Any
 
 from ddf.domain.model.analysis import BancoAnalisado, MetricasBaseColuna, TipoDeMetrica
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
-from ddf.infrastructure.adapters.generators._escrita import escrever_arquivo
+from ddf.infrastructure.adapters.generators.comum._escrita import escrever_arquivo
 from ddf.infrastructure.adapters.generators.contexto_de_ia._grafo import _montar_grafo
 from ddf.infrastructure.adapters.generators.contexto_de_ia._serializacao import (
     _dump_json,
