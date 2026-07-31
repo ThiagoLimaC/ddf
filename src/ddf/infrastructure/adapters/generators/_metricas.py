@@ -97,10 +97,14 @@ def _contagem_de_distintos(metrica: MetricasBaseColuna, tamanho_amostra: int) ->
 
     `valores_frequentes` só guarda os top-10 — contar `len(valores_frequentes)`
     não distingue "a coluna tem exatamente 10 distintos" de "tem 200 e só
-    vemos os 10 mais frequentes". `percentual_unico`, ao contrário, é
-    calculado sobre a amostra não-nula inteira (`AnalisadorDeMetricasDeColuna`),
-    então reconstruir a contagem a partir dele dá o valor real, não um proxy
-    truncado.
+    vemos os 10 mais frequentes". `percentual_unico`, ao contrário, já é
+    `distintos_não_nulos / tamanho_amostra * 100` sobre a amostra inteira
+    (`AnalisadorDeMetricasDeColuna._construir_metricas_de_coluna`), então a
+    contagem real é só desfazer essa divisão: `distintos = percentual_unico
+    * tamanho_amostra / 100`. Não multiplicar de novo pela fração de
+    não-nulos — o denominador de `percentual_unico` já é o total, não o
+    não-nulo; fazer isso de novo subestima a contagem sempre que há nulos
+    (ex.: 90% nulos e 60 distintos reais vira `6`, não `60`).
 
     Args:
         metrica: métricas de coluna já calculadas.
@@ -109,8 +113,7 @@ def _contagem_de_distintos(metrica: MetricasBaseColuna, tamanho_amostra: int) ->
     Returns:
         Nº de valores distintos entre os não-nulos da amostra, arredondado.
     """
-    nao_nulos_na_amostra = tamanho_amostra * (1 - metrica.percentual_nulo / 100)
-    return round(nao_nulos_na_amostra * metrica.percentual_unico / 100)
+    return round(tamanho_amostra * metrica.percentual_unico / 100)
 
 
 def _elegivel_para_enumeracao(
