@@ -7,6 +7,7 @@ import pytest
 from ddf.domain.model.analysis import iniciar_contexto
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado
 from ddf.domain.model.curation import BancoCurado
@@ -349,6 +350,17 @@ def test_extrair_tabela_com_fk_composta_pareia_colunas_corretamente(
     # construir_metadados_de_amostra).
     assert len(resultado.avisos) == 1
     assert "varredura sequencial completa" in resultado.avisos[0].mensagem
+
+    # issue #95: as mesmas 2 colunas também formam uma RestricaoDeFkComposta,
+    # apontando pra geografia.pais(codigo, estado) — a PK composta real.
+    assert resultado.valor.restricoes_fk_compostas == [
+        RestricaoDeFkComposta(
+            colunas_locais=("pais_codigo", "pais_estado"),
+            nome_escopo_referenciado="geografia",
+            nome_tabela_referenciada="pais",
+            colunas_referenciadas=("codigo", "estado"),
+        )
+    ]
 
 
 def test_coluna_array_com_valores_vazios_e_nulos_nao_quebra_analisador(
