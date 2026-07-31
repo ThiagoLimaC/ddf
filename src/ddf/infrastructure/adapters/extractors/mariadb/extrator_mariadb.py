@@ -20,15 +20,16 @@ from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
-from ddf.infrastructure.adapters.extractors.construir_colunas_fk import (
+from ddf.infrastructure.adapters.extractors.comum.construir_colunas_fk import (
     construir_colunas_fk,
 )
-from ddf.infrastructure.adapters.extractors.construir_metadados_de_amostra import (
+from ddf.infrastructure.adapters.extractors.comum.construir_metadados_de_amostra import (  # noqa: E501
     construir_metadados_de_amostra,
 )
-from ddf.infrastructure.adapters.extractors.construir_restricoes_fk_compostas import (
+from ddf.infrastructure.adapters.extractors.comum.construir_restricoes_fk_compostas import (  # noqa: E501
     construir_restricoes_fk_compostas,
 )
+from ddf.infrastructure.adapters.extractors.comum.seed_efetivo import seed_efetivo
 from ddf.infrastructure.adapters.extractors.mariadb._queries import (
     _CHAVES_ESTRANGEIRAS_SQL,
     _CHAVES_PRIMARIAS_SQL,
@@ -43,7 +44,6 @@ from ddf.infrastructure.adapters.extractors.mariadb.mapeamento_de_tipos import (
     _extrair_coluna_json_valid,
     mapear_tipo_mariadb,
 )
-from ddf.infrastructure.adapters.extractors.seed_efetivo import seed_efetivo
 
 
 class _LinhaColuna(NamedTuple):

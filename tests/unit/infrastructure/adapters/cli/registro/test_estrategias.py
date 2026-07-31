@@ -10,7 +10,7 @@ from ddf.infrastructure.adapters.cli.registro.estrategias import (
     _construir_percentual_de_linhas,
     registrar_estrategia,
 )
-from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
+from ddf.infrastructure.adapters.extractors.estrategias.percentual_de_linhas import (
     PercentualDeLinhas,
 )
 

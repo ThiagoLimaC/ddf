@@ -1,7 +1,7 @@
 """Testes de construir_restricoes_fk_compostas."""
 
 from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
-from ddf.infrastructure.adapters.extractors.construir_restricoes_fk_compostas import (
+from ddf.infrastructure.adapters.extractors.comum.construir_restricoes_fk_compostas import (  # noqa: E501
     construir_restricoes_fk_compostas,
 )
 

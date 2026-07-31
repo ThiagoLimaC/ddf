@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from ddf.domain.ports.estrategia_de_amostragem import EstrategiaDeAmostragem
-from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
+from ddf.infrastructure.adapters.extractors.estrategias.percentual_de_linhas import (
     PercentualDeLinhas,
 )
 

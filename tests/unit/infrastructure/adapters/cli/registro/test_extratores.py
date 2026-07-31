@@ -11,11 +11,11 @@ from ddf.infrastructure.adapters.cli.registro.extratores import (
     _formatar_host,
     registrar_extrator,
 )
+from ddf.infrastructure.adapters.extractors.estrategias.percentual_de_linhas import (
+    PercentualDeLinhas,
+)
 from ddf.infrastructure.adapters.extractors.mariadb.extrator_mariadb import (
     ExtratorMariaDB,
-)
-from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
-    PercentualDeLinhas,
 )
 from ddf.infrastructure.adapters.extractors.postgres.extrator_postgres import (
     ExtratorPostgres,

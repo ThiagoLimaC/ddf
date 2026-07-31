@@ -2,7 +2,9 @@
 
 from ddf.domain.model.common.requisicao_de_amostragem import AmostragemIntegral
 from ddf.domain.ports.estrategia_de_amostragem import EstrategiaDeAmostragem
-from ddf.infrastructure.adapters.extractors.tabela_inteira import TabelaInteira
+from ddf.infrastructure.adapters.extractors.estrategias.tabela_inteira import (
+    TabelaInteira,
+)
 
 # Caminho feliz
 

@@ -1,0 +1,1 @@
+"""Implementações concretas de `EstrategiaDeAmostragem`."""

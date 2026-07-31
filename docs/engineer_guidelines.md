@@ -360,9 +360,15 @@ tests/
 **Subpastas por fonte dentro de `extractors/`:** só o que é específico de uma
 fonte concreta (ex.: `postgres/` — vocabulário de tipos do
 `information_schema`, sintaxe SQL do próprio banco) fica na subpasta. O que é
-agnóstico de fonte (ex.: `percentual_de_linhas.py`, implementação de
-`EstrategiaDeAmostragem`) fica no nível de `extractors/`, reutilizável por
-qualquer `Extrator` futuro.
+agnóstico de fonte fica em uma subpasta própria por tipo de reuso (issue
+#96), não solto no nível de `extractors/`:
+
+- `extractors/comum/` — helpers internos reusados por 2+ Extratores
+  concretos (ex.: `construir_metadados_de_amostra.py`, `seed_efetivo.py`).
+- `extractors/estrategias/` — implementações de `EstrategiaDeAmostragem`
+  (ex.: `percentual_de_linhas.py`), responsabilidade conceitualmente
+  diferente de um helper interno de Extrator: é política de amostragem,
+  não leitura de metadado de catálogo.
 
 ## `conftest.py` desde o primeiro teste de cada camada
 

@@ -4,7 +4,7 @@ from ddf.domain.model.common.requisicao_de_amostragem import (
     AmostragemIntegral,
     AmostragemProbabilistica,
 )
-from ddf.infrastructure.adapters.extractors.construir_metadados_de_amostra import (
+from ddf.infrastructure.adapters.extractors.comum.construir_metadados_de_amostra import (  # noqa: E501
     construir_metadados_de_amostra,
 )
 

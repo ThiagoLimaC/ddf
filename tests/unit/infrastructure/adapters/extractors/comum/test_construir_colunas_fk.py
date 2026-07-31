@@ -1,7 +1,7 @@
 """Testes de construir_colunas_fk."""
 
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
-from ddf.infrastructure.adapters.extractors.construir_colunas_fk import (
+from ddf.infrastructure.adapters.extractors.comum.construir_colunas_fk import (
     construir_colunas_fk,
 )
 

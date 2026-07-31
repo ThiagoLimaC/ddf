@@ -10,7 +10,7 @@ from ddf.domain.ports.extrator import ExtratorRegistrado
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.cli.etapas import extracao
 from ddf.infrastructure.adapters.cli.registro.estrategias import EstrategiaRegistrada
-from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
+from ddf.infrastructure.adapters.extractors.estrategias.percentual_de_linhas import (
     PercentualDeLinhas,
 )
 

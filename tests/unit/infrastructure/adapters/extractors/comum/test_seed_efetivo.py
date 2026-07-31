@@ -1,6 +1,6 @@
 """Testes de seed_efetivo."""
 
-from ddf.infrastructure.adapters.extractors.seed_efetivo import seed_efetivo
+from ddf.infrastructure.adapters.extractors.comum.seed_efetivo import seed_efetivo
 
 # Caminho feliz
 
