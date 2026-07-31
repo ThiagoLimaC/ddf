@@ -13,6 +13,7 @@ from ddf.domain.model.analysis import (
     TabelaAnalisada,
 )
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.shared.resultado import Falha, Sucesso
@@ -494,6 +495,58 @@ def test_restricoes_unicas_ausente_omite_chave(
     assert isinstance(resultado, Sucesso)
     chunk = _ler_json(tmp_path / "tabelas" / "escopo" / "pedidos.json")
     assert "restricoes_unicas" not in chunk
+
+
+def test_restricoes_fk_compostas_presente_e_ordenada_no_chunk(
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    tmp_path: Path,
+) -> None:
+    """FK composta aparece como lista de dicts, ordenada por colunas_locais (#95)."""
+    tabela = construir_tabela(
+        colunas=[construir_coluna(nome="pais_id"), construir_coluna(nome="estado_id")],
+        nome_tabela="pedidos",
+        restricoes_fk_compostas=[
+            RestricaoDeFkComposta(
+                colunas_locais=("pais_id", "estado_id"),
+                nome_escopo_referenciado="geografia",
+                nome_tabela_referenciada="estados",
+                colunas_referenciadas=("pais_id", "id"),
+            )
+        ],
+    )
+    banco = construir_banco([tabela])
+
+    resultado = GeradorContextoDeIA()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    chunk = _ler_json(tmp_path / "tabelas" / "escopo" / "pedidos.json")
+    assert chunk["restricoes_fk_compostas"] == [
+        {
+            "colunas_locais": ["pais_id", "estado_id"],
+            "escopo_referenciado": "geografia",
+            "tabela_referenciada": "estados",
+            "colunas_referenciadas": ["pais_id", "id"],
+        }
+    ]
+
+
+def test_restricoes_fk_compostas_ausente_omite_chave(
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    tmp_path: Path,
+) -> None:
+    """Borda: tabela sem FK composta não inclui a chave `restricoes_fk_compostas`."""
+    tabela = construir_tabela(colunas=[construir_coluna()], nome_tabela="pedidos")
+    banco = construir_banco([tabela])
+
+    resultado = GeradorContextoDeIA()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    chunk = _ler_json(tmp_path / "tabelas" / "escopo" / "pedidos.json")
+    assert "restricoes_fk_compostas" not in chunk
 
 
 def test_geracao_e_deterministica(

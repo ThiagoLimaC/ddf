@@ -247,7 +247,11 @@ def _montar_tabela_json(tabela: TabelaAnalisada) -> dict[str, Any]:
         ordenados por `colunas` — a ordem de extração vem do catálogo
         (posição do índice), sem significado humano, e reextrações do
         mesmo schema lógico não deveriam gerar diff espúrio no artefato
-        versionado.
+        versionado. `restricoes_fk_compostas` (issue #95) segue o mesmo
+        princípio de omissão, mas é lista de dicts — `RestricaoDeFkComposta`
+        carrega 4 campos (colunas locais/referenciadas + escopo/tabela
+        referenciados), sem estrutura simples o bastante pra virar lista de
+        listas sem perder informação.
     """
     tamanho_amostra = tabela.metadados_amostra.tamanho_amostra
     conteudo: dict[str, Any] = {
@@ -275,6 +279,20 @@ def _montar_tabela_json(tabela: TabelaAnalisada) -> dict[str, Any]:
         conteudo["restricoes_unicas"] = [
             list(restricao.colunas)
             for restricao in sorted(tabela.restricoes_unicas, key=lambda r: r.colunas)
+        ]
+
+    if tabela.restricoes_fk_compostas:
+        grupos_fk = sorted(
+            tabela.restricoes_fk_compostas, key=lambda r: r.colunas_locais
+        )
+        conteudo["restricoes_fk_compostas"] = [
+            {
+                "colunas_locais": list(restricao.colunas_locais),
+                "escopo_referenciado": restricao.nome_escopo_referenciado,
+                "tabela_referenciada": restricao.nome_tabela_referenciada,
+                "colunas_referenciadas": list(restricao.colunas_referenciadas),
+            }
+            for restricao in grupos_fk
         ]
 
     conteudo["colunas"] = [_serializar_coluna(coluna) for coluna in tabela.colunas]
