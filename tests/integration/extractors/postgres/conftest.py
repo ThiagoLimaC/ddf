@@ -193,6 +193,42 @@ _SETUP_SQL = """
         SELECT 'item_' || gs FROM generate_series(1, 500) gs;
 
     ANALYZE reprodutibilidade.itens;
+
+    -- Colisão de nome de constraint FK entre tabelas do mesmo schema
+    -- (achado da banca de revisão pós-implementação da #95, validado
+    -- primeiro manualmente contra Postgres 16 real): constraint_name de FK
+    -- não é único por schema, só por tabela (pg_constraint é unique em
+    -- (conrelid, conname)) — duas tabelas podem ter FK nomeada igual
+    -- apontando para alvos diferentes. Prova que a query via pg_catalog
+    -- (conrelid/confrelid, por OID) resolve cada uma para o alvo certo, ao
+    -- contrário da query anterior (information_schema, por nome), que
+    -- devolvia o alvo errado/duplicado nesse cenário.
+    CREATE SCHEMA colisao_fk;
+
+    CREATE TABLE colisao_fk.alvo_a (id INTEGER PRIMARY KEY);
+    CREATE TABLE colisao_fk.alvo_b (id INTEGER PRIMARY KEY);
+
+    CREATE TABLE colisao_fk.filho_a (
+        id SERIAL PRIMARY KEY,
+        alvo_id INTEGER NOT NULL,
+        CONSTRAINT fk_pai FOREIGN KEY (alvo_id) REFERENCES colisao_fk.alvo_a(id)
+    );
+
+    CREATE TABLE colisao_fk.filho_b (
+        id SERIAL PRIMARY KEY,
+        alvo_id INTEGER NOT NULL,
+        CONSTRAINT fk_pai FOREIGN KEY (alvo_id) REFERENCES colisao_fk.alvo_b(id)
+    );
+
+    INSERT INTO colisao_fk.alvo_a (id) VALUES (1);
+    INSERT INTO colisao_fk.alvo_b (id) VALUES (1);
+    INSERT INTO colisao_fk.filho_a (alvo_id) VALUES (1);
+    INSERT INTO colisao_fk.filho_b (alvo_id) VALUES (1);
+
+    ANALYZE colisao_fk.alvo_a;
+    ANALYZE colisao_fk.alvo_b;
+    ANALYZE colisao_fk.filho_a;
+    ANALYZE colisao_fk.filho_b;
 """
 
 

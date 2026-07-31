@@ -12,6 +12,7 @@ from ddf.domain.model.analysis import (
     TabelaAnalisada,
 )
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.shared.resultado import Falha, Sucesso
@@ -324,9 +325,7 @@ def test_chave_primaria_recebe_aviso_na_secao_de_valores_frequentes(
     coluna_pk = construir_coluna(
         nome="id", chave_primaria=True, metricas=[metrica_coluna_completa]
     )
-    coluna_comum = construir_coluna(
-        nome="status", metricas=[metrica_coluna_completa]
-    )
+    coluna_comum = construir_coluna(nome="status", metricas=[metrica_coluna_completa])
     tabela = construir_tabela(colunas=[coluna_pk, coluna_comum])
     banco = construir_banco([tabela])
 
@@ -377,9 +376,7 @@ def test_coluna_nao_nulavel_mostra_garantido_pelo_schema(
 
     secao_qualidade = conteudo.split("## Qualidade dos dados")[1]
     linha_cpf = next(
-        linha
-        for linha in secao_qualidade.splitlines()
-        if linha.startswith("| cpf ")
+        linha for linha in secao_qualidade.splitlines() if linha.startswith("| cpf ")
     )
     linha_apelido = next(
         linha
@@ -636,9 +633,7 @@ def test_nao_nulavel_tem_precedencia_mesmo_com_amostra_vazia(
     metrica_vazia = MetricasBaseColuna(
         percentual_nulo=0.0, percentual_unico=0.0, valores_frequentes=[]
     )
-    coluna = construir_coluna(
-        nome="id", nao_nulavel=True, metricas=[metrica_vazia]
-    )
+    coluna = construir_coluna(nome="id", nao_nulavel=True, metricas=[metrica_vazia])
     tabela = construir_tabela(colunas=[coluna], tamanho_amostra=0)
     banco = construir_banco([tabela])
 
@@ -778,6 +773,112 @@ def test_coluna_pk_e_em_restricao_composta_nao_mostra_marcador_composto(
     linha_id = next(linha for linha in secao_colunas.splitlines() if "id" in linha)
     assert "PK" in linha_id
     assert "UNIQUE (composto)" not in linha_id
+
+
+def test_restricoes_fk_compostas_aparece_em_fatos_extraidos(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """FK composta aparece como bullet em Fatos extraídos, grupos ordenados (#95)."""
+    coluna_pais = construir_coluna(
+        nome="pais_id",
+        chave_estrangeira=True,
+        referencia=ReferenciaDeColuna(
+            nome_escopo="geografia", nome_tabela="estados", nome_coluna="pais_id"
+        ),
+    )
+    coluna_estado = construir_coluna(
+        nome="estado_id",
+        chave_estrangeira=True,
+        referencia=ReferenciaDeColuna(
+            nome_escopo="geografia", nome_tabela="estados", nome_coluna="id"
+        ),
+    )
+    tabela = construir_tabela(
+        colunas=[coluna_pais, coluna_estado],
+        restricoes_fk_compostas=[
+            RestricaoDeFkComposta(
+                colunas_locais=("pais_id", "estado_id"),
+                nome_escopo_referenciado="geografia",
+                nome_tabela_referenciada="estados",
+                colunas_referenciadas=("pais_id", "id"),
+            )
+        ],
+    )
+    banco = construir_banco([tabela])
+
+    resultado = GeradorMarkdown()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    conteudo = (tmp_path / "escopo" / "tabela.md").read_text()
+    secao_fatos = conteudo.split("## Fatos extraídos")[1].split("## Colunas")[0]
+    assert "Chaves estrangeiras compostas" in secao_fatos
+    assert (
+        "(`pais_id`, `estado_id`) → geografia.estados(`pais_id`, `id`)" in secao_fatos
+    )
+
+
+def test_restricoes_fk_compostas_ausente_omite_bullet(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Borda: tabela sem FK composta não mostra o bullet."""
+    tabela = construir_tabela(colunas=[construir_coluna()])
+    banco = construir_banco([tabela])
+
+    resultado = GeradorMarkdown()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    conteudo = (tmp_path / "escopo" / "tabela.md").read_text()
+    assert "Chaves estrangeiras compostas" not in conteudo
+
+
+def test_coluna_em_fk_composta_recebe_marcador_sem_substituir_fk_individual(
+    tmp_path: Path,
+    construir_coluna: Callable[..., ColunaAnalisada],
+    construir_tabela: Callable[..., TabelaAnalisada],
+    construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+) -> None:
+    """Coluna em FK composta ganha "FK (composta)" mantendo "FK → ..." (issue #95)."""
+    coluna_pais = construir_coluna(
+        nome="pais_id",
+        chave_estrangeira=True,
+        referencia=ReferenciaDeColuna(
+            nome_escopo="geografia", nome_tabela="estados", nome_coluna="pais_id"
+        ),
+    )
+    coluna_fora = construir_coluna(nome="descricao")
+    tabela = construir_tabela(
+        colunas=[coluna_pais, coluna_fora],
+        restricoes_fk_compostas=[
+            RestricaoDeFkComposta(
+                colunas_locais=("pais_id", "estado_id"),
+                nome_escopo_referenciado="geografia",
+                nome_tabela_referenciada="estados",
+                colunas_referenciadas=("pais_id", "id"),
+            )
+        ],
+    )
+    banco = construir_banco([tabela])
+
+    resultado = GeradorMarkdown()(banco, tmp_path)
+
+    assert isinstance(resultado, Sucesso)
+    conteudo = (tmp_path / "escopo" / "tabela.md").read_text()
+    secao_colunas = conteudo.split("## Colunas")[1].split("## Qualidade")[0]
+    linha_pais_id = next(
+        linha for linha in secao_colunas.splitlines() if "pais_id" in linha
+    )
+    linha_descricao = next(
+        linha for linha in secao_colunas.splitlines() if "descricao" in linha
+    )
+    assert "FK (composta)" in linha_pais_id
+    assert "FK → geografia.estados.pais_id" in linha_pais_id
+    assert "FK (composta)" not in linha_descricao
 
 
 def test_secao_de_valores_frequentes_vazia_explica_o_motivo(

@@ -34,6 +34,100 @@ def _avisos_de_falhas(verbo: str, falhas: list[tuple[str, str]]) -> list[Aviso]:
     ]
 
 
+def _grupos_de_chave_candidata(tabela: TabelaExtraida) -> list[frozenset[str]]:
+    """Todos os grupos de colunas que garantem unicidade nesta tabela.
+
+    Reúne PK (single ou composta, pelas colunas marcadas `chave_primaria`),
+    UNIQUE single-column (`coluna.unica`) e UNIQUE composto
+    (`restricoes_unicas`) — qualquer um desses grupos é candidato válido
+    pro lado referenciado de uma FK composta.
+    """
+    grupos: list[frozenset[str]] = []
+    colunas_pk = {coluna.nome for coluna in tabela.colunas if coluna.chave_primaria}
+    if colunas_pk:
+        grupos.append(frozenset(colunas_pk))
+    for coluna in tabela.colunas:
+        if coluna.unica:
+            grupos.append(frozenset({coluna.nome}))
+    for restricao in tabela.restricoes_unicas:
+        grupos.append(frozenset(restricao.colunas))
+    return grupos
+
+
+def _avisos_de_fk_composta_sem_chave_candidata(
+    tabelas: list[TabelaExtraida],
+) -> list[Aviso]:
+    """Emite Aviso quando uma FK composta não aponta para PK/UNIQUE conhecida.
+
+    Checagem cross-table (precisa de todas as tabelas do escopo já
+    extraídas), por isso roda aqui — depois que `extrair` já paralelizou a
+    extração de todas as tabelas — em vez de dentro de cada `Extrator`
+    concreto, que só enxerga uma tabela por vez. Banco legado malformado
+    (FK apontando para colunas que a própria fonte não garante como únicas
+    do lado referenciado) é raro, mas real — sem este Aviso, a
+    `RestricaoDeFkComposta` seria consumida silenciosamente como se a
+    integridade referencial estivesse garantida.
+
+    Tabela referenciada fora do lote analisado nesta execução também gera
+    um Aviso, mas de teor distinto (não verificável, não "verificado e
+    correto") — decisão da banca de revisão pós-implementação da #95: um
+    `continue` silencioso aqui seria indistinguível de "checado e ok".
+
+    Args:
+        tabelas: tabelas já extraídas neste lote, mesma lista que `extrair`
+            devolve.
+
+    Returns:
+        Um Aviso por `RestricaoDeFkComposta` cujo lado referenciado está
+        fora do lote (não verificável) ou está no lote mas não corresponde
+        a nenhum grupo de chave candidata (verificado e malformado).
+    """
+    tabelas_por_chave = {(t.nome_escopo, t.nome_tabela): t for t in tabelas}
+    avisos: list[Aviso] = []
+    for tabela in tabelas:
+        for restricao in tabela.restricoes_fk_compostas:
+            chave_referenciada = (
+                restricao.nome_escopo_referenciado,
+                restricao.nome_tabela_referenciada,
+            )
+            origem_tabela = f"{tabela.nome_escopo}.{tabela.nome_tabela}"
+            colunas_locais = ", ".join(restricao.colunas_locais)
+            destino_tabela = f"{chave_referenciada[0]}.{chave_referenciada[1]}"
+
+            tabela_referenciada = tabelas_por_chave.get(chave_referenciada)
+            if tabela_referenciada is None:
+                avisos.append(
+                    Aviso(
+                        mensagem=(
+                            f"FK composta de '{origem_tabela}' ({colunas_locais}) "
+                            f"aponta para '{destino_tabela}', fora do lote "
+                            "analisado nesta execução — integridade "
+                            "referencial não verificada."
+                        ),
+                        origem=_ORIGEM,
+                    )
+                )
+                continue
+
+            grupos_chave = _grupos_de_chave_candidata(tabela_referenciada)
+            colunas_referenciadas = frozenset(restricao.colunas_referenciadas)
+            if colunas_referenciadas not in grupos_chave:
+                colunas_ref = ", ".join(restricao.colunas_referenciadas)
+                avisos.append(
+                    Aviso(
+                        mensagem=(
+                            f"FK composta de '{origem_tabela}' ({colunas_locais}) "
+                            f"aponta para '{destino_tabela}' ({colunas_ref}), que "
+                            "não corresponde a nenhuma chave primária/UNIQUE "
+                            "conhecida do lado referenciado — integridade "
+                            "referencial pode não estar garantida pelo schema."
+                        ),
+                        origem=_ORIGEM,
+                    )
+                )
+    return avisos
+
+
 class OrquestradorParalelo:
     """Coordena extração e aplicação de sobrescritas em paralelo via threads."""
 
@@ -141,7 +235,11 @@ class OrquestradorParalelo:
         Returns:
             Sucesso com list[TabelaExtraida] ordenada por (nome_escopo,
             nome_tabela) — pode ser menor que o total pedido — e um Aviso
-            por escopo/tabela que falhou.
+            por escopo/tabela que falhou, mais um Aviso por
+            RestricaoDeFkComposta cujo lado referenciado (se presente no
+            lote) não corresponde a nenhuma PK/UNIQUE conhecida (issue #95;
+            checagem cross-table, só possível aqui, depois que todas as
+            tabelas do lote já foram extraídas).
         """
         pares_a_extrair: list[tuple[str, str]] = []
         avisos_listagem: list[Aviso] = []
@@ -177,6 +275,7 @@ class OrquestradorParalelo:
             avisos_listagem
             + avisos_extracao
             + _avisos_de_falhas("extrair", falhas_extracao)
+            + _avisos_de_fk_composta_sem_chave_candidata(tabelas)
         )
         return Sucesso(tabelas, avisos=avisos)
 

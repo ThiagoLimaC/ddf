@@ -2,6 +2,7 @@
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado
 from ddf.domain.shared.resultado import Falha, Sucesso
@@ -159,7 +160,15 @@ def test_listar_escopos_retorna_escopos_semeados(
     resultado = extrator.listar_escopos()
 
     assert resultado == Sucesso(
-        ["pessoa", "reprodutibilidade", "restricoes", "rh", "vazio", "vendas"]
+        [
+            "geografia",
+            "pessoa",
+            "reprodutibilidade",
+            "restricoes",
+            "rh",
+            "vazio",
+            "vendas",
+        ]
     )
 
 
@@ -221,6 +230,41 @@ def test_extrair_tabela_com_fk_cross_database_captura_escopo_de_destino(
     assert coluna_fk.referencia == ReferenciaDeColuna(
         nome_escopo="pessoa", nome_tabela="pessoa", nome_coluna="id"
     )
+
+
+def test_extrair_tabela_com_fk_composta_pareia_colunas_corretamente(
+    conexao: tuple[str, int, str, str], configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: FK composta (2 colunas) agrupa por CONSTRAINT_NAME sem misturar colunas.
+
+    Mesma fixture do ExtratorPostgres (geografia.pais/filial) — prova que
+    o agrupamento via CONSTRAINT_NAME (issue #95) produz a mesma
+    RestricaoDeFkComposta correta contra MariaDB real.
+    """
+    host, port, user, password = conexao
+    extrator = ExtratorMariaDB(
+        host=host, port=port, user=user, password=password, configuracao=configuracao
+    )
+
+    resultado = extrator.extrair_tabela("geografia", "filial")
+
+    assert isinstance(resultado, Sucesso)
+    coluna_codigo = next(c for c in resultado.valor.colunas if c.nome == "pais_codigo")
+    coluna_estado = next(c for c in resultado.valor.colunas if c.nome == "pais_estado")
+    assert coluna_codigo.referencia == ReferenciaDeColuna(
+        nome_escopo="geografia", nome_tabela="pais", nome_coluna="codigo"
+    )
+    assert coluna_estado.referencia == ReferenciaDeColuna(
+        nome_escopo="geografia", nome_tabela="pais", nome_coluna="estado"
+    )
+    assert resultado.valor.restricoes_fk_compostas == [
+        RestricaoDeFkComposta(
+            colunas_locais=("pais_codigo", "pais_estado"),
+            nome_escopo_referenciado="geografia",
+            nome_tabela_referenciada="pais",
+            colunas_referenciadas=("codigo", "estado"),
+        )
+    ]
 
 
 def test_extrair_tabela_com_constraint_de_mesmo_nome_em_outra_tabela_nao_confunde(

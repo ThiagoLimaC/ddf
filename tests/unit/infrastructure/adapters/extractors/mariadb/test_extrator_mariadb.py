@@ -8,6 +8,7 @@ import pytest
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado
 from ddf.domain.ports.extrator import Extrator
@@ -179,7 +180,7 @@ def test_extrair_tabela_retorna_estrutura_completa(
             ("cliente_id", "int", "int(11)", None, None, None, "NO"),
         ],  # colunas
         [("id",)],  # PK
-        [("cliente_id", "vendas", "clientes", "id")],  # FK
+        [("cliente_id", "vendas", "clientes", "id", "fk_pedidos_cliente")],  # FK
         [("nome", "nome")],  # UNIQUE (single-column)
         [],  # JSON
         [(1, "ana", 1, 10), (2, "bia", 0, 20)],  # amostra
@@ -391,9 +392,15 @@ def test_extrair_tabela_com_duas_fks_na_mesma_coluna_emite_aviso(
         [("entidade_id", "int", "int(11)", None, None, None, "YES")],  # colunas
         [],  # PK
         [
-            ("entidade_id", "vendas", "clientes", "id"),
-            ("entidade_id", "vendas", "fornecedores", "id"),
-        ],  # FK duplicada na mesma coluna
+            ("entidade_id", "vendas", "clientes", "id", "fk_movimentos_clientes"),
+            (
+                "entidade_id",
+                "vendas",
+                "fornecedores",
+                "id",
+                "fk_movimentos_fornecedores",
+            ),
+        ],  # FK duplicada na mesma coluna (2 constraints distintas)
         [],  # UNIQUE
         [],  # JSON
         [],  # amostra
@@ -657,6 +664,65 @@ def test_unique_composta_nao_marca_nenhuma_coluna_como_unica(
     assert resultado.valor.restricoes_unicas == [
         RestricaoUnica(colunas=("codigo_pais", "codigo_local"))
     ]
+
+
+def test_fk_composta_monta_restricao_de_fk_composta(
+    pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: FK(a, b) vira uma RestricaoDeFkComposta, sem afetar `.referencia`.
+
+    Mesma tabela também tem uma FK single-column (constraint diferente) —
+    prova que o agrupamento por constraint_name não mistura os dois casos,
+    e que `ColunaExtraida.referencia` continua populado por coluna mesmo
+    para as que fazem parte da constraint composta. Sem query nova — só
+    reagrupamento sobre a mesma `_CHAVES_ESTRANGEIRAS_SQL` (issue #95).
+    """
+    conexao_fake = MagicMock()
+    cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+    cursor_fake.fetchall.side_effect = [
+        [
+            ("pais_id", "int", "int(11)", None, None, None, "NO"),
+            ("estado_id", "int", "int(11)", None, None, None, "NO"),
+            ("cliente_id", "int", "int(11)", None, None, None, "NO"),
+        ],  # colunas
+        [],  # PK
+        [
+            ("pais_id", "geografia", "estados", "pais_id", "fk_estado"),
+            ("estado_id", "geografia", "estados", "id", "fk_estado"),
+            ("cliente_id", "vendas", "clientes", "id", "fk_cliente"),
+        ],  # FK — constraint composta (fk_estado) + single-column (fk_cliente)
+        [],  # UNIQUE
+        [],  # JSON
+        [],  # amostra
+    ]
+    cursor_fake.fetchone.return_value = (0,)
+    cursor_fake.description = [("pais_id",), ("estado_id",), ("cliente_id",)]
+    pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+    extrator = ExtratorMariaDB(
+        host="fake", user="root", password="senha", configuracao=configuracao
+    )
+    resultado = extrator.extrair_tabela("vendas", "pedidos")
+
+    assert isinstance(resultado, Sucesso)
+    tabela = resultado.valor
+    assert tabela.restricoes_fk_compostas == [
+        RestricaoDeFkComposta(
+            colunas_locais=("pais_id", "estado_id"),
+            nome_escopo_referenciado="geografia",
+            nome_tabela_referenciada="estados",
+            colunas_referenciadas=("pais_id", "id"),
+        )
+    ]
+    assert tabela.colunas[0].referencia == ReferenciaDeColuna(
+        nome_escopo="geografia", nome_tabela="estados", nome_coluna="pais_id"
+    )
+    assert tabela.colunas[1].referencia == ReferenciaDeColuna(
+        nome_escopo="geografia", nome_tabela="estados", nome_coluna="id"
+    )
+    assert tabela.colunas[2].referencia == ReferenciaDeColuna(
+        nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
+    )
 
 
 def test_check_clause_de_outra_tabela_nao_reclassifica_coluna(

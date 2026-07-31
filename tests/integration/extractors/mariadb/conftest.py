@@ -63,6 +63,30 @@ _SETUP_STATEMENTS = [
     "ANALYZE TABLE vendas.pedidos",
     "ANALYZE TABLE pessoa.pessoa",
     "ANALYZE TABLE rh.funcionario",
+    # FK composta (2 colunas, issue #95): prova que o agrupamento por
+    # CONSTRAINT_NAME não mistura colunas de constraints diferentes —
+    # mesma fixture do ExtratorPostgres (geografia.pais/filial).
+    "CREATE DATABASE geografia",
+    """
+    CREATE TABLE geografia.pais (
+        codigo CHAR(2) NOT NULL,
+        estado CHAR(2) NOT NULL,
+        PRIMARY KEY (codigo, estado)
+    ) ENGINE=InnoDB
+    """,
+    """
+    CREATE TABLE geografia.filial (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        pais_codigo CHAR(2) NOT NULL,
+        pais_estado CHAR(2) NOT NULL,
+        FOREIGN KEY (pais_codigo, pais_estado)
+            REFERENCES geografia.pais(codigo, estado)
+    ) ENGINE=InnoDB
+    """,
+    "INSERT INTO geografia.pais (codigo, estado) VALUES ('BR', 'SP'), ('BR', 'RJ')",
+    "INSERT INTO geografia.filial (pais_codigo, pais_estado) VALUES ('BR', 'SP')",
+    "ANALYZE TABLE geografia.pais",
+    "ANALYZE TABLE geografia.filial",
     "CREATE DATABASE restricoes",
     # "pedidos" e "clientes" têm UNIQUE KEY com o MESMO NOME ("email") no
     # MESMO database — reproduz a colisão de nome de constraint entre
