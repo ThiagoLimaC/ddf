@@ -235,6 +235,7 @@ class TabelaExtraida(BaseModel):
     amostra: pl.DataFrame              # sempre preenchida pelo Extrator
     metadados_amostra: MetadadosDeAmostra
     restricoes_unicas: list[RestricaoUnica] = Field(default_factory=list)
+    restricoes_fk_compostas: list[RestricaoDeFkComposta] = Field(default_factory=list)
 ```
 
 **Comportamento:** `amostra` é sempre preenchida pelo Extrator e obrigatória —
@@ -258,6 +259,26 @@ Extrator antes do hash estrutural ou da geração dbt. Propaga para
 `TabelaCurada`/`TabelaAnalisada` automaticamente via `model_dump`/
 `model_validate` (mesmo mecanismo de `iniciar_contexto`, ver Analysis
 Context abaixo), sem exigir mudança em nenhum dos dois pontos de tradução.
+
+**`restricoes_fk_compostas` (issue #95):** FK composta (2+ colunas locais
+apontando pra 2+ colunas de uma mesma tabela referenciada) real do
+schema — mesmo nível epistemológico de `restricoes_unicas`, por isso
+também campo direto de nível **tabela**. `ColunaExtraida.referencia`
+(per-coluna) **fica inalterado** e continua populado normalmente pra
+toda coluna FK, inclusive as que fazem parte de uma constraint
+composta — `RestricaoDeFkComposta` só existe para o agrupamento que uma
+`ReferenciaDeColuna` por coluna não consegue expressar.
+`RestricaoDeFkComposta` (`domain/model/common/restricao_de_fk_composta.py`)
+é um Value Object novo — `colunas_locais: tuple[str, ...]`,
+`nome_escopo_referenciado: str`, `nome_tabela_referenciada: str`,
+`colunas_referenciadas: tuple[str, ...]`, `frozen=True`, mesmo padrão de
+`RestricaoUnica`, validado (mínimo 2 colunas locais sem duplicata,
+mesmo número de colunas locais e referenciadas). `TabelaExtraida` valida
+adicionalmente que toda coluna local citada em `restricoes_fk_compostas`
+existe em `self.colunas` (mesmo padrão do validator de
+`restricoes_unicas`). Propaga para `TabelaCurada`/`TabelaAnalisada` da
+mesma forma automática, sem exigir mudança em `_traduzir`/
+`iniciar_contexto`.
 
 ---
 
@@ -295,6 +316,7 @@ class TabelaCurada(BaseModel):
     amostra: pl.DataFrame | None        # mesmo DataFrame de TabelaExtraida — sem cópia; None após descarte
     metadados_amostra: MetadadosDeAmostra
     restricoes_unicas: list[RestricaoUnica] = Field(default_factory=list)
+    restricoes_fk_compostas: list[RestricaoDeFkComposta] = Field(default_factory=list)
 ```
 
 **Comportamento:** o `pl.DataFrame` é passado por referência — sem cópia.
@@ -400,6 +422,7 @@ class TabelaAnalisada(BaseModel):
     metadados_amostra: MetadadosDeAmostra  # preservado para Geradores anotarem artefatos
     metricas: list[MetricaDeTabela] = Field(default_factory=list)
     restricoes_unicas: list[RestricaoUnica] = Field(default_factory=list)
+    restricoes_fk_compostas: list[RestricaoDeFkComposta] = Field(default_factory=list)
 ```
 
 ### `BancoAnalisado`
@@ -839,6 +862,25 @@ schemas de sistema do Postgres (`information_schema`, `pg_catalog`,
      AND n.nspname = %s
    ORDER BY t.relname, i.indexrelid, k.ord
    ```
+
+   **`restricoes_fk_compostas` (issue #95):** a query de FK (item 1 acima)
+   já lia `constraint_name` internamente pro JOIN, mas não o expunha no
+   `SELECT` — passa a incluir `tc.constraint_name` e `kcu.ordinal_position`,
+   com `ORDER BY tc.table_name, tc.constraint_name, kcu.ordinal_position`
+   (mesmo achado de estabilidade da #89 pro hash estrutural). Novo helper
+   agnóstico de fonte `construir_restricoes_fk_compostas`
+   (`extractors/construir_restricoes_fk_compostas.py`, mesmo padrão de
+   `construir_colunas_fk`) agrupa as linhas por `constraint_name`: grupo de
+   1 continua indo só para o dict `colunas_fk` existente via
+   `construir_colunas_fk` (comportamento inalterado); grupo de 2+ também
+   vira uma `RestricaoDeFkComposta`. Achado do Arquiteto na banca de
+   revisão do plano: se `colunas_referenciadas` de um grupo não corresponde
+   a nenhuma PK/UNIQUE (single ou composto) conhecida do lado referenciado
+   — banco legado malformado, raro mas real — `OrquestradorParalelo.
+   extrair` emite `Aviso` explícito (checagem cross-table, só possível
+   depois que todas as tabelas do escopo foram extraídas; ver seção do
+   `OrquestradorParalelo` abaixo), em vez de confiar na `RestricaoDeFkComposta`
+   silenciosamente.
 2. Mapeia tipos Postgres → `TipoDeDado` (tabela abaixo).
 3. Lê `total_linhas` via `COALESCE(NULLIF(n_live_tup, 0), CASE WHEN relkind
    <> 'p' AND pg_relation_size(oid) = 0 THEN 0 ELSE NULLIF(reltuples, -1)
@@ -905,6 +947,13 @@ como `RestricaoUnica`, via `_particionar_colunas_unicas`. A query ganhou
 sem ordem garantida, a sequência de colunas dentro de uma constraint
 composta oscilaria entre execuções sem nenhuma mudança real de schema,
 disparando falso positivo no hash estrutural (`SobrescritaDeTabela`).
+
+**`restricoes_fk_compostas` no MariaDB (issue #95):** sem query nova — a
+mesma `_CHAVES_ESTRANGEIRAS_SQL` (per-tabela, diferente do Postgres que lê
+o schema inteiro de uma vez) ganhou `CONSTRAINT_NAME` no `SELECT` e
+`ORDER BY constraint_name, ordinal_position`. `construir_restricoes_fk_compostas`
+(mesmo helper compartilhado com o Postgres) agrupa as linhas já lidas —
+zero query adicional.
 
 **Mapeamento de tipos:**
 
@@ -1040,7 +1089,11 @@ class SobrescritaDeTabela:
    aviso de mudança estrutural nem regeneração do skeleton. `restricoes_unicas`
    (nível tabela) entra no hash na issue #89, uma parte
    `"restricao_unica:" + ",".join(colunas)` por `RestricaoUnica` — mesmo
-   motivo, aplicado ao caso de UNIQUE composto.
+   motivo, aplicado ao caso de UNIQUE composto. `restricoes_fk_compostas`
+   entra no hash na issue #95, mesmo motivo aplicado à FK composta — uma
+   parte `"restricao_fk_composta:" + colunas_locais + "->" + escopo_ref +
+   "." + tabela_ref + ":" + colunas_referenciadas` por
+   `RestricaoDeFkComposta`.
 2. Lê `diretorio_sobrescritas/<escopo>/<tabela>.yaml` se existir.
 3. **Hash bate:** aplica `papel_de_negocio`/`regras_de_negocio` do YAML.
 4. **Hash não bate (estrutura mudou):** atualiza skeleton preservando curadoria
@@ -1125,6 +1178,15 @@ métodos do Port.
 5. `progresso`, se informado, é chamado a partir da thread principal (via
    `as_completed`) uma vez por item concluído — nunca dentro de um worker,
    por isso dispensa lock.
+6. **`restricoes_fk_compostas` sem chave candidata (issue #95):** depois que
+   todas as tabelas do lote já foram extraídas (única etapa em que
+   `OrquestradorParalelo` enxerga o lote inteiro, não uma tabela por vez),
+   `_avisos_de_fk_composta_sem_chave_candidata` compara `colunas_referenciadas`
+   de cada `RestricaoDeFkComposta` contra os grupos de chave candidata
+   (PK, UNIQUE single-column, UNIQUE composto) da tabela referenciada — só
+   quando ela está no lote; fora do lote, sem visibilidade, nenhum `Aviso`
+   (mesma regra do `relationships` single-column do `GeradorDbt`). Sinaliza
+   banco legado malformado sem abortar a extração.
 
 **Comportamento de `aplicar_sobrescritas`:**
 1. Distribui `sobrescrita(tabela)` em `ThreadPoolExecutor(max_trabalhadores)`.
@@ -1253,6 +1315,20 @@ real, mesma categoria de correção já feita na #13 pra coluna 100% nula).
 issue (bugfix trivial, não relacionado: mesma classe de bug de comparação
 lexicográfica já corrigida pras demais categorias textuais/estruturadas).
 
+**FK composta (issue #95):** bullet **"Chaves estrangeiras compostas"** em
+"Fatos extraídos", análogo a "Restrições UNIQUE compostas" — formata cada
+`RestricaoDeFkComposta` como `(colunas_locais) → escopo.tabela
+(colunas_referenciadas)`, grupos ordenados por `colunas_locais`
+(determinismo entre reextrações). Na tabela de Colunas, marcador
+`"FK (composta)"` sinaliza participação, **sem substituir** o marcador
+`"FK → escopo.tabela.coluna"` individual — a coluna continua mostrando sua
+própria referência (`ColunaAnalisada.referencia` fica inalterado para FK
+composta) mais o sinal de que ela participa de um grupo. Diferente de
+`"UNIQUE (composto)"`, **não** é suprimido quando a coluna é PK — uma
+coluna pode legitimamente ser PK e parte de uma FK composta ao mesmo tempo
+(ex.: tabela de junção), diferente de UNIQUE onde PK já implica
+unicidade.
+
 ---
 
 ### `GeradorDbt`
@@ -1309,8 +1385,9 @@ componentes.
 |---|---|
 | `percentual_unico == 100.0` **ou** `coluna.unica` | `unique` |
 | `percentual_nulo == 0.0` **ou** `coluna.nao_nulavel` | `not_null` |
-| `chave_estrangeira == True` **e** tabela referenciada presente no lote analisado | `relationships` → `ref()` do staging model referenciado |
+| `chave_estrangeira == True`, coluna **não** pertence a nenhuma FK composta **e** tabela referenciada presente no lote analisado | `relationships` → `ref()` do staging model referenciado |
 | `chave_estrangeira == True` **e** tabela referenciada ausente do lote | sem teste + `Aviso` |
+| coluna pertence a alguma `RestricaoDeFkComposta` da tabela | `relationships` per-coluna **suprimido** — ver `composite_relationships` model-level abaixo (issue #95) |
 | `_elegivel_para_enumeracao` aprova a coluna (ver critérios abaixo) | `accepted_values`, com `config: {severity: warn}` |
 
 `unique`/`not_null` são suprimidos quando a coluna já é `chave_primaria`
@@ -1389,6 +1466,33 @@ não estimativa sobre amostra — não há razão estatística para suavizar.
 Requer `packages.yml` declarando `dbt-labs/dbt_utils` (ver "Saída" acima),
 por isso só é sugerido quando `restricoes_unicas` não é vazio — o mesmo
 UNIQUE composto que aciona a geração condicional de `packages.yml`.
+
+**Teste model-level — `composite_relationships` (macro custom, issue
+#95):** fecha a limitação conhecida desde a #56 — um por
+`RestricaoDeFkComposta` de `TabelaAnalisada.restricoes_fk_compostas`, só
+quando a tabela referenciada está no lote (`presentes`, mesma checagem do
+`relationships` single-column; senão `Aviso` + omissão). Nem dbt-core nem
+`dbt_utils` têm teste nativo de relationships multi-coluna — macro
+genérica nova em `macros/composite_relationships.sql` (arquivo único, sem
+subpasta nem dispatch por engine, ao contrário de `matches_format`: a
+comparação é SQL ANSI puro, `NOT EXISTS` + igualdade por coluna, sem
+depender de sintaxe de tupla/`ROW` específica de motor). Um CTE `child`
+exclui linhas com qualquer coluna local `NULL` antes da comparação —
+semântica `MATCH SIMPLE`, confirmada como comportamento correto e default
+tanto em Postgres quanto em MariaDB/InnoDB pelo engenheiro-de-dados na
+banca de revisão do plano (nenhuma engine de storage do MySQL/MariaDB
+reconhece a cláusula `MATCH` — o efeito observado já é `MATCH SIMPLE`
+sempre). Comparação por igualdade coluna-a-coluna via `NOT EXISTS`,
+deliberadamente não por concatenação de string (`col_a || '|' || col_b`)
+— alternativa de mercado avaliada e descartada: introduziria risco de
+colisão de delimitador (dois pares logicamente distintos podem gerar a
+mesma string concatenada sem um separador/encoding garantidamente seguro).
+Severidade **padrão** (`error`), mesma decisão de
+`unique_combination_of_columns` — fato estrutural, não amostral. Não
+depende de `dbt_utils` (macro 100% autocontida), por isso não afeta
+`_precisa_dbt_utils`/`packages.yml`; escrito/removido condicionalmente
+via `_precisa_composite_relationships`, mesmo padrão de
+`unique_percentage_at_least.sql`.
 
 **Macros custom — `matches_format` e testes soft de nulo/unicidade (issue
 #90):** adiada da #77 (junto da #89), fecha a lacuna de duas métricas já
@@ -1539,6 +1643,17 @@ não filtro de enum — regra específica deste Gerador, não de elegibilidade
 estatística). `esquema_de_consulta` fica em chave própria, nunca misturada
 nos campos descritivos da coluna — separa "dado passivo" de "contrato de
 execução".
+
+**`restricoes_fk_compostas` (issue #95):** chave na raiz do chunk,
+omitida quando a tabela não tem nenhuma FK composta — mesma convenção de
+omissão de `restricoes_unicas`/`metricas_tabela`/`esquema_de_consulta`.
+Diferente de `restricoes_unicas` (lista de listas de nomes de coluna),
+é lista de **dicts** com `colunas_locais`, `escopo_referenciado`,
+`tabela_referenciada`, `colunas_referenciadas` — `RestricaoDeFkComposta`
+carrega 4 campos, sem estrutura simples o bastante pra virar lista de
+listas sem perder informação (ao contrário de `RestricaoUnica`, que só
+carrega `colunas`). Grupos ordenados por `colunas_locais`, mesmo motivo
+de determinismo entre reextrações já aplicado a `restricoes_unicas`.
 
 Fora de escopo (decisão registrada, não implícita): inferência de
 `papel_de_negocio`/`regras_de_negocio` a partir de estatísticas exigiria

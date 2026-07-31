@@ -425,6 +425,65 @@
     classificar o escopo como pequeno e dispensar banca completa —
     achados incorporados ao plano antes do código, registrados em
     `plan/registry-plan/issue-93-*.md`
+- [x] Issue #95, Parte 1 — corrige falso positivo em `accepted_values`/
+  sugestão de filtro `enum`: `_sugestoes_de_teste`/`_sugestao_de_filtro`
+  decidiam "isso é categórico" só por `percentual_unico < 10.0` +
+  cobertura, sem piso de amostra nem exclusão por tipo — sugeriu
+  `accepted_values` para `criado_em` (TIMESTAMP), `produto_codigo`
+  (código de catálogo crescente) e `quantidade` (baixa cardinalidade só
+  na amostra) contra um banco de teste real:
+  - `generators/_metricas.py`: função nova compartilhada
+    `_elegivel_para_enumeracao` combina 5 critérios — categoria excluída
+    (`TIMESTAMP`/`DATE`/`TIME`/`UUID`/`JSON`/`ARRAY`), piso de amostra
+    (`_TAMANHO_AMOSTRA_MINIMO_ENUMERACAO = 100`, antes só existia no
+    `GeradorContextoDeIA`), teto de cardinalidade real (`_contagem_de_distintos`
+    reconstruída via `percentual_unico`, não `len(valores_frequentes)`
+    truncado em top-10), `percentual_unico < 10.0` e cobertura ≥ 0.9
+    (critérios originais)
+  - `GeradorDbt`/`GeradorContextoDeIA` passam a chamar a função
+    compartilhada em vez de reimplementar os critérios cada um
+  - Detecção de código sequencial disfarçado de categórico (`PRD-N`)
+    avaliada e adiada — exigiria inferência heurística sobre a forma do
+    dado, mais próxima da linha que a Restrição 5 do PRD veda nesta
+    versão do que uma regra determinística simples
+- [x] Issue #95, Parte 2 — modela FK composta no dbt (fecha a limitação
+  conhecida desde a #56) + simetria completa (Markdown/ContextoDeIA),
+  mesma classe de risco/tamanho da #44/#89 (banca completa exigida e
+  rodada antes da implementação — achados incorporados ao plano,
+  registrados em `plan/registry-plan/issue-95-*.md`):
+  - `RestricaoDeFkComposta` (Value Object novo,
+    `domain/model/common/restricao_de_fk_composta.py`), mesmo padrão de
+    `RestricaoUnica` — `colunas_locais`/`colunas_referenciadas` pareadas,
+    `nome_escopo_referenciado`/`nome_tabela_referenciada`
+  - `restricoes_fk_compostas: list[RestricaoDeFkComposta]` em
+    `TabelaExtraida`/`TabelaCurada`/`TabelaAnalisada` (nível tabela, mesmo
+    padrão epistemológico de `restricoes_unicas`); `ColunaExtraida.
+    referencia` per-coluna fica **inalterado** — continua populado pra
+    FK single-column e composta
+  - `ExtratorPostgres`: query de FK ganha `constraint_name`/
+    `ordinal_position` + `ORDER BY`; novo helper agnóstico de fonte
+    `construir_restricoes_fk_compostas` (reaproveitado pelo MariaDB, zero
+    query nova lá)
+  - `OrquestradorParalelo.extrair`: `Aviso` quando FK composta não
+    corresponde a PK/UNIQUE conhecida do lado referenciado — checagem
+    cross-table, só possível depois que todas as tabelas do lote foram
+    extraídas (achado da banca de revisão)
+  - `SobrescritaDeTabela._calcular_hash_estrutural` inclui
+    `restricoes_fk_compostas`
+  - `GeradorDbt`: suprime `relationships` per-coluna pra colunas em FK
+    composta; macro nova `composite_relationships` (SQL ANSI puro via
+    `NOT EXISTS` + igualdade por coluna — sem tupla/`ROW` nem
+    concatenação, achado do engenheiro-de-dados; semântica `MATCH SIMPLE`
+    validada contra Postgres e MariaDB; severidade padrão `error`, mesmo
+    critério de `unique_combination_of_columns`)
+  - `GeradorMarkdown`/`GeradorContextoDeIA`: simetria completa pedida
+    pelo PO já nesta issue (evita o retrabalho #89→#93) — bullet "Chaves
+    estrangeiras compostas"/marcador `"FK (composta)"` (sem suprimir por
+    PK, diferente de UNIQUE composto) e `restricoes_fk_compostas` (lista
+    de dicts, não lista de listas) no JSON por tabela
+  - Testes de integração novos contra Postgres 16 e MariaDB 11 reais
+    (`testcontainers`) — fixture `geografia.pais`/`geografia.filial` (PK
+    composta real), criada também no MariaDB (não existia)
 
 ## 7. CLI real wizard (issue #16) — concluída
 
