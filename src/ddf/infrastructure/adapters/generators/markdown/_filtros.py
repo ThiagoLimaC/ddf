@@ -1,23 +1,14 @@
-"""GeradorMarkdown: documentação navegável em Markdown a partir do BancoAnalisado."""
+"""Funções de formatação usadas como filtro Jinja pelo GeradorMarkdown."""
 
-from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
-from jinja2 import Environment, FileSystemLoader
-
 from ddf.domain.model.analysis import (
-    BancoAnalisado,
     ColunaAnalisada,
     MetricasBaseColuna,
     MetricasBaseTabela,
     TabelaAnalisada,
-    TipoDeMetrica,
 )
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
-from ddf.domain.shared.aviso import Aviso
-from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
-from ddf.infrastructure.adapters.generators._escrita import escrever_arquivo
 
 _NAO_DISPONIVEL = "N/D"
 _NAO_APLICAVEL = "—"
@@ -378,76 +369,3 @@ def _secoes_valores_frequentes(
         )
 
     return secoes
-
-
-_ambiente = Environment(
-    loader=FileSystemLoader(Path(__file__).parent / "templates"),
-    trim_blocks=True,
-    lstrip_blocks=True,
-    keep_trailing_newline=True,
-    autoescape=False,  # noqa: S701 — saída é Markdown, não HTML; escapamos "|" à mão
-)
-_ambiente.filters["escapar"] = _escapar_celula
-_ambiente.filters["formatar_tipo"] = _formatar_tipo
-_ambiente.filters["marcadores_de_restricao"] = _marcadores_de_restricao
-_ambiente.filters["formatar_restricoes_unicas"] = _formatar_restricoes_unicas
-_ambiente.filters["formatar_restricoes_fk_compostas"] = (
-    _formatar_restricoes_fk_compostas
-)
-_ambiente.filters["completude"] = _formatar_completude
-_ambiente.filters["linha_qualidade"] = _linha_qualidade
-_ambiente.filters["secoes_valores_frequentes"] = _secoes_valores_frequentes
-_TEMPLATE_TABELA = _ambiente.get_template("tabela.md.jinja2")
-_TEMPLATE_INDEX = _ambiente.get_template("index.md.jinja2")
-
-
-class GeradorMarkdown:
-    """Gera um `.md` por tabela e um `index.md` a partir do BancoAnalisado."""
-
-    requer: list[TipoDeMetrica] = [MetricasBaseColuna, MetricasBaseTabela]
-
-    def __call__(self, entrada: BancoAnalisado, destino: Path) -> Resultado[None]:
-        """Escreve a documentação Markdown de cada tabela e o índice geral.
-
-        Args:
-            entrada: banco analisado cujas tabelas já devem ter
-                MetricasBaseColuna/MetricasBaseTabela calculadas.
-            destino: diretório raiz onde os artefatos serão escritos.
-
-        Returns:
-            Sucesso(None) com Aviso por tabela sem papel_de_negocio, ou
-            Falha na primeira escrita em disco que falhar.
-        """
-        gerado_em = datetime.now(UTC).isoformat()
-        avisos: list[Aviso] = []
-        for tabela in entrada.tabelas:
-            caminho_tabela = destino / tabela.nome_escopo / f"{tabela.nome_tabela}.md"
-            conteudo = _TEMPLATE_TABELA.render(
-                tabela=tabela,
-                gerado_em=gerado_em,
-                colunas_compostas=_colunas_com_restricao_composta(tabela),
-                colunas_fk_compostas=_colunas_com_fk_composta(tabela),
-            )
-            resultado = escrever_arquivo(caminho_tabela, conteudo)
-            if isinstance(resultado, Falha):
-                return resultado
-            if tabela.papel_de_negocio is None:
-                avisos.append(
-                    Aviso(
-                        mensagem=(
-                            f"Tabela '{tabela.nome_escopo}.{tabela.nome_tabela}' "
-                            "sem papel_de_negocio."
-                        ),
-                        origem="GeradorMarkdown",
-                    )
-                )
-
-        ordenadas = sorted(
-            entrada.tabelas, key=lambda t: (t.nome_escopo, t.nome_tabela)
-        )
-        conteudo_index = _TEMPLATE_INDEX.render(tabelas=ordenadas, gerado_em=gerado_em)
-        resultado_index = escrever_arquivo(destino / "index.md", conteudo_index)
-        if isinstance(resultado_index, Falha):
-            return resultado_index
-
-        return Sucesso(None, avisos=avisos)

@@ -16,7 +16,9 @@ from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkCompos
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.shared.resultado import Falha, Sucesso
-from ddf.infrastructure.adapters.generators.gerador_markdown import GeradorMarkdown
+from ddf.infrastructure.adapters.generators.markdown.gerador_markdown import (
+    GeradorMarkdown,
+)
 
 
 def test_caminho_feliz_gera_um_md_por_tabela_e_index(
