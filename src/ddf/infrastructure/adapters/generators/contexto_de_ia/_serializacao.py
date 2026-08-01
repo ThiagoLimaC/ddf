@@ -12,6 +12,7 @@ from ddf.domain.model.analysis import (
 from ddf.infrastructure.adapters.generators.comum._metricas import (
     _cobertura_dos_valores_frequentes,
     _elegivel_para_enumeracao,
+    _metrica_de_coluna,
 )
 
 
@@ -29,12 +30,6 @@ def _nome_arquivo(tabela: str) -> str:
         Nome do arquivo dentro de `tabelas/<escopo>/`.
     """
     return f"{tabela}.json"
-
-
-def _metrica_de_coluna(coluna: ColunaAnalisada) -> MetricasBaseColuna | None:
-    """Filtra a MetricasBaseColuna de uma coluna, se ela já tiver sido calculada."""
-    metricas = [m for m in coluna.metricas if isinstance(m, MetricasBaseColuna)]
-    return metricas[0] if metricas else None
 
 
 def _metrica_de_tabela(tabela: TabelaAnalisada) -> MetricasBaseTabela | None:

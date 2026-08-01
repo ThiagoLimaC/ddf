@@ -51,6 +51,19 @@ verdade; o problema desses é piso de amostra, não o tipo.
 """
 
 
+def _metrica_de_coluna(coluna: ColunaAnalisada) -> MetricasBaseColuna | None:
+    """Filtra a MetricasBaseColuna de uma coluna, se ela já tiver sido calculada.
+
+    Args:
+        coluna: coluna analisada.
+
+    Returns:
+        A MetricasBaseColuna encontrada, ou None se ausente.
+    """
+    metricas = [m for m in coluna.metricas if isinstance(m, MetricasBaseColuna)]
+    return metricas[0] if metricas else None
+
+
 def _cobertura_dos_valores_frequentes(
     metrica: MetricasBaseColuna, tamanho_amostra: int
 ) -> float:

@@ -4,11 +4,11 @@ from typing import Any
 
 from ddf.domain.model.analysis import (
     ColunaAnalisada,
-    MetricasBaseColuna,
     MetricasBaseTabela,
     TabelaAnalisada,
 )
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
+from ddf.infrastructure.adapters.generators.comum._metricas import _metrica_de_coluna
 
 _NAO_DISPONIVEL = "N/D"
 _NAO_APLICAVEL = "—"
@@ -208,19 +208,6 @@ def _formatar_restricoes_fk_compostas(tabela: TabelaAnalisada) -> str:
             f"{grupo.nome_tabela_referenciada}({referenciadas})"
         )
     return ", ".join(partes)
-
-
-def _metrica_de_coluna(coluna: ColunaAnalisada) -> MetricasBaseColuna | None:
-    """Filtra a MetricasBaseColuna de uma coluna, se ela já tiver sido calculada.
-
-    Args:
-        coluna: coluna analisada.
-
-    Returns:
-        A MetricasBaseColuna encontrada, ou None se ausente.
-    """
-    metricas_coluna = [m for m in coluna.metricas if isinstance(m, MetricasBaseColuna)]
-    return metricas_coluna[0] if metricas_coluna else None
 
 
 def _formatar_completude(tabela: TabelaAnalisada) -> str:

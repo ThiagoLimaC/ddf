@@ -20,6 +20,7 @@ from ddf.domain.model.analysis import (
 from ddf.domain.shared.aviso import Aviso
 from ddf.infrastructure.adapters.generators.comum._metricas import (
     _elegivel_para_enumeracao,
+    _metrica_de_coluna,
 )
 from ddf.infrastructure.adapters.generators.dbt._sql import _nome_model
 
@@ -33,19 +34,6 @@ _ORIGEM = "GeradorDbt"
 _LIMITE_NULO_SOFT = 10.0
 _LIMITE_UNICO_SOFT = 95.0
 _TAMANHO_AMOSTRA_MINIMO_SOFT = 100
-
-
-def _metrica_de_coluna(coluna: ColunaAnalisada) -> MetricasBaseColuna | None:
-    """Filtra a MetricasBaseColuna de uma coluna, se ela já tiver sido calculada.
-
-    Args:
-        coluna: coluna analisada.
-
-    Returns:
-        A MetricasBaseColuna encontrada, ou None se ausente.
-    """
-    metricas = [m for m in coluna.metricas if isinstance(m, MetricasBaseColuna)]
-    return metricas[0] if metricas else None
 
 
 def _precisa_teste_soft_nulo(
