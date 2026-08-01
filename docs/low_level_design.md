@@ -988,6 +988,48 @@ distingue as duas, mesmo padrão de `com_timezone` em `TIME`/`TIMESTAMP`.
 padding) não é o mesmo conceito que comprimento máximo. `UUID` e `TIME` não
 tinham categoria equivalente antes desta issue.
 
+**Mapeamento de tipos MariaDB** (`mapeamento_de_tipos.py::mapear_tipo_mariadb`):
+
+| Tipo MariaDB (`information_schema.columns.data_type`) | `CategoriaDeDado` | Atributos extras |
+|---|---|---|
+| `varchar` | `VARCHAR` | `tamanho_maximo` |
+| `char` | `CHAR` | `tamanho_fixo` |
+| `tinytext`, `text`, `mediumtext`, `longtext` | `TEXT` | — |
+| `decimal` | `NUMERIC` | `precisao`, `escala` |
+| `tinyint`, `smallint`, `mediumint`, `int` | `INTEGER` | — |
+| `bigint` | `BIGINT` | — |
+| `float` | `FLOAT` | `com_precisao_dupla=False` |
+| `double` | `FLOAT` | `com_precisao_dupla=True` |
+| `datetime` | `TIMESTAMP` | `com_timezone=False` |
+| `timestamp` | `TIMESTAMP` | `com_timezone=True` |
+| `time` | `TIME` | — |
+| `date` | `DATE` | — |
+| `enum`, `set` | `ENUM`/`SET` | `valores_permitidos` (extraídos do `column_type`, ex.: `enum('ativo','inativo')`) |
+| `uuid` | `UUID` | — |
+| qualquer outro (inclui `json`) | `UNKNOWN`, salvo reclassificação abaixo | — |
+
+Tipos fora da tabela caem em `UNKNOWN`, nunca levantam exceção.
+
+**Detecção de coluna JSON via CHECK constraint:** MariaDB nunca reporta
+`data_type = "json"`, mesmo para uma coluna `JSON` de verdade — ela aparece
+como `LONGTEXT` com um `CHECK(json_valid(...))` implícito adicionado pelo
+próprio servidor. `_extrair_coluna_json_valid` faz parsing por regex do
+`CHECK_CLAUSE` (`information_schema.CHECK_CONSTRAINTS`) procurando o padrão
+`json_valid(\`coluna\`)`. Como nome de constraint no MariaDB é escopado por
+*tabela*, não por schema, e `CHECK_CONSTRAINTS` não expõe `TABLE_NAME` para
+filtrar isso na query, a mesma consulta pode retornar `CHECK_CLAUSE` de uma
+constraint de outra tabela do schema com nome coincidente —
+`_colunas_json_de_check_clauses` descarta esse ruído cruzando o nome extraído
+contra as colunas reais da tabela (lidas de `information_schema.columns`).
+
+**Promoção TINYINT(1) → BOOLEAN pela amostra:** MariaDB não guarda em
+catálogo nenhum a distinção entre `BOOLEAN` e `TINYINT(1)` — são o mesmo
+tipo físico. `_promover_booleanos_pela_amostra` decide com base em dado
+real: uma coluna `tinyint(1)` só é promovida a `BOOLEAN` se a amostra tiver
+ao menos um valor não-nulo e todos os valores não-nulos forem `0`/`1`.
+Amostra vazia ou só nulos não promove — falta de evidência não é evidência
+de booleano, a coluna permanece `INTEGER`.
+
 ### `PercentualDeLinhas`
 
 ```python
@@ -1234,6 +1276,21 @@ class AnalisadorDeMetricasDeColuna:
 `tamanho_amostra == 0`: todas as métricas acima retornam `0.0`/`None`/`[]` sem
 tentar dividir — guarda explícita antes de qualquer cálculo, não decisão do
 implementador.
+
+**Normalização de dtype não-nativo antes do cálculo:** duas famílias de
+dtype Polars quebram `min()`/`max()` com `InvalidOperationError` (ver
+Decisão 12 do `system_design_doc.md`) — `pl.Object` (fallback do Polars pra
+tipo Python sem mapeamento nativo, ex. `uuid.UUID` de uma coluna UUID do
+MariaDB) e `pl.List` (dtype de uma coluna `ARRAY` do Postgres, ex.
+`text[]`). `_normalizar_serie_nao_nativa` stringifica esses dois dtypes pra
+Utf8 antes de qualquer cálculo, restaurando as operações que uma coluna
+Utf8 comum já suporta (`n_unique()`/`value_counts()` funcionam nos dtypes
+originais sem essa etapa — só min/max quebram). A conversão usa
+`_representar_valor_nao_nativo`, não `str()` puro: dado binário
+(`bytes`/`bytearray`/`memoryview` — `psycopg2` devolve `memoryview` pra
+colunas `bytea`) viraria um endereço de memória (`<memory at 0x7f...>`) com
+`str()` direto, então vira `"[dado binário, N bytes]"` em vez disso;
+qualquer outro tipo usa `str()` normalmente.
 
 **Detecção de formato** (só em `VARCHAR`/`TEXT`; threshold ≥ 80% dos
 não-nulos **e** mínimo absoluto de 20 valores não-nulos — evita "falsa
