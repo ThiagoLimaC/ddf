@@ -1,0 +1,34 @@
+# Commits mecânicos ignorados por `git blame --ignore-revs-file` (honrado
+# nativamente pelo GitLens). Objetivo: manter a autoria "de conteúdo" visível
+# em `git blame` mesmo depois de um refactor mecânico de organização de
+# módulo/teste (issue #96), que move/reformata código sem mudar sua lógica.
+#
+# Regra pra entrar aqui: só commit puramente mecânico (mover arquivo, dividir
+# módulo sem mudar comportamento, reindentar teste pra dentro de classe,
+# atualizar import). Commit que muda lógica de negócio real (mesmo que
+# pequena) não entra, mesmo que tenha nome "refactor".
+
+# refactor(generators): move os 3 Geradores para subpacote (dbt/markdown/contexto_de_ia)
+e4404af
+7c4d3d2
+6e66eae
+
+# refactor(pyproject): atualiza entry points pra nova estrutura de packages
+960a792
+
+# refactor(extractors): separa helpers agnósticos em comum/ e estrategias/
+f9ddbd4
+
+# refactor(generators,analyzers): move helpers compartilhados para comum/
+33666a8
+
+# refactor(tests): organiza testes em TestFeliz/TestErro/TestBorda
+71c3c05
+6519563
+4985024
+
+# refactor: remove toda referência de issue em docstring/comentário
+b1c8183
+
+# refactor(generators): enxuga docstring que duplicava low_level_design.md
+4d40bab
