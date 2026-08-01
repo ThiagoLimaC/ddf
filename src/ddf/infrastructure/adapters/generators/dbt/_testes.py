@@ -105,49 +105,20 @@ def _sugestoes_de_teste(
 ) -> list[Any]:
     """Sugere os testes dbt de qualidade aplicáveis a uma coluna.
 
-    `unique`/`not_null` combinam o fato estrutural do schema
-    (`coluna.unica`/`coluna.nao_nulavel`) com a métrica amostral
-    (`percentual_unico == 100.0`/`percentual_nulo == 0.0`) — priorizando
-    sempre o fato do schema sobre a estimativa amostral. Ambos são
-    suprimidos quando a coluna já é PK (PK implica os dois, sugerir seria
-    redundante). A checagem amostral só entra em jogo com
-    `tamanho_amostra > 0` — sem isso, `_metricas_vazias()` zera
-    `percentual_nulo` pra amostra vazia, e o Gerador sugeriria
-    `not_null`/`unique` sobre zero evidência real; o fato estrutural do
-    schema continua valendo independente disso.
+    `unique`/`not_null` combinam o fato estrutural do schema com a métrica
+    amostral, priorizando sempre o fato do schema; suprimidos se a coluna
+    já é PK. `relationships` só é sugerido se a tabela referenciada está no
+    lote analisado — senão emite `Aviso` e omite o teste; coluna em
+    `colunas_em_fk_composta` nunca recebe `relationships` per-coluna, esse
+    teste vai para `_testes_de_modelo` (`composite_relationships`).
+    `accepted_values` exige `_elegivel_para_enumeracao` (critérios em
+    `_metricas.py`). `matches_format` exige `formato_detectado`. Testes
+    "soft" de nulo/unicidade cobrem a faixa intermediária entre "sem sinal"
+    e o `not_null`/`unique` hard (condições em
+    `_precisa_teste_soft_nulo`/`_precisa_teste_soft_unico`).
 
-    `relationships` só é sugerido quando a tabela referenciada pela FK
-    também está no lote analisado nesta execução — apontar `ref()` para um
-    model que este Gerador não produziu quebraria `dbt run`. Quando a
-    referência está fora do lote, emite `Aviso` e omite o teste.
-
-    **FK composta:** uma coluna que pertence a `colunas_em_fk_composta`
-    nunca recebe o `relationships` per-coluna, mesmo tendo
-    `chave_estrangeira=True`/`referencia` preenchida — o teste real pra ela
-    é o model-level `composite_relationships` (ver `_testes_de_modelo`),
-    que testa a combinação das colunas juntas, não cada uma isoladamente.
-
-    `accepted_values` usa `severity: warn` e só é sugerido quando
-    `_elegivel_para_enumeracao` aprova a coluna: categoria de dado não
-    monotônica/incompatível (`TIMESTAMP`/`DATE`/`TIME`/`UUID`/`JSON`/
-    `ARRAY` excluídas), amostra acima do piso mínimo, contagem real de
-    distintos abaixo do teto de cardinalidade, `percentual_unico < 10.0` e
-    cobertura dos top-10 `valores_frequentes` sobre os não-nulos da amostra
-    acima do mínimo exigido — é um teste de enumeração exaustiva calculado
-    sobre uma amostra parcial, não a população completa, então um valor de
-    cauda longa fora da amostra não deve quebrar CI silenciosamente, e os
-    critérios adicionais evitam sugerir enumeração pra colunas que só
-    pareciam categóricas por amostra pequena ou tipo incompatível (ver
-    `_metricas.py` para a justificativa completa de cada critério).
-
-    `matches_format` é sugerido quando `formato_detectado` está presente,
-    com `severity: warn` (ver `docs/low_level_design.md` para a
-    justificativa e o escopo de engines suportadas).
-
-    Testes "soft" de nulo/unicidade cobrem a faixa intermediária entre "sem
-    sinal" e o `not_null`/`unique` hard — ver
-    `_precisa_teste_soft_nulo`/`_precisa_teste_soft_unico` para as condições
-    exatas e `docs/low_level_design.md` para a justificativa dos thresholds.
+    Critérios e thresholds detalhados: `docs/low_level_design.md`, seção
+    `GeradorDbt`.
 
     Args:
         coluna: coluna analisada a avaliar.

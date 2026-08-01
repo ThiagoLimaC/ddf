@@ -19,23 +19,15 @@ def _chave_tabela(escopo: str, tabela: str) -> str:
 def _montar_grafo(tabelas: list[TabelaAnalisada]) -> dict[str, Any]:
     """Monta o grafo bidirecional de relacionamentos via FK real.
 
-    `referencia` (saída) é sempre incluída quando a coluna tem
-    `chave_estrangeira=True`, mesmo se a tabela destino não estiver no lote
-    analisado — é informação estrutural conhecida (FK real do catálogo, não
-    heurística de nome), não uma garantia de execução como o `relationships`
-    do dbt. Por vir do FK da própria tabela (que está sendo iterada porque
-    está no lote), é sempre exaustiva.
+    `referencia` (saída) é sempre exaustiva — vem do FK real da própria
+    tabela, mesmo se a tabela destino não estiver no lote. `referenciado_por`
+    (entrada) é estruturalmente incompleto se o lote for um subconjunto do
+    banco (tabela fora do lote que também referencia esta fica invisível) —
+    por isso não vira `Aviso` pontual, vira a nota fixa
+    `_NOTA_DE_ESCOPO_DO_GRAFO`, sempre presente no artefato.
 
-    `referenciado_por` (entrada) é fundamentalmente diferente: só existe
-    porque outras tabelas do lote foram inspecionadas e apontavam pra essa.
-    Se o lote for um subconjunto do banco, uma tabela fora dele que também
-    referencia a mesma tabela fica invisível — a lista pode aparecer
-    **não-vazia mas incompleta**, o que é pior que vazia (convida conclusão
-    errada de exaustividade). Como essa limitação é estrutural de toda
-    execução (não um caso pontual), não vira `Aviso` por ocorrência — vira
-    uma nota fixa (`_NOTA_DE_ESCOPO_DO_GRAFO`) sempre presente no artefato,
-    no mesmo espírito da nota de rodapé de `MetadadosDeAmostra` no
-    `GeradorMarkdown` ("isto é amostra, não população").
+    Detalhes e comparação com `MetadadosDeAmostra`: `docs/low_level_design.md`,
+    seção `GeradorContextoDeIA`.
 
     Args:
         tabelas: tabelas do lote analisado, já ordenadas por

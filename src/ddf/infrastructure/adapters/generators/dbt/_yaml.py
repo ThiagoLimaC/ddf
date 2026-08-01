@@ -53,16 +53,13 @@ def _testes_de_modelo(
     """Sugere os testes dbt de qualidade aplicáveis no nível do model (tabela).
 
     Diferente de `_sugestoes_de_teste` (nível coluna), dois testes vivem
-    aqui — ambos fatos estruturais do catálogo, com severidade padrão
-    (`error`), não `warn` como `accepted_values` (não há razão estatística
-    pra suavizar um fato estrutural):
+    aqui, ambos com severidade padrão (`error`):
 
     - `dbt_utils.unique_combination_of_columns` — um por `RestricaoUnica`
       (UNIQUE composto real do schema).
-    - `composite_relationships` — um por `RestricaoDeFkComposta` (FK
-      composta real do schema), só quando a tabela referenciada está no
-      lote (mesma regra do `relationships` single-column); senão, `Aviso` +
-      omissão.
+    - `composite_relationships` — um por `RestricaoDeFkComposta`, só quando
+      a tabela referenciada está no lote (mesma regra do `relationships`
+      single-column); senão, `Aviso` + omissão.
 
     Args:
         tabela: tabela analisada a documentar.
