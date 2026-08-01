@@ -6,13 +6,15 @@ from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkCompos
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado
 from ddf.domain.shared.resultado import Falha, Sucesso
+from ddf.infrastructure.adapters.extractors.estrategias.percentual_de_linhas import (
+    PercentualDeLinhas,
+)
+from ddf.infrastructure.adapters.extractors.estrategias.tabela_inteira import (
+    TabelaInteira,
+)
 from ddf.infrastructure.adapters.extractors.mariadb.extrator_mariadb import (
     ExtratorMariaDB,
 )
-from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
-    PercentualDeLinhas,
-)
-from ddf.infrastructure.adapters.extractors.tabela_inteira import TabelaInteira
 
 # Caminho feliz
 

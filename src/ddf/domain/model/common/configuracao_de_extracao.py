@@ -25,7 +25,7 @@ class ConfiguracaoDeExtracao(BaseModel):
         fazer — sem isso, cada Adapter concreto (Postgres, MariaDB, e
         futuros plugins de terceiro) precisaria copiar o mesmo `if
         estrategia is None` manualmente, sem nada que force um novo
-        Extrator a lembrar de replicar a checagem (issue #75).
+        Extrator a lembrar de replicar a checagem.
         """
         if self.estrategia is None:
             return Falha("Extrator usado sem estratégia de amostragem configurada.")

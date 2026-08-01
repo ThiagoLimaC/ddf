@@ -10,7 +10,7 @@ from ddf.infrastructure.adapters.cli.registro.estrategias import (
     _construir_percentual_de_linhas,
     registrar_estrategia,
 )
-from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
+from ddf.infrastructure.adapters.extractors.estrategias.percentual_de_linhas import (
     PercentualDeLinhas,
 )
 
@@ -48,63 +48,74 @@ def _construir_fake() -> EstrategiaDeAmostragem:
     return EstrategiaFake()
 
 
-# Caminho feliz
-def test_registrar_estrategia_em_registro_isolado_nao_afeta_o_global() -> None:
-    """Caminho feliz: registro isolado recebe a estratégia, o global não muda."""
-    registro_de_teste: dict[str, EstrategiaRegistrada] = {}
+class TestFeliz:
+    """Caminho feliz."""
 
-    registrar_estrategia("Fake", _construir_fake, registro=registro_de_teste)
+    def test_registrar_estrategia_em_registro_isolado_nao_afeta_o_global(
+        self,
+    ) -> None:
+        """Registro isolado recebe a estratégia, o global não muda."""
+        registro_de_teste: dict[str, EstrategiaRegistrada] = {}
 
-    assert registro_de_teste == {
-        "Fake": EstrategiaRegistrada(construir=_construir_fake)
-    }
-    assert "Fake" not in ESTRATEGIAS_REGISTRADAS
-
-
-# Erro esperado
-def test_registrar_estrategia_com_nome_duplicado_falha() -> None:
-    """Erro esperado: nome já registrado levanta ValueError, sem sobrescrever."""
-    registro_de_teste: dict[str, EstrategiaRegistrada] = {
-        "Fake": EstrategiaRegistrada(construir=_construir_fake)
-    }
-
-    with pytest.raises(ValueError, match="Fake"):
         registrar_estrategia("Fake", _construir_fake, registro=registro_de_teste)
 
-    assert registro_de_teste == {
-        "Fake": EstrategiaRegistrada(construir=_construir_fake)
-    }
+        assert registro_de_teste == {
+            "Fake": EstrategiaRegistrada(construir=_construir_fake)
+        }
+        assert "Fake" not in ESTRATEGIAS_REGISTRADAS
 
 
-# _construir_percentual_de_linhas() — erro esperado, borda
-def test_construir_percentual_de_linhas_com_entrada_invalida_reprompt(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Erro esperado: percentual não numérico não crasha, reprompt até funcionar."""
-    respostas = iter(["abc", "10", ""])
-    monkeypatch.setattr(
-        "questionary.text",
-        lambda *args, **kwargs: _RespostaFake(next(respostas)),
-    )
+class TestErro:
+    """Erro esperado."""
 
-    estrategia = _construir_percentual_de_linhas()
+    def test_registrar_estrategia_com_nome_duplicado_falha(
+        self,
+    ) -> None:
+        """Nome já registrado levanta ValueError, sem sobrescrever."""
+        registro_de_teste: dict[str, EstrategiaRegistrada] = {
+            "Fake": EstrategiaRegistrada(construir=_construir_fake)
+        }
 
-    assert isinstance(estrategia, PercentualDeLinhas)
-    assert estrategia.requisicao.percentual == 10.0
-    assert estrategia.requisicao.seed is None
+        with pytest.raises(ValueError, match="Fake"):
+            registrar_estrategia("Fake", _construir_fake, registro=registro_de_teste)
+
+        assert registro_de_teste == {
+            "Fake": EstrategiaRegistrada(construir=_construir_fake)
+        }
+
+    def test_construir_percentual_de_linhas_com_entrada_invalida_reprompt(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Percentual não numérico não crasha, reprompt até funcionar."""
+        respostas = iter(["abc", "10", ""])
+        monkeypatch.setattr(
+            "questionary.text",
+            lambda *args, **kwargs: _RespostaFake(next(respostas)),
+        )
+
+        estrategia = _construir_percentual_de_linhas()
+
+        assert isinstance(estrategia, PercentualDeLinhas)
+        assert estrategia.requisicao.percentual == 10.0
+        assert estrategia.requisicao.seed is None
 
 
-def test_construir_percentual_de_linhas_com_seed_devolve_seed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Borda: seed preenchida (não em branco) é convertida e repassada."""
-    respostas = iter(["5", "42"])
-    monkeypatch.setattr(
-        "questionary.text",
-        lambda *args, **kwargs: _RespostaFake(next(respostas)),
-    )
+class TestBorda:
+    """Bordas."""
 
-    estrategia = _construir_percentual_de_linhas()
+    def test_construir_percentual_de_linhas_com_seed_devolve_seed(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Seed preenchida (não em branco) é convertida e repassada."""
+        respostas = iter(["5", "42"])
+        monkeypatch.setattr(
+            "questionary.text",
+            lambda *args, **kwargs: _RespostaFake(next(respostas)),
+        )
 
-    assert isinstance(estrategia, PercentualDeLinhas)
-    assert estrategia.requisicao.seed == 42
+        estrategia = _construir_percentual_de_linhas()
+
+        assert isinstance(estrategia, PercentualDeLinhas)
+        assert estrategia.requisicao.seed == 42

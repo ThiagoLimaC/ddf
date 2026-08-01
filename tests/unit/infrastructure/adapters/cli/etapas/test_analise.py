@@ -32,64 +32,67 @@ class GeradorFake:
 # escolher_geradores() — caminho feliz
 
 
-def test_escolher_geradores_devolve_a_escolha(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Caminho feliz: devolve os nomes de Gerador escolhidos pelo usuário."""
-    monkeypatch.setattr(
-        analise, "GERADORES_REGISTRADOS", {"Markdown": GeradorFake()}
-    )
-    monkeypatch.setattr(
-        "ddf.infrastructure.adapters.cli.prompts.escolher_multiplos",
-        lambda mensagem, escolhas: ["Markdown"],
-    )
+class TestFeliz:
+    """Caminho feliz."""
 
-    assert analise.escolher_geradores() == ["Markdown"]
+    def test_escolher_geradores_devolve_a_escolha(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Devolve os nomes de Gerador escolhidos pelo usuário."""
+        monkeypatch.setattr(
+            analise, "GERADORES_REGISTRADOS", {"Markdown": GeradorFake()}
+        )
+        monkeypatch.setattr(
+            "ddf.infrastructure.adapters.cli.prompts.escolher_multiplos",
+            lambda mensagem, escolhas: ["Markdown"],
+        )
 
+        assert analise.escolher_geradores() == ["Markdown"]
 
-# validar_selecao() — caminho feliz
+    def test_validar_selecao_sem_dependencias_devolve_os_analisadores(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Sem produz/requer, valida e devolve todos os Analisadores."""
+        analisador = AnalisadorFake()
+        monkeypatch.setattr(analise, "ANALISADORES_REGISTRADOS", {"Fake": analisador})
+        monkeypatch.setattr(
+            analise, "GERADORES_REGISTRADOS", {"Markdown": GeradorFake()}
+        )
 
+        ordenados = analise.validar_selecao(["Markdown"])
 
-def test_validar_selecao_sem_dependencias_devolve_os_analisadores(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Caminho feliz: sem produz/requer, valida e devolve todos os Analisadores."""
-    analisador = AnalisadorFake()
-    monkeypatch.setattr(analise, "ANALISADORES_REGISTRADOS", {"Fake": analisador})
-    monkeypatch.setattr(analise, "GERADORES_REGISTRADOS", {"Markdown": GeradorFake()})
+        assert ordenados == [analisador]
 
-    ordenados = analise.validar_selecao(["Markdown"])
+    def test_analisar_devolve_o_banco_analisado_vazio(
+        self,
+    ) -> None:
+        """Roda o Analisador via compor() e devolve o BancoAnalisado."""
+        banco_curado = BancoCurado(tabelas=[])
 
-    assert ordenados == [analisador]
+        banco_analisado = analise.analisar([AnalisadorFake()], banco_curado)
 
-
-# validar_selecao() — erro esperado
-
-
-def test_validar_selecao_com_dependencia_ausente_sai_com_codigo_1(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Erro esperado: Gerador exige uma métrica que nenhum Analisador produz."""
-
-    class GeradorExigente:
-        requer: list[TipoDeMetrica] = [MetricasBaseColuna]
-
-    monkeypatch.setattr(analise, "ANALISADORES_REGISTRADOS", {})
-    monkeypatch.setattr(
-        analise, "GERADORES_REGISTRADOS", {"Exigente": GeradorExigente()}
-    )
-
-    with pytest.raises(SystemExit) as excinfo:
-        analise.validar_selecao(["Exigente"])
-
-    assert excinfo.value.code == 1
+        assert banco_analisado.tabelas == []
 
 
-# analisar() — caminho feliz
+class TestErro:
+    """Erro esperado."""
 
+    def test_validar_selecao_com_dependencia_ausente_sai_com_codigo_1(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Gerador exige uma métrica que nenhum Analisador produz."""
 
-def test_analisar_devolve_o_banco_analisado_vazio() -> None:
-    """Caminho feliz: roda o Analisador via compor() e devolve o BancoAnalisado."""
-    banco_curado = BancoCurado(tabelas=[])
+        class GeradorExigente:
+            requer: list[TipoDeMetrica] = [MetricasBaseColuna]
 
-    banco_analisado = analise.analisar([AnalisadorFake()], banco_curado)
+        monkeypatch.setattr(analise, "ANALISADORES_REGISTRADOS", {})
+        monkeypatch.setattr(
+            analise, "GERADORES_REGISTRADOS", {"Exigente": GeradorExigente()}
+        )
 
-    assert banco_analisado.tabelas == []
+        with pytest.raises(SystemExit) as excinfo:
+            analise.validar_selecao(["Exigente"])
+
+        assert excinfo.value.code == 1

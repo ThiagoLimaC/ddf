@@ -20,15 +20,16 @@ from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
-from ddf.infrastructure.adapters.extractors.construir_colunas_fk import (
+from ddf.infrastructure.adapters.extractors.comum.construir_colunas_fk import (
     construir_colunas_fk,
 )
-from ddf.infrastructure.adapters.extractors.construir_metadados_de_amostra import (
+from ddf.infrastructure.adapters.extractors.comum.construir_metadados_de_amostra import (  # noqa: E501
     construir_metadados_de_amostra,
 )
-from ddf.infrastructure.adapters.extractors.construir_restricoes_fk_compostas import (
+from ddf.infrastructure.adapters.extractors.comum.construir_restricoes_fk_compostas import (  # noqa: E501
     construir_restricoes_fk_compostas,
 )
+from ddf.infrastructure.adapters.extractors.comum.seed_efetivo import seed_efetivo
 from ddf.infrastructure.adapters.extractors.mariadb._queries import (
     _CHAVES_ESTRANGEIRAS_SQL,
     _CHAVES_PRIMARIAS_SQL,
@@ -43,7 +44,6 @@ from ddf.infrastructure.adapters.extractors.mariadb.mapeamento_de_tipos import (
     _extrair_coluna_json_valid,
     mapear_tipo_mariadb,
 )
-from ddf.infrastructure.adapters.extractors.seed_efetivo import seed_efetivo
 
 
 class _LinhaColuna(NamedTuple):
@@ -118,9 +118,9 @@ def _particionar_colunas_unicas(
     """Agrupa (constraint_name, column_name) por constraint e particiona por tamanho.
 
     Constraint com 1 coluna vira `unica` single-column; com 2+ colunas vira
-    uma `RestricaoUnica` composta (issue #89). `_COLUNAS_UNICAS_SQL` já
-    ordena por `(constraint_name, ordinal_position)`, então cada grupo
-    preserva a ordem real das colunas dentro da constraint.
+    uma `RestricaoUnica` composta. `_COLUNAS_UNICAS_SQL` já ordena por
+    `(constraint_name, ordinal_position)`, então cada grupo preserva a
+    ordem real das colunas dentro da constraint.
 
     Args:
         linhas: pares (constraint_name, column_name) de _COLUNAS_UNICAS_SQL.

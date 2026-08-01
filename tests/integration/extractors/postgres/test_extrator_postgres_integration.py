@@ -15,13 +15,15 @@ from ddf.domain.shared.resultado import Falha, Sucesso
 from ddf.infrastructure.adapters.analyzers.analisador_de_metricas_de_coluna import (
     AnalisadorDeMetricasDeColuna,
 )
-from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
+from ddf.infrastructure.adapters.extractors.estrategias.percentual_de_linhas import (
     PercentualDeLinhas,
+)
+from ddf.infrastructure.adapters.extractors.estrategias.tabela_inteira import (
+    TabelaInteira,
 )
 from ddf.infrastructure.adapters.extractors.postgres.extrator_postgres import (
     ExtratorPostgres,
 )
-from ddf.infrastructure.adapters.extractors.tabela_inteira import TabelaInteira
 from ddf.infrastructure.adapters.orchestrator.orquestrador_paralelo import (
     OrquestradorParalelo,
 )

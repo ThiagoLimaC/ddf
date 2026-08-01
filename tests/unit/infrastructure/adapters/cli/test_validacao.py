@@ -68,111 +68,132 @@ def _geradores(*fakes: GeradorFake) -> dict[str, Gerador]:
     return {fake.nome: fake for fake in fakes}
 
 
-# Caminho feliz
-def test_analisador_e_gerador_com_dependencias_satisfeitas() -> None:
-    """Caminho feliz: Gerador cujo requer é produzido pelo Analisador selecionado."""
-    coluna = AnalisadorFake("Coluna", produz=[MetricaX], requer=[])
-    gerador = GeradorFake("Markdown", requer=[MetricaX])
+class TestFeliz:
+    """Caminho feliz."""
 
-    resultado = validar_dependencias(_analisadores(coluna), _geradores(gerador))
+    def test_analisador_e_gerador_com_dependencias_satisfeitas(
+        self,
+    ) -> None:
+        """Gerador cujo requer é produzido pelo Analisador selecionado."""
+        coluna = AnalisadorFake("Coluna", produz=[MetricaX], requer=[])
+        gerador = GeradorFake("Markdown", requer=[MetricaX])
 
-    assert isinstance(resultado, Sucesso)
-    assert resultado.valor == [coluna]
+        resultado = validar_dependencias(_analisadores(coluna), _geradores(gerador))
 
+        assert isinstance(resultado, Sucesso)
+        assert resultado.valor == [coluna]
 
-def test_analisadores_fora_de_ordem_sao_reordenados() -> None:
-    """Caminho feliz: Tabela antes de Coluna na entrada, mas Tabela depende dela."""
-    coluna = AnalisadorFake("Coluna", produz=[MetricaX], requer=[])
-    tabela = AnalisadorFake("Tabela", produz=[MetricaY], requer=[MetricaX])
+    def test_analisadores_fora_de_ordem_sao_reordenados(
+        self,
+    ) -> None:
+        """Tabela antes de Coluna na entrada, mas Tabela depende dela."""
+        coluna = AnalisadorFake("Coluna", produz=[MetricaX], requer=[])
+        tabela = AnalisadorFake("Tabela", produz=[MetricaY], requer=[MetricaX])
 
-    resultado = validar_dependencias(_analisadores(tabela, coluna), _geradores())
+        resultado = validar_dependencias(_analisadores(tabela, coluna), _geradores())
 
-    assert isinstance(resultado, Sucesso)
-    assert resultado.valor == [coluna, tabela]
+        assert isinstance(resultado, Sucesso)
+        assert resultado.valor == [coluna, tabela]
 
+    def test_cadeia_transitiva_de_tres_analisadores_embaralhada(
+        self,
+    ) -> None:
+        """C depende de B, B depende de A — resolve em cascata."""
+        a = AnalisadorFake("A", produz=[MetricaX], requer=[])
+        b = AnalisadorFake("B", produz=[MetricaY], requer=[MetricaX])
+        c = AnalisadorFake("C", produz=[MetricaZ], requer=[MetricaY])
 
-def test_cadeia_transitiva_de_tres_analisadores_embaralhada() -> None:
-    """Caminho feliz: C depende de B, B depende de A — resolve em cascata."""
-    a = AnalisadorFake("A", produz=[MetricaX], requer=[])
-    b = AnalisadorFake("B", produz=[MetricaY], requer=[MetricaX])
-    c = AnalisadorFake("C", produz=[MetricaZ], requer=[MetricaY])
+        resultado = validar_dependencias(_analisadores(c, a, b), _geradores())
 
-    resultado = validar_dependencias(_analisadores(c, a, b), _geradores())
-
-    assert isinstance(resultado, Sucesso)
-    assert resultado.valor == [a, b, c]
-
-# Erro esperado
-def test_gerador_com_dependencia_nao_produzida_falha() -> None:
-    """Erro esperado: Gerador requer métrica que ninguém selecionado produz."""
-    gerador = GeradorFake("Markdown", requer=[MetricaX])
-
-    resultado = validar_dependencias(_analisadores(), _geradores(gerador))
-
-    # A mensagem cita o rótulo de registro ("Markdown"), não o nome da
-    # classe Python (GeradorFake) — é isso que o usuário vê no menu.
-    assert isinstance(resultado, Falha)
-    assert "Markdown" in resultado.erro
-    assert "MetricaX" in resultado.erro
+        assert isinstance(resultado, Sucesso)
+        assert resultado.valor == [a, b, c]
 
 
-def test_analisador_com_dependencia_nao_produzida_falha() -> None:
-    """Erro esperado: Analisador requer métrica que ninguém selecionado produz."""
-    tabela = AnalisadorFake("Tabela", produz=[MetricaY], requer=[MetricaX])
+class TestErro:
+    """Erro esperado."""
 
-    resultado = validar_dependencias(_analisadores(tabela), _geradores())
+    def test_gerador_com_dependencia_nao_produzida_falha(
+        self,
+    ) -> None:
+        """Gerador requer métrica que ninguém selecionado produz."""
+        gerador = GeradorFake("Markdown", requer=[MetricaX])
 
-    assert isinstance(resultado, Falha)
-    assert "Tabela" in resultado.erro
-    assert "MetricaX" in resultado.erro
+        resultado = validar_dependencias(_analisadores(), _geradores(gerador))
 
-# Borda
-def test_listas_vazias_retornam_sucesso_vazio() -> None:
-    """Borda: sem Analisadores nem Geradores selecionados — nada para validar."""
-    resultado = validar_dependencias(_analisadores(), _geradores())
+        # A mensagem cita o rótulo de registro ("Markdown"), não o nome da
+        # classe Python (GeradorFake) — é isso que o usuário vê no menu.
+        assert isinstance(resultado, Falha)
+        assert "Markdown" in resultado.erro
+        assert "MetricaX" in resultado.erro
 
-    assert isinstance(resultado, Sucesso)
-    assert resultado.valor == []
+    def test_analisador_com_dependencia_nao_produzida_falha(
+        self,
+    ) -> None:
+        """Analisador requer métrica que ninguém selecionado produz."""
+        tabela = AnalisadorFake("Tabela", produz=[MetricaY], requer=[MetricaX])
 
-def test_ciclo_entre_dois_analisadores_falha() -> None:
-    """Borda: A requer o que só B produz, e B requer o que só A produz."""
-    a = AnalisadorFake("A", produz=[MetricaX], requer=[MetricaY])
-    b = AnalisadorFake("B", produz=[MetricaY], requer=[MetricaX])
+        resultado = validar_dependencias(_analisadores(tabela), _geradores())
 
-    resultado = validar_dependencias(_analisadores(a, b), _geradores())
-
-    # Os dois entram na mensagem de ciclo pelo rótulo de registro.
-    assert isinstance(resultado, Falha)
-    assert "Ciclo" in resultado.erro
-    assert "A" in resultado.erro
-    assert "B" in resultado.erro
+        assert isinstance(resultado, Falha)
+        assert "Tabela" in resultado.erro
+        assert "MetricaX" in resultado.erro
 
 
-def test_analisador_que_requer_a_propria_metrica_que_produz_falha_por_ciclo() -> None:
-    """Borda: auto-dependência — Analisador requer o que ele mesmo produz."""
-    autodependente = AnalisadorFake(
-        "Autodependente", produz=[MetricaX], requer=[MetricaX]
-    )
+class TestBorda:
+    """Bordas."""
 
-    resultado = validar_dependencias(_analisadores(autodependente), _geradores())
+    def test_listas_vazias_retornam_sucesso_vazio(
+        self,
+    ) -> None:
+        """Sem Analisadores nem Geradores selecionados — nada para validar."""
+        resultado = validar_dependencias(_analisadores(), _geradores())
 
-    assert isinstance(resultado, Falha)
-    assert "Ciclo" in resultado.erro
-    assert "Autodependente" in resultado.erro
+        assert isinstance(resultado, Sucesso)
+        assert resultado.valor == []
 
+    def test_ciclo_entre_dois_analisadores_falha(
+        self,
+    ) -> None:
+        """A requer o que só B produz, e B requer o que só A produz."""
+        a = AnalisadorFake("A", produz=[MetricaX], requer=[MetricaY])
+        b = AnalisadorFake("B", produz=[MetricaY], requer=[MetricaX])
 
-def test_dois_analisadores_produzindo_a_mesma_metrica_nao_falha() -> None:
-    """Borda: dois Analisadores produzem a mesma métrica — último processado vence.
+        resultado = validar_dependencias(_analisadores(a, b), _geradores())
 
-    Não há Analisador real hoje que duplique `produz`.
-    """
-    primeiro = AnalisadorFake("Primeiro", produz=[MetricaX], requer=[])
-    segundo = AnalisadorFake("Segundo", produz=[MetricaX], requer=[])
-    gerador = GeradorFake("Markdown", requer=[MetricaX])
+        # Os dois entram na mensagem de ciclo pelo rótulo de registro.
+        assert isinstance(resultado, Falha)
+        assert "Ciclo" in resultado.erro
+        assert "A" in resultado.erro
+        assert "B" in resultado.erro
 
-    resultado = validar_dependencias(
-        _analisadores(primeiro, segundo), _geradores(gerador)
-    )
+    def test_analisador_que_requer_a_propria_metrica_que_produz_falha_por_ciclo(
+        self,
+    ) -> None:
+        """auto-dependência — Analisador requer o que ele mesmo produz."""
+        autodependente = AnalisadorFake(
+            "Autodependente", produz=[MetricaX], requer=[MetricaX]
+        )
 
-    assert isinstance(resultado, Sucesso)
-    assert {a.nome for a in resultado.valor} == {"Primeiro", "Segundo"}
+        resultado = validar_dependencias(_analisadores(autodependente), _geradores())
+
+        assert isinstance(resultado, Falha)
+        assert "Ciclo" in resultado.erro
+        assert "Autodependente" in resultado.erro
+
+    def test_dois_analisadores_produzindo_a_mesma_metrica_nao_falha(
+        self,
+    ) -> None:
+        """Dois Analisadores produzem a mesma métrica — último processado vence.
+
+        Não há Analisador real hoje que duplique `produz`.
+        """
+        primeiro = AnalisadorFake("Primeiro", produz=[MetricaX], requer=[])
+        segundo = AnalisadorFake("Segundo", produz=[MetricaX], requer=[])
+        gerador = GeradorFake("Markdown", requer=[MetricaX])
+
+        resultado = validar_dependencias(
+            _analisadores(primeiro, segundo), _geradores(gerador)
+        )
+
+        assert isinstance(resultado, Sucesso)
+        assert {a.nome for a in resultado.valor} == {"Primeiro", "Segundo"}

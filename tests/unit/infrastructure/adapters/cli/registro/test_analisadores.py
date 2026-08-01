@@ -22,25 +22,33 @@ class AnalisadorFake:
         ...
 
 
-# Caminho feliz
-def test_registrar_analisador_em_registro_isolado_nao_afeta_o_global() -> None:
-    """Caminho feliz: registro isolado recebe o Analisador, o global não muda."""
-    analisador = AnalisadorFake()
-    registro_de_teste: dict[str, Analisador] = {}
+class TestFeliz:
+    """Caminho feliz."""
 
-    registrar_analisador("Fake", analisador, registro=registro_de_teste)
+    def test_registrar_analisador_em_registro_isolado_nao_afeta_o_global(
+        self,
+    ) -> None:
+        """Registro isolado recebe o Analisador, o global não muda."""
+        analisador = AnalisadorFake()
+        registro_de_teste: dict[str, Analisador] = {}
 
-    assert registro_de_teste == {"Fake": analisador}
-    assert "Fake" not in ANALISADORES_REGISTRADOS
+        registrar_analisador("Fake", analisador, registro=registro_de_teste)
+
+        assert registro_de_teste == {"Fake": analisador}
+        assert "Fake" not in ANALISADORES_REGISTRADOS
 
 
-# Erro esperado
-def test_registrar_analisador_com_nome_duplicado_falha() -> None:
-    """Erro esperado: nome já registrado levanta ValueError, sem sobrescrever."""
-    analisador = AnalisadorFake()
-    registro_de_teste: dict[str, Analisador] = {"Fake": analisador}
+class TestErro:
+    """Erro esperado."""
 
-    with pytest.raises(ValueError, match="Fake"):
-        registrar_analisador("Fake", AnalisadorFake(), registro=registro_de_teste)
+    def test_registrar_analisador_com_nome_duplicado_falha(
+        self,
+    ) -> None:
+        """Nome já registrado levanta ValueError, sem sobrescrever."""
+        analisador = AnalisadorFake()
+        registro_de_teste: dict[str, Analisador] = {"Fake": analisador}
 
-    assert registro_de_teste == {"Fake": analisador}
+        with pytest.raises(ValueError, match="Fake"):
+            registrar_analisador("Fake", AnalisadorFake(), registro=registro_de_teste)
+
+        assert registro_de_teste == {"Fake": analisador}

@@ -70,8 +70,8 @@ def _avisos_de_fk_composta_sem_chave_candidata(
 
     Tabela referenciada fora do lote analisado nesta execução também gera
     um Aviso, mas de teor distinto (não verificável, não "verificado e
-    correto") — decisão da banca de revisão pós-implementação da #95: um
-    `continue` silencioso aqui seria indistinguível de "checado e ok".
+    correto") — um `continue` silencioso aqui seria indistinguível de
+    "checado e ok".
 
     Args:
         tabelas: tabelas já extraídas neste lote, mesma lista que `extrair`
@@ -237,9 +237,9 @@ class OrquestradorParalelo:
             nome_tabela) — pode ser menor que o total pedido — e um Aviso
             por escopo/tabela que falhou, mais um Aviso por
             RestricaoDeFkComposta cujo lado referenciado (se presente no
-            lote) não corresponde a nenhuma PK/UNIQUE conhecida (issue #95;
-            checagem cross-table, só possível aqui, depois que todas as
-            tabelas do lote já foram extraídas).
+            lote) não corresponde a nenhuma PK/UNIQUE conhecida — checagem
+            cross-table, só possível aqui, depois que todas as tabelas do
+            lote já foram extraídas.
         """
         pares_a_extrair: list[tuple[str, str]] = []
         avisos_listagem: list[Aviso] = []

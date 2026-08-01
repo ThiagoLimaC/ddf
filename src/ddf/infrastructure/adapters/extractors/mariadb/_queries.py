@@ -30,11 +30,10 @@ _CHAVES_PRIMARIAS_SQL = """
     ORDER BY ordinal_position
 """
 
-# constraint_name/ORDER BY (issue #95): a query já filtrava por tabela,
-# mas não expunha constraint_name nem garantia ordem — sem os dois, o
-# código Python não tinha como agrupar colunas de uma mesma FK composta de
-# forma estável entre execuções (mesmo achado da banca da #89 pro
-# agrupamento de UNIQUE composto em _COLUNAS_UNICAS_SQL).
+# constraint_name/ORDER BY: sem os dois, o código Python não tem como
+# agrupar colunas de uma mesma FK composta de forma estável entre execuções
+# (mesmo raciocínio do agrupamento de UNIQUE composto em
+# _COLUNAS_UNICAS_SQL).
 _CHAVES_ESTRANGEIRAS_SQL = """
     SELECT column_name, referenced_table_schema, referenced_table_name,
            referenced_column_name, constraint_name
@@ -56,12 +55,12 @@ _TOTAL_LINHAS_SQL = """
 # UNIQUE(email) em tabelas diferentes). Sem esse filtro, o JOIN por
 # constraint_name+table_schema cruza linhas de tabelas diferentes e classifica
 # colunas UNIQUE reais como não-únicas por acidente (validado empiricamente
-# contra MariaDB 11 real durante a revisão desta issue).
+# contra MariaDB 11 real).
 #
-# ORDER BY ordinal_position (issue #89): sem isso, a ordem das colunas
-# dentro de uma constraint composta não é garantida entre execuções — o
-# hash estrutural (SobrescritaDeTabela) dispararia falso positivo de
-# "estrutura alterada" sem nenhuma mudança real de schema.
+# ORDER BY ordinal_position: sem isso, a ordem das colunas dentro de uma
+# constraint composta não é garantida entre execuções — o hash estrutural
+# (SobrescritaDeTabela) dispararia falso positivo de "estrutura alterada"
+# sem nenhuma mudança real de schema.
 _COLUNAS_UNICAS_SQL = """
     SELECT kcu.constraint_name, kcu.column_name
     FROM information_schema.table_constraints tc

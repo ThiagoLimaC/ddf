@@ -345,10 +345,9 @@ Exibe `Aviso`s em streaming por etapa concluída, agrupados por origem e por
     Estagio + tipo da exceção preservados na mensagem, traceback original só
     no log interno — aplicada nas 3 costuras onde um Estagio é chamado fora
     do controle do próprio Adapter: `compor()`, o worker de
-    `OrquestradorParalelo._executar_em_paralelo`, e o loop de Geradores
-    (hoje só em `scripts/prototipo_wizard_mariadb.py`; **a Task 7 é
-    obrigada a repetir o mesmo padrão** em torno de cada chamada de Gerador
-    no wizard real). **Não substitui** a conversão de exceções esperadas e
+    `OrquestradorParalelo._executar_em_paralelo`, e o loop de Geradores do
+    wizard real (`cli/etapas/geracao.py`). **Não substitui** a conversão de
+    exceções esperadas e
     específicas que cada Adapter já faz em sua própria mensagem de domínio
     (ex.: `OperationalError` → `Falha("Não foi possível conectar...")`) — é
     chamada em volta dessas conversões, não dentro delas; rede de segurança

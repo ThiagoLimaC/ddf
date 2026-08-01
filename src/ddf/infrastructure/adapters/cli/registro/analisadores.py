@@ -3,11 +3,10 @@
 Ponto de extensão manipulado só por quem desenvolve o ddf — nunca exposto
 em nenhum menu do wizard, que sempre roda todos os Analisadores
 registrados, sem seleção do usuário. Ao contrário de Extrator/Gerador,
-deliberadamente **não** entra na descoberta via entry points construída na
-issue #67: Analisador é a ACL entre Curation e Analysis (`CLAUDE.md`), e
-abrir descoberta automática de terceiro pra ele rodaria código de qualquer
-pacote instalado no venv em toda execução, sem o usuário ter pedido (ver
-`plan/registry-plan/issue-67-*.md`).
+deliberadamente **não** entra na descoberta via entry points: Analisador é
+a ACL entre Curation e Analysis (`CLAUDE.md`), e abrir descoberta
+automática de terceiro pra ele rodaria código de qualquer pacote instalado
+no venv em toda execução, sem o usuário ter pedido.
 """
 
 from ddf.domain.ports.analisador import Analisador
