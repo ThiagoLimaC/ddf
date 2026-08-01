@@ -1,20 +1,11 @@
 """Cálculos de métrica compartilhados entre Geradores.
 
-Extraído de `gerador_dbt.py` (issue #44/#15) porque a mesma pergunta
-estatística — "os top-10 `valores_frequentes` cobrem o suficiente da amostra
-não-nula pra confiar na enumeração?" — passou a ser usada por dois Geradores
-(`GeradorDbt` para `accepted_values`, `GeradorContextoDeIA` para sugestão de
-filtro `enum`), e duplicar a lógica/constante em dois arquivos arriscaria os
-dois divergirem silenciosamente no futuro.
-
-**Issue #95:** os dois Geradores decidiam "isso é categórico o suficiente"
-só por `percentual_unico < 10.0` + cobertura — sem piso de amostra nem
-exclusão por tipo, e cada um aplicava esses critérios de forma levemente
-diferente. Isso gerou falso positivo real contra um banco de teste
-(`criado_em` TIMESTAMP, `produto_codigo` código de catálogo crescente,
-`quantidade` INTEGER com baixa cardinalidade só na amostra).
-`_elegivel_para_enumeracao` centraliza os critérios adicionais nos dois
-Geradores, pelo mesmo motivo que motivou a extração original.
+Usado tanto por `GeradorDbt` (`accepted_values`) quanto por
+`GeradorContextoDeIA` (sugestão de filtro `enum`) — os dois respondem a
+mesma pergunta estatística: "os top-10 `valores_frequentes` cobrem o
+suficiente da amostra não-nula pra confiar na enumeração?".
+`_elegivel_para_enumeracao` centraliza os critérios de elegibilidade usados
+pelos dois, pra não divergirem silenciosamente entre si.
 """
 
 from ddf.domain.model.analysis import ColunaAnalisada, MetricasBaseColuna
@@ -58,6 +49,19 @@ nunca categoria). `JSON`/`ARRAY` são semanticamente incompatíveis com
 bloco — `quantidade`/`status_code`/`rating` podem ser categóricos de
 verdade; o problema desses é piso de amostra, não o tipo.
 """
+
+
+def _metrica_de_coluna(coluna: ColunaAnalisada) -> MetricasBaseColuna | None:
+    """Filtra a MetricasBaseColuna de uma coluna, se ela já tiver sido calculada.
+
+    Args:
+        coluna: coluna analisada.
+
+    Returns:
+        A MetricasBaseColuna encontrada, ou None se ausente.
+    """
+    metricas = [m for m in coluna.metricas if isinstance(m, MetricasBaseColuna)]
+    return metricas[0] if metricas else None
 
 
 def _cobertura_dos_valores_frequentes(
@@ -121,10 +125,7 @@ def _elegivel_para_enumeracao(
 ) -> bool:
     """Decide se uma coluna sustenta enumeração fechada (accepted_values/enum).
 
-    Cinco critérios, todos obrigatórios (issue #95 — corrige falso positivo
-    real contra um banco de teste em `criado_em` TIMESTAMP, `produto_codigo`
-    código de catálogo crescente e `quantidade` INTEGER de baixa cardinalidade
-    só na amostra):
+    Cinco critérios, todos obrigatórios:
 
     1. `coluna.tipo_dado.categoria` fora de `_CATEGORIAS_EXCLUIDAS_DE_ENUMERACAO`.
     2. `tamanho_amostra >= _TAMANHO_AMOSTRA_MINIMO_ENUMERACAO`.

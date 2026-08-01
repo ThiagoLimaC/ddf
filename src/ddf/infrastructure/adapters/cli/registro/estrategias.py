@@ -9,10 +9,12 @@ from pydantic import ValidationError
 from ddf.domain.ports.estrategia_de_amostragem import EstrategiaDeAmostragem
 from ddf.infrastructure.adapters.cli import prompts
 from ddf.infrastructure.adapters.cli.registro.comum import registrar_ou_falhar
-from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
+from ddf.infrastructure.adapters.extractors.estrategias.percentual_de_linhas import (
     PercentualDeLinhas,
 )
-from ddf.infrastructure.adapters.extractors.tabela_inteira import TabelaInteira
+from ddf.infrastructure.adapters.extractors.estrategias.tabela_inteira import (
+    TabelaInteira,
+)
 
 
 @dataclass(frozen=True)

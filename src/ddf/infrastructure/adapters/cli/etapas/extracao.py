@@ -48,8 +48,8 @@ def configurar_amostragem(configuracao: ConfiguracaoDeExtracao) -> None:
     `conectar` — atribuir `estrategia` aqui é o que ele lê ao extrair.
 
     `EstrategiaDeAmostragem` é um Port — `PercentualDeLinhas` e
-    `TabelaInteira` (issue #76) já provam que o registro cresce sem
-    precisar editar este wizard.
+    `TabelaInteira` já provam que o registro cresce sem precisar editar
+    este wizard.
     """
     nome_estrategia = prompts.selecionar(
         "Qual estratégia de amostragem?", list(ESTRATEGIAS_REGISTRADAS.keys())
@@ -91,7 +91,7 @@ def extrair(
 
     Total exibido na barra de progresso vem do próprio `orquestrador.extrair`
     (`ao_conhecer_total`), assim que ele termina de listar as tabelas
-    internamente — sem uma 2ª listagem só para saber a contagem (issue #75).
+    internamente — sem uma 2ª listagem só para saber a contagem.
     """
     progresso, definir_total = prompts.progresso_paralelo("Extraindo tabelas...")
     inicio = time.monotonic()

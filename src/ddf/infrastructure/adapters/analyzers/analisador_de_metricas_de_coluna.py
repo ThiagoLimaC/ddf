@@ -13,7 +13,9 @@ from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.model.curation import TabelaCurada
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
-from ddf.infrastructure.adapters.analyzers.detector_de_formato import detectar_formato
+from ddf.infrastructure.adapters.analyzers.comum.detector_de_formato import (
+    detectar_formato,
+)
 
 _ORIGEM = "AnalisadorDeMetricasDeColuna"
 _TAMANHO_AMOSTRA_MINIMO_AVISO = 100

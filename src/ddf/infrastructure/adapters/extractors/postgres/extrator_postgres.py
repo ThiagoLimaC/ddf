@@ -22,15 +22,16 @@ from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkCompos
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
-from ddf.infrastructure.adapters.extractors.construir_colunas_fk import (
+from ddf.infrastructure.adapters.extractors.comum.construir_colunas_fk import (
     construir_colunas_fk,
 )
-from ddf.infrastructure.adapters.extractors.construir_metadados_de_amostra import (
+from ddf.infrastructure.adapters.extractors.comum.construir_metadados_de_amostra import (  # noqa: E501
     construir_metadados_de_amostra,
 )
-from ddf.infrastructure.adapters.extractors.construir_restricoes_fk_compostas import (
+from ddf.infrastructure.adapters.extractors.comum.construir_restricoes_fk_compostas import (  # noqa: E501
     construir_restricoes_fk_compostas,
 )
+from ddf.infrastructure.adapters.extractors.comum.seed_efetivo import seed_efetivo
 from ddf.infrastructure.adapters.extractors.postgres._queries import (
     _CHAVES_ESTRANGEIRAS_SCHEMA_SQL,
     _CHAVES_PRIMARIAS_SCHEMA_SQL,
@@ -43,7 +44,6 @@ from ddf.infrastructure.adapters.extractors.postgres._queries import (
 from ddf.infrastructure.adapters.extractors.postgres.mapeamento_de_tipos import (
     mapear_tipo_postgres,
 )
-from ddf.infrastructure.adapters.extractors.seed_efetivo import seed_efetivo
 
 
 class _LinhaColuna(NamedTuple):
@@ -69,9 +69,9 @@ class _MetadadosDoSchema(NamedTuple):
 
     Populado por ExtratorPostgres._obter_metadados_schema e cacheado por
     schema — elimina o N+1 de rodar 4 queries de metadado por tabela restrita.
-    fks_por_tabela guarda linhas cruas com `constraint_name` (issue #95,
-    5º campo — não faz mais parte do formato que construir_colunas_fk
-    espera; extrair_tabela descarta esse campo antes de repassar), não
+    fks_por_tabela guarda linhas cruas com `constraint_name` como 5º campo
+    — não faz parte do formato que construir_colunas_fk espera;
+    extrair_tabela descarta esse campo antes de repassar —, não
     ReferenciaDeColuna já resolvida — a resolução por coluna (com Aviso de
     colisão) continua acontecendo por tabela, em extrair_tabela, não aqui.
     restricoes_fk_compostas_por_tabela já vem agrupado por constraint

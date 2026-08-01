@@ -869,7 +869,7 @@ schemas de sistema do Postgres (`information_schema`, `pg_catalog`,
    com `ORDER BY tc.table_name, tc.constraint_name, kcu.ordinal_position`
    (mesmo achado de estabilidade da #89 pro hash estrutural). Novo helper
    agnóstico de fonte `construir_restricoes_fk_compostas`
-   (`extractors/construir_restricoes_fk_compostas.py`, mesmo padrão de
+   (`extractors/comum/construir_restricoes_fk_compostas.py`, mesmo padrão de
    `construir_colunas_fk`) agrupa as linhas por `constraint_name`: grupo de
    1 continua indo só para o dict `colunas_fk` existente via
    `construir_colunas_fk` (comportamento inalterado); grupo de 2+ também
@@ -987,6 +987,48 @@ distingue as duas, mesmo padrão de `com_timezone` em `TIME`/`TIMESTAMP`.
 `CHAR` foi separada de `VARCHAR` pelo mesmo motivo: comprimento fixo (com
 padding) não é o mesmo conceito que comprimento máximo. `UUID` e `TIME` não
 tinham categoria equivalente antes desta issue.
+
+**Mapeamento de tipos MariaDB** (`mapeamento_de_tipos.py::mapear_tipo_mariadb`):
+
+| Tipo MariaDB (`information_schema.columns.data_type`) | `CategoriaDeDado` | Atributos extras |
+|---|---|---|
+| `varchar` | `VARCHAR` | `tamanho_maximo` |
+| `char` | `CHAR` | `tamanho_fixo` |
+| `tinytext`, `text`, `mediumtext`, `longtext` | `TEXT` | — |
+| `decimal` | `NUMERIC` | `precisao`, `escala` |
+| `tinyint`, `smallint`, `mediumint`, `int` | `INTEGER` | — |
+| `bigint` | `BIGINT` | — |
+| `float` | `FLOAT` | `com_precisao_dupla=False` |
+| `double` | `FLOAT` | `com_precisao_dupla=True` |
+| `datetime` | `TIMESTAMP` | `com_timezone=False` |
+| `timestamp` | `TIMESTAMP` | `com_timezone=True` |
+| `time` | `TIME` | — |
+| `date` | `DATE` | — |
+| `enum`, `set` | `ENUM`/`SET` | `valores_permitidos` (extraídos do `column_type`, ex.: `enum('ativo','inativo')`) |
+| `uuid` | `UUID` | — |
+| qualquer outro (inclui `json`) | `UNKNOWN`, salvo reclassificação abaixo | — |
+
+Tipos fora da tabela caem em `UNKNOWN`, nunca levantam exceção.
+
+**Detecção de coluna JSON via CHECK constraint:** MariaDB nunca reporta
+`data_type = "json"`, mesmo para uma coluna `JSON` de verdade — ela aparece
+como `LONGTEXT` com um `CHECK(json_valid(...))` implícito adicionado pelo
+próprio servidor. `_extrair_coluna_json_valid` faz parsing por regex do
+`CHECK_CLAUSE` (`information_schema.CHECK_CONSTRAINTS`) procurando o padrão
+`json_valid(\`coluna\`)`. Como nome de constraint no MariaDB é escopado por
+*tabela*, não por schema, e `CHECK_CONSTRAINTS` não expõe `TABLE_NAME` para
+filtrar isso na query, a mesma consulta pode retornar `CHECK_CLAUSE` de uma
+constraint de outra tabela do schema com nome coincidente —
+`_colunas_json_de_check_clauses` descarta esse ruído cruzando o nome extraído
+contra as colunas reais da tabela (lidas de `information_schema.columns`).
+
+**Promoção TINYINT(1) → BOOLEAN pela amostra:** MariaDB não guarda em
+catálogo nenhum a distinção entre `BOOLEAN` e `TINYINT(1)` — são o mesmo
+tipo físico. `_promover_booleanos_pela_amostra` decide com base em dado
+real: uma coluna `tinyint(1)` só é promovida a `BOOLEAN` se a amostra tiver
+ao menos um valor não-nulo e todos os valores não-nulos forem `0`/`1`.
+Amostra vazia ou só nulos não promove — falta de evidência não é evidência
+de booleano, a coluna permanece `INTEGER`.
 
 ### `PercentualDeLinhas`
 
@@ -1235,6 +1277,21 @@ class AnalisadorDeMetricasDeColuna:
 tentar dividir — guarda explícita antes de qualquer cálculo, não decisão do
 implementador.
 
+**Normalização de dtype não-nativo antes do cálculo:** duas famílias de
+dtype Polars quebram `min()`/`max()` com `InvalidOperationError` (ver
+Decisão 12 do `system_design_doc.md`) — `pl.Object` (fallback do Polars pra
+tipo Python sem mapeamento nativo, ex. `uuid.UUID` de uma coluna UUID do
+MariaDB) e `pl.List` (dtype de uma coluna `ARRAY` do Postgres, ex.
+`text[]`). `_normalizar_serie_nao_nativa` stringifica esses dois dtypes pra
+Utf8 antes de qualquer cálculo, restaurando as operações que uma coluna
+Utf8 comum já suporta (`n_unique()`/`value_counts()` funcionam nos dtypes
+originais sem essa etapa — só min/max quebram). A conversão usa
+`_representar_valor_nao_nativo`, não `str()` puro: dado binário
+(`bytes`/`bytearray`/`memoryview` — `psycopg2` devolve `memoryview` pra
+colunas `bytea`) viraria um endereço de memória (`<memory at 0x7f...>`) com
+`str()` direto, então vira `"[dado binário, N bytes]"` em vez disso;
+qualquer outro tipo usa `str()` normalmente.
+
 **Detecção de formato** (só em `VARCHAR`/`TEXT`; threshold ≥ 80% dos
 não-nulos **e** mínimo absoluto de 20 valores não-nulos — evita "falsa
 confiança" em colunas com poucos valores presentes, ex. 3 de 3 batendo
@@ -1407,7 +1464,7 @@ originais (só `percentual_unico < 10.0` + cobertura) sugeriram
 literais na amostra), `produto_codigo` (código de catálogo crescente,
 `PRD-1..4` na amostra) e `quantidade` (INTEGER de baixa cardinalidade só
 na amostra, alta variação esperada na população). `_elegivel_para_enumeracao`
-(`generators/_metricas.py`, compartilhada entre `GeradorDbt` e
+(`generators/comum/_metricas.py`, compartilhada entre `GeradorDbt` e
 `GeradorContextoDeIA`) combina, todos obrigatórios:
 
 1. **Categoria não excluída** — `_CATEGORIAS_EXCLUIDAS_DE_ENUMERACAO =
@@ -1510,7 +1567,7 @@ calculadas por `AnalisadorDeMetricasDeColuna` mas nunca consumidas pelo
 *`matches_format` — dispatch por adapter, um arquivo por engine.*
 `macros/matches_format/matches_format.sql` define o teste genérico e o
 dict de patterns (cópia literal de `_REGEXES` em
-`infrastructure/adapters/analyzers/detector_de_formato.py`) e delega a
+`infrastructure/adapters/analyzers/comum/detector_de_formato.py`) e delega a
 validação via `adapter.dispatch('validate_format', 'ddf_staging')`.
 `postgres__validate_format.sql` (via `~*`) e `mariadb__validate_format.sql`
 (via `REGEXP`) são arquivos **separados**, um por engine suportada — decisão
@@ -1537,7 +1594,7 @@ final, nunca no `pytest` do próprio ddf.
 piso de amostra (`_TAMANHO_AMOSTRA_MINIMO_SOFT = 100`, mesmo valor de
 `_TAMANHO_AMOSTRA_MINIMO_AVISO` em `AnalisadorDeMetricasDeColuna`, mas
 redefinido localmente — mesmo padrão do piso compartilhado
-`_TAMANHO_AMOSTRA_MINIMO_ENUMERACAO` em `generators/_metricas.py`, issue
+`_TAMANHO_AMOSTRA_MINIMO_ENUMERACAO` em `generators/comum/_metricas.py`, issue
 #95), o erro padrão de uma
 proporção é da mesma ordem de um threshold mais apertado: em N=100, o erro
 padrão perto de p=0.05 é de ~2,2 pontos percentuais, e perto de p=0.90 é de
@@ -1636,7 +1693,7 @@ subconjunto do schema relevante à tarefa) e, quando aplicável, uma seção
 sugestão de filtro `enum` quando a coluna não é PK **e**
 `_elegivel_para_enumeracao` aprova a coluna (ver os 5 critérios na seção
 do `GeradorDbt` acima — issue #95) — reaproveita **exatamente** a mesma
-função de `generators/_metricas.py`, já que é a mesma pergunta estatística
+função de `generators/comum/_metricas.py`, já que é a mesma pergunta estatística
 que o `GeradorDbt` resolveu para `accepted_values`. A checagem de
 `chave_primaria` fica fora da função compartilhada (PK é identificador,
 não filtro de enum — regra específica deste Gerador, não de elegibilidade

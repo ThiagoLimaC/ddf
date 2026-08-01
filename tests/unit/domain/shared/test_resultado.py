@@ -8,52 +8,58 @@ from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Sucesso
 
 
-def test_sucesso_guarda_valor_e_avisos() -> None:
-    """Caminho feliz: Sucesso guarda o valor e os avisos acumulados."""
-    aviso = Aviso(mensagem="amostra pequena", origem="Estagio")
-    resultado = Sucesso(valor=42, avisos=[aviso])
+class TestFeliz:
+    """Caminho feliz."""
 
-    assert resultado.valor == 42
-    assert resultado.avisos == [aviso]
+    def test_sucesso_guarda_valor_e_avisos(self) -> None:
+        """Sucesso guarda o valor e os avisos acumulados."""
+        aviso = Aviso(mensagem="amostra pequena", origem="Estagio")
+        resultado = Sucesso(valor=42, avisos=[aviso])
 
-
-def test_falha_guarda_mensagem_de_erro_legivel() -> None:
-    """Erro esperado: Falha guarda uma mensagem legível, sem traceback."""
-    resultado = Falha(erro="Não foi possível conectar: timeout")
-
-    assert resultado.erro == "Não foi possível conectar: timeout"
-    assert resultado.avisos == []
+        assert resultado.valor == 42
+        assert resultado.avisos == [aviso]
 
 
-def test_falha_pode_carregar_avisos_acumulados_antes_do_erro() -> None:
-    """Borda: Falha carrega avisos emitidos antes da falha, sem descartá-los."""
-    aviso = Aviso(mensagem="coluna sem dados", origem="Estagio1")
-    resultado = Falha(erro="erro fatal no Estagio2", avisos=[aviso])
+class TestErro:
+    """Erro esperado."""
 
-    assert resultado.avisos == [aviso]
+    def test_falha_guarda_mensagem_de_erro_legivel(self) -> None:
+        """Falha guarda uma mensagem legível, sem traceback."""
+        resultado = Falha(erro="Não foi possível conectar: timeout")
+
+        assert resultado.erro == "Não foi possível conectar: timeout"
+        assert resultado.avisos == []
+
+    def test_sucesso_e_imutavel(self) -> None:
+        """Tentar mutar um Sucesso levanta FrozenInstanceError."""
+        resultado = Sucesso(valor=1)
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            resultado.valor = 2  # type: ignore[misc]
+
+    def test_falha_e_imutavel(self) -> None:
+        """Tentar mutar uma Falha levanta FrozenInstanceError."""
+        resultado = Falha(erro="erro qualquer")
+
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            resultado.erro = "outro erro"  # type: ignore[misc]
 
 
-def test_avisos_default_nao_e_compartilhado_entre_instancias() -> None:
-    """Borda: default_factory evita lista de avisos compartilhada por padrão mutável."""
-    primeiro = Sucesso(valor=1)
-    segundo = Sucesso(valor=2)
+class TestBorda:
+    """Bordas."""
 
-    primeiro.avisos.append(Aviso(mensagem="x", origem="y"))
+    def test_falha_pode_carregar_avisos_acumulados_antes_do_erro(self) -> None:
+        """Falha carrega avisos emitidos antes da falha, sem descartá-los."""
+        aviso = Aviso(mensagem="coluna sem dados", origem="Estagio1")
+        resultado = Falha(erro="erro fatal no Estagio2", avisos=[aviso])
 
-    assert segundo.avisos == []
+        assert resultado.avisos == [aviso]
 
+    def test_avisos_default_nao_e_compartilhado_entre_instancias(self) -> None:
+        """default_factory evita lista de avisos compartilhada por padrão mutável."""
+        primeiro = Sucesso(valor=1)
+        segundo = Sucesso(valor=2)
 
-def test_sucesso_e_imutavel() -> None:
-    """Erro esperado: tentar mutar um Sucesso levanta FrozenInstanceError."""
-    resultado = Sucesso(valor=1)
+        primeiro.avisos.append(Aviso(mensagem="x", origem="y"))
 
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        resultado.valor = 2  # type: ignore[misc]
-
-
-def test_falha_e_imutavel() -> None:
-    """Erro esperado: tentar mutar uma Falha levanta FrozenInstanceError."""
-    resultado = Falha(erro="erro qualquer")
-
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        resultado.erro = "outro erro"  # type: ignore[misc]
+        assert segundo.avisos == []

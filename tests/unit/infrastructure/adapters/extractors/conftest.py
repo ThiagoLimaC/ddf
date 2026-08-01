@@ -3,7 +3,7 @@
 import pytest
 
 from ddf.domain.model.common.requisicao_de_amostragem import AmostragemIntegral
-from ddf.infrastructure.adapters.extractors.percentual_de_linhas import (
+from ddf.infrastructure.adapters.extractors.estrategias.percentual_de_linhas import (
     PercentualDeLinhas,
 )
 

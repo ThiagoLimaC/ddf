@@ -30,7 +30,7 @@ def construir_metadados_de_amostra(
     catálogo desatualizada. Ambos citam `identificador_tabela`, mesmo padrão
     de `construir_colunas_fk` — sem isso, os exemplos que `avisos.py` mostra
     antes de colapsar por contagem ficam anônimos, sem dizer qual tabela
-    específica paga o custo (issue #75).
+    específica paga o custo.
 
     Args:
         nome: identificador da EstrategiaDeAmostragem (MetadadosDeAmostra.estrategia).

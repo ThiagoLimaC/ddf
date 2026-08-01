@@ -32,7 +32,7 @@ class OrquestradorDeTabelas(Protocol):
         que a listagem interna termina, antes de iniciar a extração — com o
         nº de tabelas que de fato serão extraídas. Existe para o chamador
         mostrar um total real sem precisar listar as tabelas de novo por
-        fora (issue #75).
+        fora.
         """
         ...
 

@@ -27,9 +27,9 @@ PostgreSQL = "ddf.infrastructure.adapters.cli.registro.extratores:_REGISTRO_POST
 MariaDB = "ddf.infrastructure.adapters.cli.registro.extratores:_REGISTRO_MARIADB"
 
 [project.entry-points."ddf.geradores"]
-Markdown = "ddf.infrastructure.adapters.generators.gerador_markdown:GeradorMarkdown"
-Dbt = "ddf.infrastructure.adapters.generators.gerador_dbt:GeradorDbt"
-ContextoDeIA = "ddf.infrastructure.adapters.generators.gerador_contexto_de_ia:GeradorContextoDeIA"
+Markdown = "ddf.infrastructure.adapters.generators.markdown.gerador_markdown:GeradorMarkdown"
+Dbt = "ddf.infrastructure.adapters.generators.dbt.gerador_dbt:GeradorDbt"
+ContextoDeIA = "ddf.infrastructure.adapters.generators.contexto_de_ia.gerador_contexto_de_ia:GeradorContextoDeIA"
 
 [build-system]
 requires = ["uv_build>=0.11.23,<0.12.0"]
