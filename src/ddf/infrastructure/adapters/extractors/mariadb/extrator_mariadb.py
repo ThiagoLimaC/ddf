@@ -118,9 +118,9 @@ def _particionar_colunas_unicas(
     """Agrupa (constraint_name, column_name) por constraint e particiona por tamanho.
 
     Constraint com 1 coluna vira `unica` single-column; com 2+ colunas vira
-    uma `RestricaoUnica` composta (issue #89). `_COLUNAS_UNICAS_SQL` já
-    ordena por `(constraint_name, ordinal_position)`, então cada grupo
-    preserva a ordem real das colunas dentro da constraint.
+    uma `RestricaoUnica` composta. `_COLUNAS_UNICAS_SQL` já ordena por
+    `(constraint_name, ordinal_position)`, então cada grupo preserva a
+    ordem real das colunas dentro da constraint.
 
     Args:
         linhas: pares (constraint_name, column_name) de _COLUNAS_UNICAS_SQL.

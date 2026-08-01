@@ -41,10 +41,10 @@ _CHAVES_PRIMARIAS_SCHEMA_SQL = """
 # depender de nome. `unnest(conkey, confkey) WITH ORDINALITY` desempacota os
 # dois arrays em paralelo — cada posição `ord` pareia a coluna local
 # (`conkey[ord]`) com a coluna referenciada correspondente (`confkey[ord]`),
-# cobrindo FK single-column e composta na mesma passada (issue #95).
+# cobrindo FK single-column e composta na mesma passada.
 # ORDER BY estabiliza a ordem das colunas dentro de uma constraint composta
-# entre execuções (mesmo achado da banca da #89 pra restrições únicas — sem
-# ordem garantida, o hash estrutural oscilaria sem mudança real de schema).
+# entre execuções — sem ordem garantida, o hash estrutural oscilaria sem
+# mudança real de schema (mesmo raciocínio vale pra restrições únicas).
 _CHAVES_ESTRANGEIRAS_SCHEMA_SQL = """
     SELECT t.relname, a_local.attname,
            rn.nspname, rt.relname, a_ref.attname,
@@ -66,8 +66,7 @@ _CHAVES_ESTRANGEIRAS_SCHEMA_SQL = """
 """
 
 # relkind IN ('r', 'p'): sem isso, tabela particionada (relkind='p') tinha
-# reltuples zerado em versões pré-PG14, mesmo com dado real nas partições
-# (issue #66).
+# reltuples zerado em versões pré-PG14, mesmo com dado real nas partições.
 #
 # n_live_tup: contador incremental, mais atual que reltuples entre
 # ANALYZEs. NULLIF(s.n_live_tup, 0) trata "sem estatística ainda" como
@@ -80,7 +79,7 @@ _CHAVES_ESTRANGEIRAS_SCHEMA_SQL = """
 # analisada" como ausência.
 #
 # Limitação aceita: DELETE em massa sem TRUNCATE, antes do autovacuum
-# truncar páginas vazias, ainda pode reportar total desatualizado (#76).
+# truncar páginas vazias, ainda pode reportar total desatualizado.
 _TOTAL_LINHAS_SCHEMA_SQL = """
     SELECT c.relname,
            COALESCE(
@@ -104,8 +103,8 @@ _TOTAL_LINHAS_SCHEMA_SQL = """
 # 1ª), cobrindo single-column e composto numa passada só, agrupados depois
 # em Python por (nome_tabela, indexrelid); k.ord preserva a ordem.
 #
-# Predicados extra (issue #89, achados da banca contra Postgres 16 real —
-# sem eles, cenários abaixo produziriam RestricaoUnica/unica falsos):
+# Predicados extra, validados contra Postgres 16 real — sem eles, cenários
+# abaixo produziriam RestricaoUnica/unica falsos:
 #   - indexprs IS NULL: ignora índice com coluna de expressão (o JOIN de
 #     attnum falha pra ela, sobrando só as colunas reais no grupo).
 #   - k.ord <= indnkeyatts: ignora coluna INCLUDE de índice covering.

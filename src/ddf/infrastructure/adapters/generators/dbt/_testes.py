@@ -7,8 +7,7 @@ módulo, não em um módulo separado — são derivações diretas dos mesmos
 predicados de teste "soft" (`_precisa_teste_soft_nulo`/
 `_precisa_teste_soft_unico`) definidos aqui. Separá-los criaria import
 cruzado e forçaria editar dois arquivos toda vez que um threshold soft
-mudasse — mesma razão de mudança, um módulo só (achado da banca de revisão
-da issue #96).
+mudasse — mesma razão de mudança, um módulo só.
 """
 
 from typing import Any
@@ -26,7 +25,7 @@ from ddf.infrastructure.adapters.generators.dbt._sql import _nome_model
 
 _ORIGEM = "GeradorDbt"
 
-# Testes "soft" (issue #90) — thresholds fixos, não configuráveis nesta v1.
+# Testes "soft" — thresholds fixos, não configuráveis nesta v1.
 # Mais afastados da fronteira (10%/95%, não 5%/90%) de propósito: perto do
 # piso de amostra (_TAMANHO_AMOSTRA_MINIMO_SOFT), o erro padrão de uma
 # proporção é da mesma ordem de um threshold mais apertado — a sugestão
@@ -52,7 +51,7 @@ def _metrica_de_coluna(coluna: ColunaAnalisada) -> MetricasBaseColuna | None:
 def _precisa_teste_soft_nulo(
     coluna: ColunaAnalisada, metrica: MetricasBaseColuna | None, tamanho_amostra: int
 ) -> bool:
-    """Decide se a coluna cai na faixa "nulo baixo mas não-zero" (issue #90).
+    """Decide se a coluna cai na faixa "nulo baixo mas não-zero".
 
     Mutuamente exclusivo com o `not_null` hard por construção: hard cobre
     `percentual_nulo == 0.0` ou `coluna.nao_nulavel`; aqui a faixa exige
@@ -76,7 +75,7 @@ def _precisa_teste_soft_nulo(
 def _precisa_teste_soft_unico(
     coluna: ColunaAnalisada, metrica: MetricasBaseColuna | None, tamanho_amostra: int
 ) -> bool:
-    """Decide se a coluna cai na faixa "quase única" (issue #90).
+    """Decide se a coluna cai na faixa "quase única".
 
     Mutuamente exclusivo com o `unique` hard por construção: hard cobre
     `percentual_unico == 100.0` ou `coluna.unica`; aqui a faixa exige
@@ -108,46 +107,45 @@ def _sugestoes_de_teste(
 
     `unique`/`not_null` combinam o fato estrutural do schema
     (`coluna.unica`/`coluna.nao_nulavel`) com a métrica amostral
-    (`percentual_unico == 100.0`/`percentual_nulo == 0.0`) — mesmo padrão já
-    usado no GeradorMarkdown (#44) de priorizar o fato do schema sobre a
-    estimativa amostral. Ambos são suprimidos quando a coluna já é PK (PK
-    implica os dois, sugerir seria redundante). A checagem amostral só
-    entra em jogo com `tamanho_amostra > 0` — sem isso,
-    `_metricas_vazias()` zera `percentual_nulo` pra amostra vazia, e o
-    Gerador sugeriria `not_null`/`unique` sobre zero evidência real; o fato
-    estrutural do schema continua valendo independente disso.
+    (`percentual_unico == 100.0`/`percentual_nulo == 0.0`) — priorizando
+    sempre o fato do schema sobre a estimativa amostral. Ambos são
+    suprimidos quando a coluna já é PK (PK implica os dois, sugerir seria
+    redundante). A checagem amostral só entra em jogo com
+    `tamanho_amostra > 0` — sem isso, `_metricas_vazias()` zera
+    `percentual_nulo` pra amostra vazia, e o Gerador sugeriria
+    `not_null`/`unique` sobre zero evidência real; o fato estrutural do
+    schema continua valendo independente disso.
 
     `relationships` só é sugerido quando a tabela referenciada pela FK
     também está no lote analisado nesta execução — apontar `ref()` para um
     model que este Gerador não produziu quebraria `dbt run`. Quando a
     referência está fora do lote, emite `Aviso` e omite o teste.
 
-    **FK composta (issue #95):** uma coluna que pertence a
-    `colunas_em_fk_composta` nunca recebe o `relationships` per-coluna,
-    mesmo tendo `chave_estrangeira=True`/`referencia` preenchida — o teste
-    real pra ela é o model-level `composite_relationships` (ver
-    `_testes_de_modelo`), que testa a combinação das colunas juntas, não
-    cada uma isoladamente (limitação conhecida desde a #56, fechada aqui).
+    **FK composta:** uma coluna que pertence a `colunas_em_fk_composta`
+    nunca recebe o `relationships` per-coluna, mesmo tendo
+    `chave_estrangeira=True`/`referencia` preenchida — o teste real pra ela
+    é o model-level `composite_relationships` (ver `_testes_de_modelo`),
+    que testa a combinação das colunas juntas, não cada uma isoladamente.
 
     `accepted_values` usa `severity: warn` e só é sugerido quando
-    `_elegivel_para_enumeracao` aprova a coluna (issue #95): categoria de
-    dado não monotônica/incompatível (`TIMESTAMP`/`DATE`/`TIME`/`UUID`/
-    `JSON`/`ARRAY` excluídas), amostra acima do piso mínimo, contagem real
-    de distintos abaixo do teto de cardinalidade, `percentual_unico < 10.0`
-    e cobertura dos top-10 `valores_frequentes` sobre os não-nulos da
-    amostra acima do mínimo exigido — é um teste de enumeração exaustiva
-    calculado sobre uma amostra parcial, não a população completa, então um
-    valor de cauda longa fora da amostra não deve quebrar CI silenciosamente,
-    e os critérios adicionais evitam sugerir enumeração pra colunas que só
+    `_elegivel_para_enumeracao` aprova a coluna: categoria de dado não
+    monotônica/incompatível (`TIMESTAMP`/`DATE`/`TIME`/`UUID`/`JSON`/
+    `ARRAY` excluídas), amostra acima do piso mínimo, contagem real de
+    distintos abaixo do teto de cardinalidade, `percentual_unico < 10.0` e
+    cobertura dos top-10 `valores_frequentes` sobre os não-nulos da amostra
+    acima do mínimo exigido — é um teste de enumeração exaustiva calculado
+    sobre uma amostra parcial, não a população completa, então um valor de
+    cauda longa fora da amostra não deve quebrar CI silenciosamente, e os
+    critérios adicionais evitam sugerir enumeração pra colunas que só
     pareciam categóricas por amostra pequena ou tipo incompatível (ver
     `_metricas.py` para a justificativa completa de cada critério).
 
-    `matches_format` (issue #90) é sugerido quando `formato_detectado` está
-    presente, com `severity: warn` (ver `docs/low_level_design.md` para a
+    `matches_format` é sugerido quando `formato_detectado` está presente,
+    com `severity: warn` (ver `docs/low_level_design.md` para a
     justificativa e o escopo de engines suportadas).
 
-    Testes "soft" de nulo/unicidade (issue #90) cobrem a faixa intermediária
-    entre "sem sinal" e o `not_null`/`unique` hard — ver
+    Testes "soft" de nulo/unicidade cobrem a faixa intermediária entre "sem
+    sinal" e o `not_null`/`unique` hard — ver
     `_precisa_teste_soft_nulo`/`_precisa_teste_soft_unico` para as condições
     exatas e `docs/low_level_design.md` para a justificativa dos thresholds.
 
@@ -160,7 +158,7 @@ def _sugestoes_de_teste(
         tamanho_amostra: total de linhas amostradas da tabela desta coluna.
         colunas_em_fk_composta: nomes de coluna desta tabela que pertencem
             a alguma `RestricaoDeFkComposta` — suprime `relationships`
-            per-coluna pra elas (issue #95).
+            per-coluna pra elas.
 
     Returns:
         Lista de testes no formato aceito por `schema.yml` (strings para
@@ -297,9 +295,9 @@ def _precisa_dbt_utils(tabelas: list[TabelaAnalisada]) -> bool:
     """Indica se `packages.yml` (dependência `dbt_utils`) precisa ser escrito.
 
     Dois consumidores reais possíveis: `dbt_utils.unique_combination_of_columns`
-    (UNIQUE composto, issue #89) e `dbt_utils.not_null_proportion` (teste soft
-    de nulo, issue #90) — sem nenhum dos dois, declarar a dependência seria
-    decoração no artefato gerado (mesmo critério já aplicado na #89).
+    (UNIQUE composto) e `dbt_utils.not_null_proportion` (teste soft de nulo)
+    — sem nenhum dos dois, declarar a dependência seria decoração no
+    artefato gerado.
 
     Args:
         tabelas: tabelas do lote analisado.

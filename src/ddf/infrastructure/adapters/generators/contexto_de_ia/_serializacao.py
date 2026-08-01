@@ -48,9 +48,9 @@ def _sugestao_de_filtro(
 ) -> dict[str, Any] | None:
     """Sugere um filtro `enum` para a coluna, se a amostra sustentar a enumeração.
 
-    Reaproveita `_elegivel_para_enumeracao` (issue #95, mesma pergunta
-    resolvida pelo `GeradorDbt` para `accepted_values`): categoria de dado
-    não monotônica/incompatível, piso de amostra, teto de cardinalidade real,
+    Reaproveita `_elegivel_para_enumeracao` (mesma pergunta resolvida pelo
+    `GeradorDbt` para `accepted_values`): categoria de dado não
+    monotônica/incompatível, piso de amostra, teto de cardinalidade real,
     `percentual_unico < 10.0` e cobertura dos top-10 valores não-nulos.
     Colunas já `chave_primaria=True` nunca entram: PK é identificador, não
     filtro de enum — checagem específica deste Gerador, fora da função
@@ -141,8 +141,8 @@ def _montar_tabela_json(tabela: TabelaAnalisada) -> dict[str, Any]:
         ordenados por `colunas` — a ordem de extração vem do catálogo
         (posição do índice), sem significado humano, e reextrações do
         mesmo schema lógico não deveriam gerar diff espúrio no artefato
-        versionado. `restricoes_fk_compostas` (issue #95) segue o mesmo
-        princípio de omissão, mas é lista de dicts — `RestricaoDeFkComposta`
+        versionado. `restricoes_fk_compostas` segue o mesmo princípio de
+        omissão, mas é lista de dicts — `RestricaoDeFkComposta`
         carrega 4 campos (colunas locais/referenciadas + escopo/tabela
         referenciados), sem estrutura simples o bastante pra virar lista de
         listas sem perder informação.

@@ -3,16 +3,16 @@
 Em vez de um único `ai_context.json` com o `BancoAnalisado` inteiro
 serializado (redundante com Markdown/dbt — mesma informação, outro parser),
 o artefato é dividido em um `index.json` leve com o grafo de relacionamentos
-via FK real, e um arquivo por tabela em `tabelas/<escopo>/<tabela>.json`
-(issue #77) — permite a um agente carregar só o subconjunto do schema
-relevante à tarefa (schema linking), em vez do banco inteiro. Diferente do
-`_nome_model` do `GeradorDbt` (que precisa de nome globalmente único no
-grafo dbt, daí o `stg_<escopo>__<tabela>`), aqui a própria subpasta por
-escopo já desambigua tabela homônima entre escopos — sem necessidade do
-prefixo redundante no nome do arquivo.
+via FK real, e um arquivo por tabela em `tabelas/<escopo>/<tabela>.json` —
+permite a um agente carregar só o subconjunto do schema relevante à tarefa
+(schema linking), em vez do banco inteiro. Diferente do `_nome_model` do
+`GeradorDbt` (que precisa de nome globalmente único no grafo dbt, daí o
+`stg_<escopo>__<tabela>`), aqui a própria subpasta por escopo já desambigua
+tabela homônima entre escopos — sem necessidade do prefixo redundante no
+nome do arquivo.
 
-Módulo reduzido a orquestração (issue #96) — grafo de relacionamentos
-(escopo cross-tabela) em `_grafo.py`, montagem do chunk por tabela (escopo
+Módulo reduzido a orquestração — grafo de relacionamentos (escopo
+cross-tabela) em `_grafo.py`, montagem do chunk por tabela (escopo
 single-tabela) em `_serializacao.py`.
 """
 
@@ -40,7 +40,7 @@ class GeradorContextoDeIA:
         """Escreve `index.json` (grafo de relacionamentos) e um chunk por tabela.
 
         Cada tabela vai para `tabelas/<escopo>/<tabela>.json` — subpasta por
-        escopo, mesma organização já usada pelo `GeradorDbt` (issue #77).
+        escopo, mesma organização já usada pelo `GeradorDbt`.
 
         Args:
             entrada: banco analisado cujas tabelas já devem ter

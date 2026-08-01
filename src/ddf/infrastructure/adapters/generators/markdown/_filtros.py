@@ -90,7 +90,7 @@ def _marcadores_de_restricao(
         colunas_compostas: nomes de colunas da tabela que participam de
             algum UNIQUE composto (ver `_colunas_com_restricao_composta`).
         colunas_fk_compostas: nomes de colunas da tabela que participam de
-            alguma FK composta (ver `_colunas_com_fk_composta`, issue #95).
+            alguma FK composta (ver `_colunas_com_fk_composta`).
 
     Returns:
         "PK", "FK → escopo.tabela.coluna", "FK (composta)", "UNIQUE",
@@ -149,8 +149,7 @@ def _colunas_com_fk_composta(tabela: TabelaAnalisada) -> frozenset[str]:
 
     Returns:
         Conjunto de nomes de coluna cobertos por algum
-        `RestricaoDeFkComposta` da tabela; vazio se não houver nenhuma
-        (issue #95).
+        `RestricaoDeFkComposta` da tabela; vazio se não houver nenhuma.
     """
     return frozenset(
         nome
@@ -193,7 +192,7 @@ def _formatar_restricoes_fk_compostas(tabela: TabelaAnalisada) -> str:
         (`pais_id`, `id`)", separados por vírgula, ou string vazia se a
         tabela não tem nenhuma FK composta. Grupos ordenados por
         `colunas_locais` (mesmo motivo de determinismo de
-        `_formatar_restricoes_unicas` — issue #95).
+        `_formatar_restricoes_unicas`).
     """
     grupos = sorted(tabela.restricoes_fk_compostas, key=lambda r: r.colunas_locais)
     partes: list[str] = []

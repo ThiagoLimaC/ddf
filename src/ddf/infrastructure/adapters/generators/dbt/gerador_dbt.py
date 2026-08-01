@@ -7,9 +7,9 @@ contrato real consumido pelo dbt e pelo warehouse, não uma escolha de estilo
 do código Python (ver `docs/engineer_guidelines.md`, "Nomenclatura: idioma
 como contrato").
 
-Módulo reduzido a orquestração (issue #96) — cast/render SQL em `_dbt_sql.py`,
-heurística de sugestão de teste em `_dbt_testes.py`, montagem de YAML/README
-em `_dbt_yaml.py`, carregamento de templates/macros em `_dbt_templates.py`.
+Módulo reduzido a orquestração — cast/render SQL em `_sql.py`, heurística de
+sugestão de teste em `_testes.py`, montagem de YAML/README em `_yaml.py`,
+carregamento de templates/macros em `_templates.py`.
 """
 
 import shutil
@@ -107,11 +107,10 @@ class GeradorDbt:
             return resultado_projeto
 
         # packages.yml só existe quando há UNIQUE composto consumindo
-        # dbt_utils de verdade nesta execução (issue #89) — declarar a
-        # dependência sem consumidor seria decoração no artefato gerado.
-        # Removido explicitamente quando não há mais consumidor, pra não
-        # deixar um arquivo órfão de uma execução anterior (achado da
-        # banca de revisão).
+        # dbt_utils de verdade nesta execução — declarar a dependência sem
+        # consumidor seria decoração no artefato gerado. Removido
+        # explicitamente quando não há mais consumidor, pra não deixar um
+        # arquivo órfão de uma execução anterior.
         caminho_packages = destino / "packages.yml"
         if usa_dbt_utils:
             resultado_packages = escrever_arquivo(
@@ -123,9 +122,9 @@ class GeradorDbt:
             caminho_packages.unlink(missing_ok=True)
 
         # macros/matches_format/ e macros/unique_percentage_at_least.sql
-        # (issue #90) seguem o mesmo princípio do packages.yml acima: só
-        # existem com consumidor real no lote, removidos explicitamente
-        # quando ficam órfãos numa execução nova.
+        # seguem o mesmo princípio do packages.yml acima: só existem com
+        # consumidor real no lote, removidos explicitamente quando ficam
+        # órfãos numa execução nova.
         pasta_matches_format = destino / "macros" / "matches_format"
         if usa_matches_format:
             for nome_arquivo, conteudo in _CONTEUDO_MATCHES_FORMAT.items():
@@ -149,10 +148,10 @@ class GeradorDbt:
         else:
             caminho_unique_percentage.unlink(missing_ok=True)
 
-        # macros/composite_relationships.sql (issue #95): mesmo princípio de
-        # órfão condicional dos macros acima — só existe com consumidor
-        # real (RestricaoDeFkComposta referenciando tabela presente no
-        # lote), removido explicitamente quando fica órfão.
+        # macros/composite_relationships.sql: mesmo princípio de órfão
+        # condicional dos macros acima — só existe com consumidor real
+        # (RestricaoDeFkComposta referenciando tabela presente no lote),
+        # removido explicitamente quando fica órfão.
         caminho_composite_relationships = (
             destino / "macros" / "composite_relationships.sql"
         )

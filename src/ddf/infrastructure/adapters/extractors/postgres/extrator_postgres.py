@@ -69,9 +69,9 @@ class _MetadadosDoSchema(NamedTuple):
 
     Populado por ExtratorPostgres._obter_metadados_schema e cacheado por
     schema — elimina o N+1 de rodar 4 queries de metadado por tabela restrita.
-    fks_por_tabela guarda linhas cruas com `constraint_name` (issue #95,
-    5º campo — não faz mais parte do formato que construir_colunas_fk
-    espera; extrair_tabela descarta esse campo antes de repassar), não
+    fks_por_tabela guarda linhas cruas com `constraint_name` como 5º campo
+    — não faz parte do formato que construir_colunas_fk espera;
+    extrair_tabela descarta esse campo antes de repassar —, não
     ReferenciaDeColuna já resolvida — a resolução por coluna (com Aviso de
     colisão) continua acontecendo por tabela, em extrair_tabela, não aqui.
     restricoes_fk_compostas_por_tabela já vem agrupado por constraint

@@ -28,7 +28,7 @@ def _coluna_schema_yaml(
         avisos: lista de avisos acumulada pelo Gerador.
         tamanho_amostra: total de linhas amostradas da tabela desta coluna.
         colunas_em_fk_composta: nomes de coluna desta tabela que pertencem
-            a alguma `RestricaoDeFkComposta` (issue #95).
+            a alguma `RestricaoDeFkComposta`.
 
     Returns:
         Dict com `name`, `description` opcional (de `papel_de_negocio`) e
@@ -58,11 +58,11 @@ def _testes_de_modelo(
     pra suavizar um fato estrutural):
 
     - `dbt_utils.unique_combination_of_columns` — um por `RestricaoUnica`
-      (UNIQUE composto real do schema, issue #89).
+      (UNIQUE composto real do schema).
     - `composite_relationships` — um por `RestricaoDeFkComposta` (FK
-      composta real do schema, issue #95), só quando a tabela referenciada
-      está no lote (mesma regra do `relationships` single-column); senão,
-      `Aviso` + omissão.
+      composta real do schema), só quando a tabela referenciada está no
+      lote (mesma regra do `relationships` single-column); senão, `Aviso` +
+      omissão.
 
     Args:
         tabela: tabela analisada a documentar.
@@ -211,10 +211,10 @@ def _renderizar_readme(
             `dbt_project.yml`.
         usa_dbt_utils: se `packages.yml` foi gerado nesta execução — o bloco
             de comandos só menciona `dbt deps` quando há dependência real
-            a instalar (issue #89).
+            a instalar.
         usa_matches_format: se `macros/matches_format/` foi gerado nesta
             execução — a nota sobre engines suportadas (Postgres/MariaDB
-            nesta v1) só aparece quando há consumidor real (issue #90).
+            nesta v1) só aparece quando há consumidor real.
 
     Returns:
         Markdown listando os escopos e tabelas cobertos, com o caminho real
