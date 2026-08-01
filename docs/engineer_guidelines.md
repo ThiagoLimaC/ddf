@@ -445,8 +445,8 @@ tests/
 **Subpastas por fonte dentro de `extractors/`:** só o que é específico de uma
 fonte concreta (ex.: `postgres/` — vocabulário de tipos do
 `information_schema`, sintaxe SQL do próprio banco) fica na subpasta. O que é
-agnóstico de fonte fica em uma subpasta própria por tipo de reuso (issue
-#96), não solto no nível de `extractors/`:
+agnóstico de fonte fica em uma subpasta própria por tipo de reuso, não solto
+no nível de `extractors/`:
 
 - `extractors/comum/` — helpers internos reusados por 2+ Extratores
   concretos (ex.: `construir_metadados_de_amostra.py`, `seed_efetivo.py`).
