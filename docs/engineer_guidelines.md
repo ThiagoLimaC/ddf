@@ -290,6 +290,52 @@ Geradores, Orquestradores) que implementam os `Protocol`s de
 na assinatura abstrata, e a documentação completa de `Args`/`Returns` vai na
 implementação concreta.
 
+## Docstring descreve comportamento atual, nunca histórico
+
+Docstring existe pra explicar o que o código faz **agora** — nunca por que
+uma decisão foi tomada num momento específico, nunca uma implementação
+anterior que foi substituída, e nunca uma referência a número de issue
+(`#NN`/`issue #NN`). Proveniência de decisão pertence ao histórico do
+projeto — `plan/registry-plan/`, mensagem de commit, `git blame` — não ao
+código que outra pessoa vai ler daqui a um ano sem esse contexto.
+
+```python
+# Evitar — proveniência/histórico na docstring
+def extrair_tabela(self, escopo: str, tabela: str) -> Resultado[TabelaExtraida]:
+    """Extrai estrutura, amostra e metadados de uma tabela específica.
+
+    Substituído o retry automático da v1 (issue #42) por falha explícita —
+    decisão da banca de revisão após o incidente de connection leak em
+    produção, ver discussão na issue #58.
+    """
+
+# Preferir — só o comportamento atual
+def extrair_tabela(self, escopo: str, tabela: str) -> Resultado[TabelaExtraida]:
+    """Extrai estrutura, amostra e metadados de uma tabela específica.
+
+    Falha imediatamente com `Falha` em caso de erro de conexão — nunca faz
+    retry automático, para não mascarar um problema real de rede/credencial.
+    """
+```
+
+O mesmo vale pra comentários `#` densos de conhecimento técnico (comum em
+`extractors/*/_queries.py`, explicando por que uma query SQL usa um `JOIN`
+específico ou um predicado extra): o raciocínio técnico fica, a referência
+de issue sai.
+
+**Docstring longa não é proibida, mas duplicar `docs/` é.** Antes de deixar
+uma docstring crescer pra explicar uma decisão de design em detalhe, checar
+se esse detalhe já está em `docs/low_level_design.md`/`system_design_doc.md`:
+
+- **Se já está documentado:** a docstring vira um resumo curto (o quê, não
+  o porquê completo) + ponteiro pro doc — não uma paráfrase do parágrafo
+  inteiro.
+- **Se não está documentado em lugar nenhum** (conhecimento de design real
+  só existe cravado no código): promover o conteúdo pra
+  `docs/low_level_design.md`, na seção do componente correspondente, e só
+  então enxugar a docstring — sinal de que a documentação de design ficou
+  incompleta, não de que o código precisa de mais comentário.
+
 ---
 
 ## Guard-rails de lint e CI
@@ -322,6 +368,45 @@ Todo `Estagio` (Extrator, Analisador, Sobrescrita, Gerador, OrquestradorParalelo
 
 **O que NÃO conta como borda:** caso que `mypy --strict` já rejeita em tempo
 de verificação.
+
+## Agrupamento por categoria: classes `TestFeliz`/`TestErro`/`TestBorda`
+
+Cada arquivo `test_*.py` agrupa os testes das três categorias em classes —
+não em arquivos físicos separados, que fragmentam demais um módulo pequeno
+e afastam o teste do código que ele exercita:
+
+```python
+class TestFeliz:
+    """Caminho feliz."""
+
+    def test_sucesso_guarda_valor_e_avisos(self) -> None:
+        """Sucesso guarda o valor e os avisos acumulados."""
+        ...
+
+
+class TestErro:
+    """Erro esperado."""
+
+    def test_falha_guarda_mensagem_de_erro_legivel(self) -> None:
+        """Falha guarda uma mensagem legível, sem traceback."""
+        ...
+
+
+class TestBorda:
+    """Bordas."""
+
+    def test_amostra_vazia_nao_gera_metrica(self) -> None:
+        """Amostra vazia não gera métrica, não levanta exceção."""
+        ...
+```
+
+A docstring da classe carrega só o rótulo da categoria (`"Caminho feliz."`/
+`"Erro esperado."`/`"Bordas."`); a docstring do método descreve o
+comportamento específico, sem repetir o rótulo. `pytest -v` já mostra o
+agrupamento nos IDs de teste (`TestFeliz::test_...`). Categoria sem teste
+aplicável simplesmente não vira classe no arquivo — sem stub vazio. Helpers
+locais de módulo (fixtures/builders usados por mais de uma classe) ficam no
+nível do arquivo, fora de qualquer classe.
 
 ## A pergunta que decide se um teste entra na suíte
 
