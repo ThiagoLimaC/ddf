@@ -869,7 +869,7 @@ schemas de sistema do Postgres (`information_schema`, `pg_catalog`,
    com `ORDER BY tc.table_name, tc.constraint_name, kcu.ordinal_position`
    (mesmo achado de estabilidade da #89 pro hash estrutural). Novo helper
    agnóstico de fonte `construir_restricoes_fk_compostas`
-   (`extractors/construir_restricoes_fk_compostas.py`, mesmo padrão de
+   (`extractors/comum/construir_restricoes_fk_compostas.py`, mesmo padrão de
    `construir_colunas_fk`) agrupa as linhas por `constraint_name`: grupo de
    1 continua indo só para o dict `colunas_fk` existente via
    `construir_colunas_fk` (comportamento inalterado); grupo de 2+ também
@@ -1464,7 +1464,7 @@ originais (só `percentual_unico < 10.0` + cobertura) sugeriram
 literais na amostra), `produto_codigo` (código de catálogo crescente,
 `PRD-1..4` na amostra) e `quantidade` (INTEGER de baixa cardinalidade só
 na amostra, alta variação esperada na população). `_elegivel_para_enumeracao`
-(`generators/_metricas.py`, compartilhada entre `GeradorDbt` e
+(`generators/comum/_metricas.py`, compartilhada entre `GeradorDbt` e
 `GeradorContextoDeIA`) combina, todos obrigatórios:
 
 1. **Categoria não excluída** — `_CATEGORIAS_EXCLUIDAS_DE_ENUMERACAO =
@@ -1567,7 +1567,7 @@ calculadas por `AnalisadorDeMetricasDeColuna` mas nunca consumidas pelo
 *`matches_format` — dispatch por adapter, um arquivo por engine.*
 `macros/matches_format/matches_format.sql` define o teste genérico e o
 dict de patterns (cópia literal de `_REGEXES` em
-`infrastructure/adapters/analyzers/detector_de_formato.py`) e delega a
+`infrastructure/adapters/analyzers/comum/detector_de_formato.py`) e delega a
 validação via `adapter.dispatch('validate_format', 'ddf_staging')`.
 `postgres__validate_format.sql` (via `~*`) e `mariadb__validate_format.sql`
 (via `REGEXP`) são arquivos **separados**, um por engine suportada — decisão
@@ -1594,7 +1594,7 @@ final, nunca no `pytest` do próprio ddf.
 piso de amostra (`_TAMANHO_AMOSTRA_MINIMO_SOFT = 100`, mesmo valor de
 `_TAMANHO_AMOSTRA_MINIMO_AVISO` em `AnalisadorDeMetricasDeColuna`, mas
 redefinido localmente — mesmo padrão do piso compartilhado
-`_TAMANHO_AMOSTRA_MINIMO_ENUMERACAO` em `generators/_metricas.py`, issue
+`_TAMANHO_AMOSTRA_MINIMO_ENUMERACAO` em `generators/comum/_metricas.py`, issue
 #95), o erro padrão de uma
 proporção é da mesma ordem de um threshold mais apertado: em N=100, o erro
 padrão perto de p=0.05 é de ~2,2 pontos percentuais, e perto de p=0.90 é de
@@ -1693,7 +1693,7 @@ subconjunto do schema relevante à tarefa) e, quando aplicável, uma seção
 sugestão de filtro `enum` quando a coluna não é PK **e**
 `_elegivel_para_enumeracao` aprova a coluna (ver os 5 critérios na seção
 do `GeradorDbt` acima — issue #95) — reaproveita **exatamente** a mesma
-função de `generators/_metricas.py`, já que é a mesma pergunta estatística
+função de `generators/comum/_metricas.py`, já que é a mesma pergunta estatística
 que o `GeradorDbt` resolveu para `accepted_values`. A checagem de
 `chave_primaria` fica fora da função compartilhada (PK é identificador,
 não filtro de enum — regra específica deste Gerador, não de elegibilidade
