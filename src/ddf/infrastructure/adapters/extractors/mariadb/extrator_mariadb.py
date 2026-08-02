@@ -1,6 +1,7 @@
 """Extrator concreto para bancos MariaDB."""
 
 import threading
+from collections import defaultdict
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any, NamedTuple, assert_never
@@ -50,9 +51,10 @@ class _LinhaColuna(NamedTuple):
     """Uma linha de information_schema.columns, nomeada por campo.
 
     A ordem dos campos aqui precisa acompanhar a ordem do SELECT em
-    _COLUNAS_SQL — construir a tupla (`_LinhaColuna(*linha)`) é o único
-    ponto onde essa correspondência posicional existe; daqui pra frente,
-    todo o código lê por nome (`linha.data_type`), não por índice.
+    _COLUNAS_SQL (a partir da 2ª coluna — a 1ª é table_name, usada só para
+    agrupar por tabela antes de construir esta tupla) — construir a tupla
+    é o único ponto onde essa correspondência posicional existe; daqui pra
+    frente, todo o código lê por nome (`linha.data_type`), não por índice.
     """
 
     nome: str
@@ -62,6 +64,27 @@ class _LinhaColuna(NamedTuple):
     precisao: int | None
     escala: int | None
     is_nullable: str
+
+
+class _MetadadosDoSchema(NamedTuple):
+    """Metadados de catálogo de todas as tabelas de um escopo, lidos de uma vez.
+
+    Populado por ExtratorMariaDB._obter_metadados_schema e cacheado por
+    escopo — elimina o N+1 de rodar 6 queries de metadado por tabela
+    restrita. Sem restricoes_fk_compostas_por_tabela (diferente do
+    _MetadadosDoSchema equivalente do ExtratorPostgres): construir_
+    restricoes_fk_compostas é função pura de CPU, não bate no banco —
+    extrair_tabela a reconstrói por tabela a partir de fks_por_tabela já
+    cacheado, sem custo de round-trip extra.
+    """
+
+    colunas_por_tabela: dict[str, list[_LinhaColuna]]
+    pks_por_tabela: dict[str, set[str]]
+    fks_por_tabela: dict[str, list[tuple[str, str, str, str, str]]]
+    unicas_por_tabela: dict[str, set[str]]
+    restricoes_unicas_por_tabela: dict[str, list[RestricaoUnica]]
+    colunas_json_por_tabela: dict[str, set[str]]
+    total_linhas_por_tabela: dict[str, int]
 
 
 def _quotar_identificador(nome: str) -> str:
@@ -118,12 +141,15 @@ def _particionar_colunas_unicas(
     """Agrupa (constraint_name, column_name) por constraint e particiona por tamanho.
 
     Constraint com 1 coluna vira `unica` single-column; com 2+ colunas vira
-    uma `RestricaoUnica` composta. `_COLUNAS_UNICAS_SQL` já ordena por
-    `(constraint_name, ordinal_position)`, então cada grupo preserva a
-    ordem real das colunas dentro da constraint.
+    uma `RestricaoUnica` composta. Assume que `linhas` já pertence a uma
+    única tabela — quem chama (`_agrupar_colunas_unicas_por_tabela`)
+    garante isso agrupando por `table_name` antes.
 
     Args:
-        linhas: pares (constraint_name, column_name) de _COLUNAS_UNICAS_SQL.
+        linhas: pares (constraint_name, column_name) de uma única tabela,
+            já ordenados por `(constraint_name, ordinal_position)` pela
+            query, preservando a ordem real das colunas dentro da
+            constraint.
 
     Returns:
         Tupla (nomes de coluna únicas single-column, lista de RestricaoUnica
@@ -143,22 +169,50 @@ def _particionar_colunas_unicas(
     return unicas, restricoes_unicas
 
 
+def _agrupar_colunas_unicas_por_tabela(
+    linhas: list[tuple[str, str, str]],
+) -> tuple[dict[str, set[str]], dict[str, list[RestricaoUnica]]]:
+    """Separa por tabela antes de particionar — constraint só é única por tabela.
+
+    `_COLUNAS_UNICAS_SQL` já cruza `table_name` no JOIN (não só no WHERE),
+    então linhas de tabelas diferentes nunca se misturam ali; mas duas
+    tabelas do mesmo escopo podem usar o mesmo `constraint_name` (ex.:
+    `UNIQUE(email)` gerando "email" em ambas) — sem separar por tabela
+    antes de chamar `_particionar_colunas_unicas`, os grupos colidiriam
+    entre tabelas.
+
+    Args:
+        linhas: (table_name, constraint_name, column_name) de todo o
+            escopo.
+
+    Returns:
+        (unicas_por_tabela, restricoes_unicas_por_tabela).
+    """
+    linhas_por_tabela: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for nome_tabela, nome_constraint, nome_coluna in linhas:
+        linhas_por_tabela[nome_tabela].append((nome_constraint, nome_coluna))
+
+    unicas_por_tabela: dict[str, set[str]] = {}
+    restricoes_unicas_por_tabela: dict[str, list[RestricaoUnica]] = {}
+    for nome_tabela, linhas_da_tabela in linhas_por_tabela.items():
+        unicas, restricoes = _particionar_colunas_unicas(linhas_da_tabela)
+        unicas_por_tabela[nome_tabela] = unicas
+        restricoes_unicas_por_tabela[nome_tabela] = restricoes
+    return unicas_por_tabela, restricoes_unicas_por_tabela
+
+
 def _colunas_json_de_check_clauses(
     check_clauses: list[str], nomes_colunas_reais: set[str]
 ) -> set[str]:
-    """Extrai as colunas JSON reais a partir dos CHECK_CLAUSE da tabela.
+    """Extrai as colunas JSON reais a partir dos CHECK_CLAUSE de uma tabela.
 
-    `_COLUNAS_JSON_SQL` pode retornar CHECK_CLAUSE de constraints de outra
-    tabela do schema com o mesmo nome (ver comentário da query — MariaDB
-    escopa nome de constraint por tabela, não por schema, e
-    CHECK_CONSTRAINTS não tem TABLE_NAME pra filtrar isso na query). O
-    cruzamento com `nomes_colunas_reais` (as colunas de fato lidas de
-    `information_schema.columns` para esta tabela) é o que descarta esse
-    ruído — um nome extraído que não é coluna desta tabela é ignorado.
+    O cruzamento com `nomes_colunas_reais` (as colunas de fato lidas de
+    `information_schema.columns` para esta tabela) é defesa em profundidade
+    contra CHECK_CLAUSE que não segue o padrão `json_valid(...)`.
 
     Args:
-        check_clauses: valores de CHECK_CLAUSE retornados por
-            _COLUNAS_JSON_SQL para o par (escopo, tabela) já filtrado.
+        check_clauses: valores de CHECK_CLAUSE de uma única tabela, já
+            separados por `_agrupar_colunas_json_por_tabela`.
         nomes_colunas_reais: nomes de todas as colunas desta tabela, lidas
             de _COLUNAS_SQL.
 
@@ -171,6 +225,27 @@ def _colunas_json_de_check_clauses(
         if nome_coluna is not None and nome_coluna in nomes_colunas_reais:
             colunas_json.add(nome_coluna)
     return colunas_json
+
+
+def _agrupar_colunas_json_por_tabela(
+    linhas: list[tuple[str, str]],
+) -> dict[str, list[str]]:
+    """Agrupa (table_name, check_clause) de todo o escopo por tabela.
+
+    `information_schema.check_constraints` traz `table_name` nativamente —
+    diferente de UNIQUE, aqui não há JOIN nenhum pra cruzar, só agrupamento
+    direto pela coluna que a própria view já expõe.
+
+    Args:
+        linhas: (table_name, check_clause) de todo o escopo.
+
+    Returns:
+        check_clauses agrupados por table_name.
+    """
+    check_clauses_por_tabela: dict[str, list[str]] = defaultdict(list)
+    for nome_tabela, check_clause in linhas:
+        check_clauses_por_tabela[nome_tabela].append(check_clause)
+    return dict(check_clauses_por_tabela)
 
 
 def _promover_booleanos_pela_amostra(
@@ -246,6 +321,8 @@ class ExtratorMariaDB:
         self._connect_timeout = connect_timeout
         self._pool: PooledDB | None = None
         self._lock_pool = threading.Lock()
+        self._cache_schemas: dict[str, _MetadadosDoSchema] = {}
+        self._lock_cache_schemas = threading.Lock()
 
     def _obter_pool(self) -> Resultado[PooledDB]:
         """Cria o pool sob demanda, pra falha de conexão virar Falha, não exceção."""
@@ -329,6 +406,93 @@ class ExtratorMariaDB:
                     tabelas.append((nome_escopo, nome_tabela))
             return Sucesso(tabelas)
 
+    def _obter_metadados_schema(self, escopo: str) -> Resultado[_MetadadosDoSchema]:
+        """Cacheia os metadados de catálogo de um escopo inteiro, por escopo.
+
+        Populado sob demanda na 1ª extrair_tabela daquele escopo — chamadas
+        seguintes (mesmo escopo, tabelas diferentes) reaproveitam o cache em
+        vez de repetir os 6 round-trips de metadado por tabela.
+        Double-checked locking, mesmo padrão de _obter_pool/_lock_pool: um
+        único lock para todo o cache (não um lock por escopo) — populações
+        de escopos diferentes se serializam entre si, mas isso só acontece
+        uma vez por escopo ao longo da vida do Extrator, nunca por tabela.
+        """
+        metadados = self._cache_schemas.get(escopo)
+        if metadados is not None:
+            return Sucesso(metadados)
+        with self._lock_cache_schemas:
+            metadados = self._cache_schemas.get(escopo)
+            if metadados is not None:
+                return Sucesso(metadados)
+
+            with self._conexao() as resultado_conexao:
+                if isinstance(resultado_conexao, Falha):
+                    return resultado_conexao
+                conexao = resultado_conexao.valor
+                with conexao.cursor() as cursor:
+                    cursor.execute(_COLUNAS_SQL, (escopo,))
+                    colunas_por_tabela: dict[str, list[_LinhaColuna]] = defaultdict(
+                        list
+                    )
+                    for linha_bruta in cursor.fetchall():
+                        nome_tabela, *resto_colunas = linha_bruta
+                        colunas_por_tabela[nome_tabela].append(
+                            _LinhaColuna(*resto_colunas)
+                        )
+
+                    cursor.execute(_CHAVES_PRIMARIAS_SQL, (escopo,))
+                    pks_por_tabela: dict[str, set[str]] = defaultdict(set)
+                    for nome_tabela, nome_coluna_pk in cursor.fetchall():
+                        pks_por_tabela[nome_tabela].add(nome_coluna_pk)
+
+                    cursor.execute(_CHAVES_ESTRANGEIRAS_SQL, (escopo,))
+                    fks_por_tabela: dict[str, list[tuple[str, str, str, str, str]]] = (
+                        defaultdict(list)
+                    )
+                    for linha_fk in cursor.fetchall():
+                        nome_tabela, *resto_fk = linha_fk
+                        fks_por_tabela[nome_tabela].append(tuple(resto_fk))
+
+                    cursor.execute(_COLUNAS_UNICAS_SQL, (escopo,))
+                    unicas_por_tabela, restricoes_unicas_por_tabela = (
+                        _agrupar_colunas_unicas_por_tabela(list(cursor.fetchall()))
+                    )
+
+                    cursor.execute(_COLUNAS_JSON_SQL, (escopo,))
+                    check_clauses_por_tabela = _agrupar_colunas_json_por_tabela(
+                        list(cursor.fetchall())
+                    )
+                    colunas_json_por_tabela: dict[str, set[str]] = {}
+                    for nome_tabela, linhas_colunas in colunas_por_tabela.items():
+                        nomes_colunas_reais = {linha.nome for linha in linhas_colunas}
+                        colunas_json_por_tabela[nome_tabela] = (
+                            _colunas_json_de_check_clauses(
+                                check_clauses_por_tabela.get(nome_tabela, []),
+                                nomes_colunas_reais,
+                            )
+                        )
+
+                    cursor.execute(_TOTAL_LINHAS_SQL, (escopo,))
+                    total_linhas_por_tabela: dict[str, int] = {}
+                    for nome_tabela, linhas_estimadas in cursor.fetchall():
+                        total_linhas_por_tabela[nome_tabela] = (
+                            max(0, round(linhas_estimadas))
+                            if linhas_estimadas is not None
+                            else 0
+                        )
+
+            metadados = _MetadadosDoSchema(
+                colunas_por_tabela=dict(colunas_por_tabela),
+                pks_por_tabela=dict(pks_por_tabela),
+                fks_por_tabela=dict(fks_por_tabela),
+                unicas_por_tabela=unicas_por_tabela,
+                restricoes_unicas_por_tabela=restricoes_unicas_por_tabela,
+                colunas_json_por_tabela=colunas_json_por_tabela,
+                total_linhas_por_tabela=total_linhas_por_tabela,
+            )
+            self._cache_schemas[escopo] = metadados
+            return Sucesso(metadados)
+
     def extrair_tabela(self, escopo: str, tabela: str) -> Resultado[TabelaExtraida]:
         """Extrai estrutura, amostra e metadados de uma tabela específica."""
         resultado_estrategia = self._configuracao.estrategia_obrigatoria()
@@ -336,81 +500,56 @@ class ExtratorMariaDB:
             return resultado_estrategia
         estrategia = resultado_estrategia.valor
 
+        resultado_metadados = self._obter_metadados_schema(escopo)
+        if isinstance(resultado_metadados, Falha):
+            return resultado_metadados
+        metadados = resultado_metadados.valor
+
+        linhas_colunas = metadados.colunas_por_tabela.get(tabela)
+        if not linhas_colunas:
+            return Falha(f"Schema '{escopo}' ou tabela '{tabela}' não encontrada.")
+
+        colunas_pk = metadados.pks_por_tabela.get(tabela, set())
+        linhas_fk = metadados.fks_por_tabela.get(tabela, [])
+        linhas_fk_por_coluna: list[tuple[str, str, str, str]] = []
+        for nome_coluna, escopo_ref, tabela_ref, coluna_ref, _ in linhas_fk:
+            linhas_fk_por_coluna.append(
+                (nome_coluna, escopo_ref, tabela_ref, coluna_ref)
+            )
+        colunas_fk, avisos = construir_colunas_fk(
+            linhas_fk_por_coluna, origem="ExtratorMariaDB"
+        )
+        restricoes_fk_compostas = construir_restricoes_fk_compostas(linhas_fk)
+
+        colunas_unicas = metadados.unicas_por_tabela.get(tabela, set())
+        restricoes_unicas = metadados.restricoes_unicas_por_tabela.get(tabela, [])
+        colunas_json = metadados.colunas_json_por_tabela.get(tabela, set())
+        total_linhas = metadados.total_linhas_por_tabela.get(tabela, 0)
+
+        # Colunas só são finalizadas depois da amostra (abaixo) — ao
+        # contrário do ExtratorPostgres, aqui a promoção de BOOLEAN
+        # depende de dado real já carregado. Ver docstring de
+        # _promover_booleanos_pela_amostra.
+        candidatos_booleanos: set[str] = set()
+        colunas: list[ColunaExtraida] = []
+        for linha_coluna in linhas_colunas:
+            # startswith, não == : cobre "tinyint(1) unsigned" além de
+            # "tinyint(1)" — COLUMN_TYPE inclui o modificador unsigned
+            # quando presente, e um tinyint(1) unsigned também é candidato
+            # legítimo a BOOLEAN.
+            if linha_coluna.column_type.startswith("tinyint(1)"):
+                candidatos_booleanos.add(linha_coluna.nome)
+            colunas.append(
+                _construir_coluna(
+                    linha_coluna, colunas_pk, colunas_fk, colunas_unicas, colunas_json
+                )
+            )
+
         with self._conexao() as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
             conexao = resultado_conexao.valor
             with conexao.cursor() as cursor:
-                cursor.execute(_COLUNAS_SQL, (escopo, tabela))
-                linhas_colunas: list[_LinhaColuna] = []
-                for linha_bruta in cursor.fetchall():
-                    linhas_colunas.append(_LinhaColuna(*linha_bruta))
-                if not linhas_colunas:
-                    return Falha(
-                        f"Schema '{escopo}' ou tabela '{tabela}' não encontrada."
-                    )
-
-                cursor.execute(_CHAVES_PRIMARIAS_SQL, (escopo, tabela))
-                colunas_pk: set[str] = set()
-                for linha_pk in cursor.fetchall():
-                    nome_coluna_pk = linha_pk[0]
-                    colunas_pk.add(nome_coluna_pk)
-
-                cursor.execute(_CHAVES_ESTRANGEIRAS_SQL, (escopo, tabela))
-                linhas_fk = cursor.fetchall()
-                linhas_fk_por_coluna: list[tuple[str, str, str, str]] = []
-                for nome_coluna, escopo_ref, tabela_ref, coluna_ref, _ in linhas_fk:
-                    linhas_fk_por_coluna.append(
-                        (nome_coluna, escopo_ref, tabela_ref, coluna_ref)
-                    )
-                colunas_fk, avisos = construir_colunas_fk(
-                    linhas_fk_por_coluna, origem="ExtratorMariaDB"
-                )
-                restricoes_fk_compostas = construir_restricoes_fk_compostas(linhas_fk)
-
-                cursor.execute(_COLUNAS_UNICAS_SQL, (escopo, tabela))
-                colunas_unicas, restricoes_unicas = _particionar_colunas_unicas(
-                    cursor.fetchall()
-                )
-
-                cursor.execute(_COLUNAS_JSON_SQL, (escopo, tabela))
-                nomes_colunas_reais = {linha.nome for linha in linhas_colunas}
-                colunas_json = _colunas_json_de_check_clauses(
-                    [check_clause for (check_clause,) in cursor.fetchall()],
-                    nomes_colunas_reais,
-                )
-
-                # Colunas só são finalizadas depois da amostra (abaixo) — ao
-                # contrário do ExtratorPostgres, aqui a promoção de BOOLEAN
-                # depende de dado real já carregado. Ver docstring de
-                # _promover_booleanos_pela_amostra.
-                candidatos_booleanos: set[str] = set()
-                colunas: list[ColunaExtraida] = []
-                for linha_coluna in linhas_colunas:
-                    # startswith, não == : cobre "tinyint(1) unsigned" além
-                    # de "tinyint(1)" — COLUMN_TYPE inclui o modificador
-                    # unsigned quando presente, e um tinyint(1) unsigned
-                    # também é candidato legítimo a BOOLEAN.
-                    if linha_coluna.column_type.startswith("tinyint(1)"):
-                        candidatos_booleanos.add(linha_coluna.nome)
-                    colunas.append(
-                        _construir_coluna(
-                            linha_coluna,
-                            colunas_pk,
-                            colunas_fk,
-                            colunas_unicas,
-                            colunas_json,
-                        )
-                    )
-
-                cursor.execute(_TOTAL_LINHAS_SQL, (escopo, tabela))
-                linha_total = cursor.fetchone()
-                total_linhas = (
-                    max(0, round(linha_total[0]))
-                    if linha_total and linha_total[0] is not None
-                    else 0
-                )
-
                 requisicao = estrategia.requisicao
                 requisicao_efetiva: RequisicaoDeAmostragem
                 identificador_tabela = (
