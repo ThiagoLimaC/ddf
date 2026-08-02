@@ -17,6 +17,7 @@ from ddf.domain.model.common.requisicao_de_amostragem import (
     AmostragemProbabilistica,
     RequisicaoDeAmostragem,
 )
+from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
@@ -71,11 +72,10 @@ class _MetadadosDoSchema(NamedTuple):
 
     Populado por ExtratorMariaDB._obter_metadados_schema e cacheado por
     escopo — elimina o N+1 de rodar 6 queries de metadado por tabela
-    restrita. Sem restricoes_fk_compostas_por_tabela (diferente do
-    _MetadadosDoSchema equivalente do ExtratorPostgres): construir_
-    restricoes_fk_compostas é função pura de CPU, não bate no banco —
-    extrair_tabela a reconstrói por tabela a partir de fks_por_tabela já
-    cacheado, sem custo de round-trip extra.
+    restrita. restricoes_fk_compostas_por_tabela é pré-computado aqui,
+    mesmo padrão do _MetadadosDoSchema equivalente do ExtratorPostgres —
+    construir_restricoes_fk_compostas é função pura de CPU, não bate no
+    banco, então pré-computar não adiciona round-trip.
     """
 
     colunas_por_tabela: dict[str, list[_LinhaColuna]]
@@ -83,6 +83,7 @@ class _MetadadosDoSchema(NamedTuple):
     fks_por_tabela: dict[str, list[tuple[str, str, str, str, str]]]
     unicas_por_tabela: dict[str, set[str]]
     restricoes_unicas_por_tabela: dict[str, list[RestricaoUnica]]
+    restricoes_fk_compostas_por_tabela: dict[str, list[RestricaoDeFkComposta]]
     colunas_json_por_tabela: dict[str, set[str]]
     total_linhas_por_tabela: dict[str, int]
 
@@ -453,6 +454,13 @@ class ExtratorMariaDB:
                         nome_tabela, *resto_fk = linha_fk
                         fks_por_tabela[nome_tabela].append(tuple(resto_fk))
 
+                    restricoes_fk_compostas_por_tabela: dict[
+                        str, list[RestricaoDeFkComposta]
+                    ] = {
+                        nome_tabela: construir_restricoes_fk_compostas(linhas)
+                        for nome_tabela, linhas in fks_por_tabela.items()
+                    }
+
                     cursor.execute(_COLUNAS_UNICAS_SQL, (escopo,))
                     unicas_por_tabela, restricoes_unicas_por_tabela = (
                         _agrupar_colunas_unicas_por_tabela(list(cursor.fetchall()))
@@ -487,6 +495,7 @@ class ExtratorMariaDB:
                 fks_por_tabela=dict(fks_por_tabela),
                 unicas_por_tabela=unicas_por_tabela,
                 restricoes_unicas_por_tabela=restricoes_unicas_por_tabela,
+                restricoes_fk_compostas_por_tabela=restricoes_fk_compostas_por_tabela,
                 colunas_json_por_tabela=colunas_json_por_tabela,
                 total_linhas_por_tabela=total_linhas_por_tabela,
             )
@@ -519,7 +528,9 @@ class ExtratorMariaDB:
         colunas_fk, avisos = construir_colunas_fk(
             linhas_fk_por_coluna, origem="ExtratorMariaDB"
         )
-        restricoes_fk_compostas = construir_restricoes_fk_compostas(linhas_fk)
+        restricoes_fk_compostas = metadados.restricoes_fk_compostas_por_tabela.get(
+            tabela, []
+        )
 
         colunas_unicas = metadados.unicas_por_tabela.get(tabela, set())
         restricoes_unicas = metadados.restricoes_unicas_por_tabela.get(tabela, [])
