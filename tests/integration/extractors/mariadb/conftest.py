@@ -90,20 +90,12 @@ _SETUP_STATEMENTS = [
     "CREATE DATABASE restricoes",
     # "pedidos" e "clientes" têm UNIQUE KEY com o MESMO NOME ("email") no
     # MESMO database — reproduz a colisão de nome de constraint entre
-    # tabelas (achado da banca nesta issue: nomes de constraint no
-    # MySQL/MariaDB são escopados por tabela, não por schema). Sem o filtro
-    # AND kcu.table_name = %s, extrair "pedidos" veria as 2 linhas (de
-    # "pedidos" e de "clientes") sob o mesmo constraint_name e classificaria
-    # "email" como não-única por acidente.
-    # "metadados" é JSON nas duas tabelas — mesma coluna, mesmo nome de
-    # constraint CHECK auto-gerado (issue #56), reproduzindo pra JSON o
-    # mesmo cenário de colisão de nome entre tabelas já usado acima pra
-    # UNIQUE ("email"): sem o cruzamento com as colunas reais da tabela em
-    # _colunas_json_de_check_clauses, o JOIN sem TABLE_NAME em
-    # CHECK_CONSTRAINTS faria "pedidos" enxergar o CHECK_CLAUSE de
-    # "clientes" (e vice-versa) — mas como os dois têm coluna "metadados",
-    # o resultado seria o mesmo por coincidência; a defesa real está
-    # provada no teste unit com nomes de coluna diferentes.
+    # tabelas (nomes de constraint no MySQL/MariaDB são escopados por
+    # tabela, não por schema, ver `_COLUNAS_UNICAS_SQL`). Também têm coluna
+    # "metadados" JSON nas duas — não prova sozinho a atribuição correta por
+    # tabela (as duas colunas têm o mesmo nome, então o resultado seria
+    # igual mesmo se a atribuição vazasse entre tabelas); a colisão de CHECK
+    # com atribuição observável está em "relatorios"/"contadores" abaixo.
     """
     CREATE TABLE restricoes.pedidos (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -130,15 +122,43 @@ _SETUP_STATEMENTS = [
         UNIQUE KEY uk_pais_cep (pais, cep)
     ) ENGINE=InnoDB
     """,
+    # "relatorios" e "contadores" têm CHECK constraint com o MESMO NOME
+    # ("conteudo") e a MESMA coluna ("conteudo") no MESMO database, mas só
+    # "relatorios.conteudo" é JSON de verdade — "contadores.conteudo" é
+    # INTEGER com um CHECK aritmético não relacionado a JSON, batizado com o
+    # mesmo nome de propósito. Reproduz o cenário que o teste unit
+    # equivalente cobre mockado (mesmo nome de coluna nas duas tabelas
+    # evita que o cruzamento com nomes_colunas_reais mascare o bug por
+    # coincidência — ver comentário acima sobre "pedidos"/"clientes") contra
+    # MariaDB real: sem o TABLE_NAME nativo de information_schema.
+    # check_constraints, "contadores.conteudo" seria reclassificado como
+    # JSON por acidente.
+    """
+    CREATE TABLE restricoes.relatorios (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        conteudo JSON
+    ) ENGINE=InnoDB
+    """,
+    """
+    CREATE TABLE restricoes.contadores (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        conteudo INT NOT NULL,
+        CONSTRAINT conteudo CHECK (conteudo >= 0)
+    ) ENGINE=InnoDB
+    """,
     """
     INSERT INTO restricoes.pedidos (email, apelido, metadados) VALUES
         ('ana@x.com', 'aninha', '{"origem": "site"}')
     """,
     "INSERT INTO restricoes.clientes (email, metadados) VALUES ('bia@x.com', '{}')",
     "INSERT INTO restricoes.enderecos (pais, cep) VALUES ('BR', '01000-000')",
+    "INSERT INTO restricoes.relatorios (conteudo) VALUES ('{\"ok\": true}')",
+    "INSERT INTO restricoes.contadores (conteudo) VALUES (3)",
     "ANALYZE TABLE restricoes.pedidos",
     "ANALYZE TABLE restricoes.clientes",
     "ANALYZE TABLE restricoes.enderecos",
+    "ANALYZE TABLE restricoes.relatorios",
+    "ANALYZE TABLE restricoes.contadores",
     # Massa suficiente pra reprodutibilidade de seed fazer sentido
     # estatisticamente (issue #76). seq_1_to_500 é a engine SEQUENCE nativa
     # do MariaDB — evita tabela auxiliar só pra gerar linhas.

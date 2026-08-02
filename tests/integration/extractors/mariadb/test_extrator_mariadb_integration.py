@@ -15,6 +15,9 @@ from ddf.infrastructure.adapters.extractors.estrategias.tabela_inteira import (
 from ddf.infrastructure.adapters.extractors.mariadb.extrator_mariadb import (
     ExtratorMariaDB,
 )
+from ddf.infrastructure.adapters.orchestrator.orquestrador_paralelo import (
+    OrquestradorParalelo,
+)
 
 # Caminho feliz
 
@@ -276,10 +279,11 @@ def test_extrair_tabela_com_constraint_de_mesmo_nome_em_outra_tabela_nao_confund
 
     "restricoes.pedidos" e "restricoes.clientes" têm UNIQUE KEY "email" com o
     MESMO NOME no MESMO database — nomes de constraint no MySQL/MariaDB são
-    escopados por tabela, não por schema. Sem o filtro
-    AND kcu.table_name = %s na query de UNIQUE, o JOIN cruzaria as duas
-    tabelas e classificaria "email" como não-única por acidente (bug real
-    encontrado e reproduzido pela banca durante a revisão desta issue).
+    escopados por tabela, não por schema. `_COLUNAS_UNICAS_SQL` cruza
+    `table_name` no JOIN entre `table_constraints`/`key_column_usage`, e o
+    agrupamento em Python separa por `(table_name, constraint_name)` — sem
+    isso, as duas tabelas se misturariam e classificariam "email" como
+    não-única por acidente (bug real encontrado e reproduzido pela banca).
     """
     host, port, user, password = conexao
     extrator = ExtratorMariaDB(
@@ -292,6 +296,37 @@ def test_extrair_tabela_com_constraint_de_mesmo_nome_em_outra_tabela_nao_confund
     coluna_email = next(c for c in resultado.valor.colunas if c.nome == "email")
     assert coluna_email.unica is True
     assert coluna_email.nao_nulavel is True
+
+
+def test_check_com_nome_identico_em_duas_tabelas_nao_confunde_json(
+    conexao: tuple[str, int, str, str], configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: regressão da colisão de nome de CHECK constraint entre tabelas.
+
+    "restricoes.relatorios" e "restricoes.contadores" têm CHECK constraint
+    com o MESMO NOME ("conteudo") e a MESMA coluna ("conteudo") no MESMO
+    database — só "relatorios.conteudo" é JSON de verdade;
+    "contadores.conteudo" é INTEGER com um CHECK aritmético não relacionado
+    a JSON. `information_schema.check_constraints` não filtra por tabela
+    nativamente do jeito que `table_constraints`/`key_column_usage` fazem
+    pra UNIQUE — a atribuição correta depende do `TABLE_NAME` que essa view
+    já expõe (bug real corrigido nesta issue, reproduzido e confirmado
+    contra MariaDB 11 real antes da implementação).
+    """
+    host, port, user, password = conexao
+    extrator = ExtratorMariaDB(
+        host=host, port=port, user=user, password=password, configuracao=configuracao
+    )
+
+    relatorios = extrator.extrair_tabela("restricoes", "relatorios")
+    contadores = extrator.extrair_tabela("restricoes", "contadores")
+
+    assert isinstance(relatorios, Sucesso)
+    assert isinstance(contadores, Sucesso)
+    coluna_json = next(c for c in relatorios.valor.colunas if c.nome == "conteudo")
+    coluna_inteira = next(c for c in contadores.valor.colunas if c.nome == "conteudo")
+    assert coluna_json.tipo_dado.categoria == CategoriaDeDado.JSON
+    assert coluna_inteira.tipo_dado.categoria == CategoriaDeDado.INTEGER
 
 
 def test_extrair_tabela_com_indice_unico_solto_marca_coluna_unica(
@@ -419,6 +454,37 @@ def test_seeds_diferentes_produzem_amostras_diferentes(
     ids_1 = sorted(resultado_1.valor.amostra["id"].to_list())
     ids_2 = sorted(resultado_2.valor.amostra["id"].to_list())
     assert ids_1 != ids_2
+
+
+def test_extracao_paralela_de_tabelas_do_mesmo_schema_via_orquestrador(
+    conexao: tuple[str, int, str, str], configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Borda: OrquestradorParalelo real extrai tabelas do mesmo escopo em paralelo.
+
+    Contra MariaDB real (não mockado), prova que o double-checked locking do
+    cache por escopo (issue #104) segura sob concorrência de verdade:
+    clientes/pedidos são extraídas em threads simultâneas do Orquestrador,
+    disputando a 1ª população do cache de "vendas" — o resultado tem que
+    sair correto pras duas, sem corromper nem travar.
+    """
+    host, port, user, password = conexao
+    extrator = ExtratorMariaDB(
+        host=host,
+        port=port,
+        user=user,
+        password=password,
+        configuracao=configuracao,
+        max_conexoes=4,
+    )
+    orquestrador = OrquestradorParalelo(max_trabalhadores=4)
+
+    resultado = orquestrador.extrair(["vendas"], extrator)
+
+    assert isinstance(resultado, Sucesso)
+    tabelas = {tabela.nome_tabela: tabela for tabela in resultado.valor}
+    assert set(tabelas) == {"clientes", "pedidos"}
+    assert tabelas["clientes"].total_linhas == 3
+    assert tabelas["pedidos"].total_linhas == 3
 
 
 def test_tabela_inteira_le_a_tabela_toda_sem_rand(
