@@ -180,9 +180,11 @@ class TestFeliz:
         assert tabela.colunas[2].tipo_dado.categoria == CategoriaDeDado.BOOLEAN
         assert tabela.colunas[3].chave_estrangeira is True
         assert tabela.colunas[3].unica is False
-        assert tabela.colunas[3].referencia == ReferenciaDeColuna(
-            nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
-        )
+        assert tabela.colunas[3].referencias == [
+            ReferenciaDeColuna(
+                nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
+            )
+        ]
         assert tabela.metadados_amostra.estrategia == "percentual_de_linhas"
         assert tabela.metadados_amostra.tamanho_amostra == 2
         # 2 conexões: 1 pra popular o cache de metadados do escopo, 1 pra amostra.
@@ -534,10 +536,10 @@ class TestBorda:
             connect_timeout=3,
         )
 
-    def test_extrair_tabela_com_duas_fks_na_mesma_coluna_emite_aviso(
+    def test_extrair_tabela_com_duas_fks_na_mesma_coluna_mantem_as_duas(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
     ) -> None:
-        """Coluna com 2 FKs mantém só a última e emite Aviso não-fatal."""
+        """Coluna com 2 FKs distintas (polimórfica) mantém as duas, sem Aviso."""
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
@@ -574,12 +576,19 @@ class TestBorda:
         resultado = extrator.extrair_tabela("vendas", "movimentos")
 
         assert isinstance(resultado, Sucesso)
-        assert resultado.valor.colunas[0].referencia == ReferenciaDeColuna(
-            nome_escopo="vendas", nome_tabela="fornecedores", nome_coluna="id"
-        )
-        assert len(resultado.avisos) == 2
-        assert resultado.avisos[0].origem == "ExtratorMariaDB"
-        assert "mais de uma FK" in resultado.avisos[0].mensagem
+        assert resultado.valor.colunas[0].referencias == [
+            ReferenciaDeColuna(
+                nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
+            ),
+            ReferenciaDeColuna(
+                nome_escopo="vendas", nome_tabela="fornecedores", nome_coluna="id"
+            ),
+        ]
+        # Único Aviso remanescente é o de varredura completa da
+        # AmostragemProbabilistica (fixture `configuracao`) — nenhum Aviso
+        # de FK descartada, diferente do comportamento anterior à #105.
+        assert len(resultado.avisos) == 1
+        assert "varredura sequencial completa" in resultado.avisos[0].mensagem
 
     def test_listar_escopos_sem_databases_de_usuario_retorna_lista_vazia(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
@@ -821,11 +830,11 @@ class TestBorda:
     def test_fk_composta_monta_restricao_de_fk_composta(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
     ) -> None:
-        """FK(a, b) vira uma RestricaoDeFkComposta, sem afetar `.referencia`.
+        """FK(a, b) vira uma RestricaoDeFkComposta, sem afetar `.referencias`.
 
         Mesma tabela também tem uma FK single-column (constraint diferente) —
         prova que o agrupamento por constraint_name não mistura os dois casos,
-        e que `ColunaExtraida.referencia` continua populado por coluna mesmo
+        e que `ColunaExtraida.referencias` continua populado por coluna mesmo
         para as que fazem parte da constraint composta. Sem query nova — só
         reagrupamento sobre a mesma `_CHAVES_ESTRANGEIRAS_SQL` (issue #95).
         """
@@ -865,15 +874,21 @@ class TestBorda:
                 colunas_referenciadas=("pais_id", "id"),
             )
         ]
-        assert tabela.colunas[0].referencia == ReferenciaDeColuna(
-            nome_escopo="geografia", nome_tabela="estados", nome_coluna="pais_id"
-        )
-        assert tabela.colunas[1].referencia == ReferenciaDeColuna(
-            nome_escopo="geografia", nome_tabela="estados", nome_coluna="id"
-        )
-        assert tabela.colunas[2].referencia == ReferenciaDeColuna(
-            nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
-        )
+        assert tabela.colunas[0].referencias == [
+            ReferenciaDeColuna(
+                nome_escopo="geografia", nome_tabela="estados", nome_coluna="pais_id"
+            )
+        ]
+        assert tabela.colunas[1].referencias == [
+            ReferenciaDeColuna(
+                nome_escopo="geografia", nome_tabela="estados", nome_coluna="id"
+            )
+        ]
+        assert tabela.colunas[2].referencias == [
+            ReferenciaDeColuna(
+                nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
+            )
+        ]
 
     def test_check_clause_com_coluna_inexistente_nao_reclassifica(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao

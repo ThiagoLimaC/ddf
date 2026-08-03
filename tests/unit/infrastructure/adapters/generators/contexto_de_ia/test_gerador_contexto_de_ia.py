@@ -40,9 +40,11 @@ class TestFeliz:
         coluna_fk = construir_coluna(
             nome="cliente_id",
             chave_estrangeira=True,
-            referencia=ReferenciaDeColuna(
-                nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
-            ),
+            referencias=[
+                ReferenciaDeColuna(
+                    nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
+                ),
+            ],
         )
         pedidos = construir_tabela(
             colunas=[coluna_fk], nome_tabela="pedidos", nome_escopo="vendas"
@@ -94,11 +96,13 @@ class TestFeliz:
         assert chunk_pedidos["nome_tabela"] == "pedidos"
         assert chunk_pedidos["nome_escopo"] == "vendas"
         assert chunk_pedidos["colunas"][0]["nome"] == "cliente_id"
-        assert chunk_pedidos["colunas"][0]["referencia"] == {
-            "nome_escopo": "vendas",
-            "nome_tabela": "clientes",
-            "nome_coluna": "id",
-        }
+        assert chunk_pedidos["colunas"][0]["referencias"] == [
+            {
+                "nome_escopo": "vendas",
+                "nome_tabela": "clientes",
+                "nome_coluna": "id",
+            }
+        ]
 
     def test_index_registra_generated_at(
         self,
@@ -148,9 +152,11 @@ class TestFeliz:
         coluna_fk = construir_coluna(
             nome="cliente_id",
             chave_estrangeira=True,
-            referencia=ReferenciaDeColuna(
-                nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
-            ),
+            referencias=[
+                ReferenciaDeColuna(
+                    nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
+                ),
+            ],
         )
         pedidos = construir_tabela(
             colunas=[coluna_fk], nome_tabela="pedidos", nome_escopo="vendas"
@@ -550,9 +556,11 @@ class TestFeliz:
         coluna_fk = construir_coluna(
             nome="cliente_id",
             chave_estrangeira=True,
-            referencia=ReferenciaDeColuna(
-                nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
-            ),
+            referencias=[
+                ReferenciaDeColuna(
+                    nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
+                ),
+            ],
         )
         pedidos = construir_tabela(
             colunas=[coluna_fk], nome_tabela="pedidos", nome_escopo="vendas"
