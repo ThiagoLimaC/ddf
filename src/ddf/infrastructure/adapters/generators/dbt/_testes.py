@@ -178,6 +178,10 @@ def _sugestoes_de_teste(
         and len(coluna.referencias) > 1
         and coluna.nome not in colunas_em_fk_composta
     ):
+        tabelas = ", ".join(
+            f"{referencia.nome_escopo}.{referencia.nome_tabela}"
+            for referencia in coluna.referencias
+        )
         alvos = ", ".join(
             f"'{referencia.nome_escopo}.{referencia.nome_tabela}."
             f"{referencia.nome_coluna}'"
@@ -186,11 +190,14 @@ def _sugestoes_de_teste(
         avisos.append(
             Aviso(
                 mensagem=(
-                    f"Coluna '{coluna.nome}' tem {len(coluna.referencias)} FKs "
-                    f"distintas ({alvos}) — FK polimórfica sem discriminator não "
-                    "tem relação única a testar automaticamente, teste "
-                    "relationships omitido. Adicione um teste manual com `where` "
-                    "filtrando pelo discriminator se quiser validar cada relação."
+                    f"Coluna '{coluna.nome}' pode se referir a mais de uma tabela "
+                    f"({tabelas}) — o ddf não sabe qual delas testar "
+                    "automaticamente, então nenhum teste relationships foi gerado "
+                    f"para essa coluna. Detalhe técnico: {len(coluna.referencias)} "
+                    f"FKs distintas ({alvos}), FK polimórfica sem discriminator. "
+                    "Se quiser validar cada relação, adicione um teste manual com "
+                    "`where` filtrando por uma coluna que diga o tipo de cada "
+                    "linha (discriminator)."
                 ),
                 origem=_ORIGEM,
             )
