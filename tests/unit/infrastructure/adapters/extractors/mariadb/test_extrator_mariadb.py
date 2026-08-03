@@ -17,6 +17,8 @@ from ddf.infrastructure.adapters.extractors.mariadb.extrator_mariadb import (
     ExtratorMariaDB,
 )
 
+from .conftest import montar_metadados_side_effect
+
 
 class TestFeliz:
     """Caminho feliz."""
@@ -135,19 +137,21 @@ class TestFeliz:
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [
-                ("id", "int", "int(11)", None, None, None, "NO"),
-                ("nome", "varchar", "varchar(100)", 100, None, None, "YES"),
-                ("ativo", "tinyint", "tinyint(1)", None, None, None, "NO"),
-                ("cliente_id", "int", "int(11)", None, None, None, "NO"),
-            ],  # colunas
-            [("id",)],  # PK
-            [("cliente_id", "vendas", "clientes", "id", "fk_pedidos_cliente")],  # FK
-            [("nome", "nome")],  # UNIQUE (single-column)
-            [],  # JSON
+            *montar_metadados_side_effect(
+                tabela="pedidos",
+                colunas=[
+                    ("id", "int", "int(11)", None, None, None, "NO"),
+                    ("nome", "varchar", "varchar(100)", 100, None, None, "YES"),
+                    ("ativo", "tinyint", "tinyint(1)", None, None, None, "NO"),
+                    ("cliente_id", "int", "int(11)", None, None, None, "NO"),
+                ],
+                pks=["id"],
+                fks=[("cliente_id", "vendas", "clientes", "id", "fk_pedidos_cliente")],
+                unicas=[("nome", "nome")],
+                total_linhas=1000,
+            ),
             [(1, "ana", 1, 10), (2, "bia", 0, 20)],  # amostra
         ]
-        cursor_fake.fetchone.return_value = (1000,)
         cursor_fake.description = [("id",), ("nome",), ("ativo",), ("cliente_id",)]
         pool_classe_fake.return_value.connection.return_value = conexao_fake
 
@@ -181,7 +185,51 @@ class TestFeliz:
         )
         assert tabela.metadados_amostra.estrategia == "percentual_de_linhas"
         assert tabela.metadados_amostra.tamanho_amostra == 2
-        conexao_fake.close.assert_called_once()
+        # 2 conexões: 1 pra popular o cache de metadados do escopo, 1 pra amostra.
+        assert conexao_fake.close.call_count == 2
+
+    def test_segunda_extracao_no_mesmo_schema_reaproveita_cache_de_metadados(
+        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+    ) -> None:
+        """2ª extrair_tabela no mesmo escopo não repete queries de metadado.
+
+        Prova o ganho real da consolidação (issue #104): a 1ª chamada popula
+        o cache do escopo inteiro; a 2ª tabela só busca a própria amostra —
+        nada de colunas/PK/FK/UNIQUE/JSON/total_linhas é lido do banco de novo.
+        """
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            [
+                ("pedidos", "id", "int", "int(11)", None, None, None, "NO"),
+                ("clientes", "id", "int", "int(11)", None, None, None, "NO"),
+            ],  # colunas — as 2 tabelas do escopo, lidas de uma vez
+            [("pedidos", "id"), ("clientes", "id")],  # PK
+            [],  # FK
+            [],  # UNIQUE
+            [],  # JSON
+            [("pedidos", 10), ("clientes", 5)],  # total_linhas
+            [],  # amostra de "pedidos"
+            [],  # amostra de "clientes"
+        ]
+        cursor_fake.description = [("id",)]
+        pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+        extrator = ExtratorMariaDB(
+            host="fake", user="root", password="senha", configuracao=configuracao
+        )
+        primeira = extrator.extrair_tabela("vendas", "pedidos")
+        segunda = extrator.extrair_tabela("vendas", "clientes")
+
+        assert isinstance(primeira, Sucesso)
+        assert isinstance(segunda, Sucesso)
+        assert primeira.valor.total_linhas == 10
+        assert segunda.valor.total_linhas == 5
+        # 6 queries de metadado (rodadas 1x só) + 1 amostra por tabela = 8.
+        assert cursor_fake.fetchall.call_count == 8
+        # 1 conexão pro cache de metadado (só na 1ª chamada) + 1 amostra por
+        # tabela (2) = 3 — não 4, que seria o caso sem o cache reaproveitado.
+        assert conexao_fake.close.call_count == 3
 
     def test_coluna_json_e_reclassificada_via_check_clause(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
@@ -194,17 +242,17 @@ class TestFeliz:
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [
-                ("id", "int", "int(11)", None, None, None, "NO"),
-                ("dados", "longtext", "longtext", None, None, None, "YES"),
-            ],  # colunas
-            [("id",)],  # PK
-            [],  # FK
-            [],  # UNIQUE
-            [("json_valid(`dados`)",)],  # JSON
+            *montar_metadados_side_effect(
+                tabela="pedidos",
+                colunas=[
+                    ("id", "int", "int(11)", None, None, None, "NO"),
+                    ("dados", "longtext", "longtext", None, None, None, "YES"),
+                ],
+                pks=["id"],
+                check_clauses=["json_valid(`dados`)"],
+            ),
             [],  # amostra
         ]
-        cursor_fake.fetchone.return_value = (0,)
         cursor_fake.description = [("id",), ("dados",)]
         pool_classe_fake.return_value.connection.return_value = conexao_fake
 
@@ -224,16 +272,22 @@ class TestFeliz:
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [
-                ("ativo", "tinyint", "tinyint(1) unsigned", None, None, None, "YES"),
-            ],  # colunas
-            [],  # PK
-            [],  # FK
-            [],  # UNIQUE
-            [],  # JSON
+            *montar_metadados_side_effect(
+                tabela="flags",
+                colunas=[
+                    (
+                        "ativo",
+                        "tinyint",
+                        "tinyint(1) unsigned",
+                        None,
+                        None,
+                        None,
+                        "YES",
+                    ),
+                ],
+            ),
             [(1,), (0,), (1,)],  # amostra
         ]
-        cursor_fake.fetchone.return_value = (3,)
         cursor_fake.description = [("ativo",)]
         pool_classe_fake.return_value.connection.return_value = conexao_fake
 
@@ -244,6 +298,112 @@ class TestFeliz:
 
         assert isinstance(resultado, Sucesso)
         assert resultado.valor.colunas[0].tipo_dado.categoria == CategoriaDeDado.BOOLEAN
+
+    def test_unique_com_nome_identico_em_duas_tabelas_nao_colide(
+        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+    ) -> None:
+        """UNIQUE(email) de nomes idênticos em 2 tabelas não se misturam.
+
+        Regressão direcionada: nomes de constraint no MariaDB são escopados
+        por tabela, não pelo escopo inteiro (bug corrigido uma vez na issue
+        #44). A consolidação por escopo (#104) precisa continuar separando
+        por `(table_name, constraint_name)`, não só `constraint_name` —
+        `clientes.email` e `fornecedores.email` usam o mesmo nome de
+        constraint ("email"), mas são UNIQUEs independentes.
+        """
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            [
+                ("clientes", "email", "varchar", "varchar(255)", 255, None, None, "NO"),
+                (
+                    "fornecedores",
+                    "email",
+                    "varchar",
+                    "varchar(255)",
+                    255,
+                    None,
+                    None,
+                    "NO",
+                ),
+            ],  # colunas
+            [],  # PK
+            [],  # FK
+            [
+                ("clientes", "email", "email"),
+                ("fornecedores", "email", "email"),
+            ],  # UNIQUE — mesmo constraint_name ("email"), tabelas diferentes
+            [],  # JSON
+            [("clientes", 0), ("fornecedores", 0)],  # total_linhas
+            [],  # amostra de "clientes"
+            [],  # amostra de "fornecedores"
+        ]
+        cursor_fake.description = [("email",)]
+        pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+        extrator = ExtratorMariaDB(
+            host="fake", user="root", password="senha", configuracao=configuracao
+        )
+        clientes = extrator.extrair_tabela("vendas", "clientes")
+        fornecedores = extrator.extrair_tabela("vendas", "fornecedores")
+
+        assert isinstance(clientes, Sucesso)
+        assert isinstance(fornecedores, Sucesso)
+        assert clientes.valor.colunas[0].unica is True
+        assert fornecedores.valor.colunas[0].unica is True
+
+    def test_check_com_nome_identico_em_duas_tabelas_nao_colide(
+        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+    ) -> None:
+        """CHECK de nome idêntico em 2 tabelas não vaza classificação JSON.
+
+        Regressão direcionada, prova a correção de um bug pré-existente
+        (issue #104): `information_schema.check_constraints` não filtra por
+        tabela em `_COLUNAS_JSON_SQL` — a atribuição correta depende do
+        `table_name` nativo dessa view. "produtos.chk_json" (CHECK JSON de
+        verdade) e "pedidos.chk_json" (CHECK não relacionado a JSON, mesmo
+        nome de constraint) não podem se misturar.
+        """
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            [
+                (
+                    "produtos",
+                    "atributos",
+                    "longtext",
+                    "longtext",
+                    None,
+                    None,
+                    None,
+                    "YES",
+                ),
+                ("pedidos", "quantidade", "int", "int(11)", None, None, None, "NO"),
+            ],  # colunas
+            [],  # PK
+            [],  # FK
+            [],  # UNIQUE
+            [
+                ("produtos", "json_valid(`atributos`)"),
+                ("pedidos", "`quantidade` >= 0"),
+            ],  # JSON — mesmo constraint_name ("chk_json") em tabelas diferentes
+            [("produtos", 0), ("pedidos", 0)],  # total_linhas
+            [],  # amostra de "produtos"
+            [],  # amostra de "pedidos"
+        ]
+        cursor_fake.description = [("atributos",)]
+        pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+        extrator = ExtratorMariaDB(
+            host="fake", user="root", password="senha", configuracao=configuracao
+        )
+        produtos = extrator.extrair_tabela("vendas", "produtos")
+        pedidos = extrator.extrair_tabela("vendas", "pedidos")
+
+        assert isinstance(produtos, Sucesso)
+        assert isinstance(pedidos, Sucesso)
+        assert produtos.valor.colunas[0].tipo_dado.categoria == CategoriaDeDado.JSON
+        assert pedidos.valor.colunas[0].tipo_dado.categoria == CategoriaDeDado.INTEGER
 
 
 class TestErro:
@@ -381,23 +541,30 @@ class TestBorda:
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [("entidade_id", "int", "int(11)", None, None, None, "YES")],  # colunas
-            [],  # PK
-            [
-                ("entidade_id", "vendas", "clientes", "id", "fk_movimentos_clientes"),
-                (
-                    "entidade_id",
-                    "vendas",
-                    "fornecedores",
-                    "id",
-                    "fk_movimentos_fornecedores",
-                ),
-            ],  # FK duplicada na mesma coluna (2 constraints distintas)
-            [],  # UNIQUE
-            [],  # JSON
+            *montar_metadados_side_effect(
+                tabela="movimentos",
+                colunas=[
+                    ("entidade_id", "int", "int(11)", None, None, None, "YES"),
+                ],
+                fks=[
+                    (
+                        "entidade_id",
+                        "vendas",
+                        "clientes",
+                        "id",
+                        "fk_movimentos_clientes",
+                    ),
+                    (
+                        "entidade_id",
+                        "vendas",
+                        "fornecedores",
+                        "id",
+                        "fk_movimentos_fornecedores",
+                    ),
+                ],  # FK duplicada na mesma coluna (2 constraints distintas)
+            ),
             [],  # amostra
         ]
-        cursor_fake.fetchone.return_value = (0,)
         cursor_fake.description = [("entidade_id",)]
         pool_classe_fake.return_value.connection.return_value = conexao_fake
 
@@ -437,14 +604,14 @@ class TestBorda:
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [("id", "int", "int(11)", None, None, None, "NO")],  # colunas
-            [("id",)],  # PK
-            [],  # FK
-            [],  # UNIQUE
-            [],  # JSON
+            *montar_metadados_side_effect(
+                tabela="tabela_nova",
+                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                pks=["id"],
+                total_linhas=None,
+            ),
             [],  # amostra
         ]
-        cursor_fake.fetchone.return_value = (None,)
         cursor_fake.description = [("id",)]
         pool_classe_fake.return_value.connection.return_value = conexao_fake
 
@@ -468,14 +635,14 @@ class TestBorda:
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [("id", "int", "int(11)", None, None, None, "NO")],  # colunas
-            [("id",)],  # PK
-            [],  # FK
-            [],  # UNIQUE
-            [],  # JSON
+            *montar_metadados_side_effect(
+                tabela="tabela_recem_carregada",
+                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                pks=["id"],
+                total_linhas=1,  # desatualizado
+            ),
             [(1,), (2,)],  # amostra — 2 linhas
         ]
-        cursor_fake.fetchone.return_value = (1,)  # total_linhas desatualizado
         cursor_fake.description = [("id",)]
         pool_classe_fake.return_value.connection.return_value = conexao_fake
 
@@ -504,16 +671,14 @@ class TestBorda:
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [("id", "int", "int(11)", None, None, None, "NO")],  # colunas
-            [("id",)],  # PK
-            [],  # FK
-            [],  # UNIQUE
-            [],  # JSON
+            *montar_metadados_side_effect(
+                tabela="tabela",
+                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                pks=["id"],
+                total_linhas=3,  # de catálogo, desatualizado
+            ),
             [(1,), (2,), (3,), (4,), (5,)],  # amostra — 5 linhas, a tabela inteira
         ]
-        cursor_fake.fetchone.return_value = (
-            3,
-        )  # total_linhas de catálogo, desatualizado
         cursor_fake.description = [("id",)]
         pool_classe_fake.return_value.connection.return_value = conexao_fake
 
@@ -546,14 +711,14 @@ class TestBorda:
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [("id", "int", "int(11)", None, None, None, "NO")],  # colunas
-            [("id",)],  # PK
-            [],  # FK
-            [],  # UNIQUE
-            [],  # JSON
+            *montar_metadados_side_effect(
+                tabela="tabela",
+                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                pks=["id"],
+                total_linhas=100,
+            ),
             [(1,)],  # amostra
         ]
-        cursor_fake.fetchone.return_value = (100,)  # total_linhas
         cursor_fake.description = [("id",)]
         pool_classe_fake.return_value.connection.return_value = conexao_fake
 
@@ -573,14 +738,14 @@ class TestBorda:
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [("contador", "tinyint", "tinyint(1)", None, None, None, "YES")],  # colunas
-            [],  # PK
-            [],  # FK
-            [],  # UNIQUE
-            [],  # JSON
+            *montar_metadados_side_effect(
+                tabela="contadores",
+                colunas=[
+                    ("contador", "tinyint", "tinyint(1)", None, None, None, "YES"),
+                ],
+            ),
             [(0,), (1,), (2,)],  # amostra com valor atípico
         ]
-        cursor_fake.fetchone.return_value = (3,)
         cursor_fake.description = [("contador",)]
         pool_classe_fake.return_value.connection.return_value = conexao_fake
 
@@ -599,14 +764,14 @@ class TestBorda:
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [("ativo", "tinyint", "tinyint(1)", None, None, None, "YES")],  # colunas
-            [],  # PK
-            [],  # FK
-            [],  # UNIQUE
-            [],  # JSON
+            *montar_metadados_side_effect(
+                tabela="flags",
+                colunas=[
+                    ("ativo", "tinyint", "tinyint(1)", None, None, None, "YES"),
+                ],
+            ),
             [],  # amostra vazia
         ]
-        cursor_fake.fetchone.return_value = (0,)
         cursor_fake.description = [("ativo",)]
         pool_classe_fake.return_value.connection.return_value = conexao_fake
 
@@ -625,20 +790,19 @@ class TestBorda:
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [
-                ("codigo_pais", "varchar", "varchar(2)", 2, None, None, "NO"),
-                ("codigo_local", "varchar", "varchar(10)", 10, None, None, "NO"),
-            ],  # colunas
-            [],  # PK
-            [],  # FK
-            [
-                ("uk_pais_local", "codigo_pais"),
-                ("uk_pais_local", "codigo_local"),
-            ],  # UNIQUE composta — mesmo constraint_name, 2 colunas
-            [],  # JSON
+            *montar_metadados_side_effect(
+                tabela="enderecos",
+                colunas=[
+                    ("codigo_pais", "varchar", "varchar(2)", 2, None, None, "NO"),
+                    ("codigo_local", "varchar", "varchar(10)", 10, None, None, "NO"),
+                ],
+                unicas=[
+                    ("uk_pais_local", "codigo_pais"),
+                    ("uk_pais_local", "codigo_local"),
+                ],  # UNIQUE composta — mesmo constraint_name, 2 colunas
+            ),
             [],  # amostra
         ]
-        cursor_fake.fetchone.return_value = (0,)
         cursor_fake.description = [("codigo_pais",), ("codigo_local",)]
         pool_classe_fake.return_value.connection.return_value = conexao_fake
 
@@ -668,22 +832,21 @@ class TestBorda:
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [
-                ("pais_id", "int", "int(11)", None, None, None, "NO"),
-                ("estado_id", "int", "int(11)", None, None, None, "NO"),
-                ("cliente_id", "int", "int(11)", None, None, None, "NO"),
-            ],  # colunas
-            [],  # PK
-            [
-                ("pais_id", "geografia", "estados", "pais_id", "fk_estado"),
-                ("estado_id", "geografia", "estados", "id", "fk_estado"),
-                ("cliente_id", "vendas", "clientes", "id", "fk_cliente"),
-            ],  # FK — constraint composta (fk_estado) + single-column (fk_cliente)
-            [],  # UNIQUE
-            [],  # JSON
+            *montar_metadados_side_effect(
+                tabela="pedidos",
+                colunas=[
+                    ("pais_id", "int", "int(11)", None, None, None, "NO"),
+                    ("estado_id", "int", "int(11)", None, None, None, "NO"),
+                    ("cliente_id", "int", "int(11)", None, None, None, "NO"),
+                ],
+                fks=[
+                    ("pais_id", "geografia", "estados", "pais_id", "fk_estado"),
+                    ("estado_id", "geografia", "estados", "id", "fk_estado"),
+                    ("cliente_id", "vendas", "clientes", "id", "fk_cliente"),
+                ],  # FK — constraint composta (fk_estado) + single-column (fk_cliente)
+            ),
             [],  # amostra
         ]
-        cursor_fake.fetchone.return_value = (0,)
         cursor_fake.description = [("pais_id",), ("estado_id",), ("cliente_id",)]
         pool_classe_fake.return_value.connection.return_value = conexao_fake
 
@@ -712,29 +875,26 @@ class TestBorda:
             nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
         )
 
-    def test_check_clause_de_outra_tabela_nao_reclassifica_coluna(
+    def test_check_clause_com_coluna_inexistente_nao_reclassifica(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
     ) -> None:
-        """CHECK_CLAUSE cujo nome de coluna não existe nesta tabela é ignorado.
+        """CHECK_CLAUSE cujo nome de coluna não existe na tabela é ignorado.
 
-        Reproduz o fan-out do JOIN documentado em _COLUNAS_JSON_SQL — nomes de
-        constraint são escopados por tabela no MariaDB, e CHECK_CONSTRAINTS não
-        tem TABLE_NAME pra filtrar isso na query. Aqui a tabela consultada só
-        tem a coluna "nome" (VARCHAR); "outra_coluna" no CHECK_CLAUSE simula o
-        resultado de uma constraint de mesmo nome vinda de outra tabela do
-        schema — não deve reclassificar nada.
+        Defesa em profundidade de `_colunas_json_de_check_clauses`: mesmo com
+        o `table_name` nativo de `check_constraints` já resolvendo a
+        atribuição correta por tabela, um CHECK_CLAUSE que não segue o padrão
+        `json_valid(<coluna real>)` não deve reclassificar nada.
         """
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [("nome", "varchar", "varchar(50)", 50, None, None, "YES")],  # colunas
-            [],  # PK
-            [],  # FK
-            [],  # UNIQUE
-            [("json_valid(`outra_coluna`)",)],  # JSON — de outra tabela
+            *montar_metadados_side_effect(
+                tabela="pedidos",
+                colunas=[("nome", "varchar", "varchar(50)", 50, None, None, "YES")],
+                check_clauses=["json_valid(`coluna_inexistente`)"],
+            ),
             [],  # amostra
         ]
-        cursor_fake.fetchone.return_value = (0,)
         cursor_fake.description = [("nome",)]
         pool_classe_fake.return_value.connection.return_value = conexao_fake
 
@@ -761,6 +921,66 @@ class TestBorda:
         resultado = extrator.listar_tabelas("vendas")
 
         assert resultado == Sucesso([])
+
+    def test_metadados_de_schema_concorrentes_populam_cache_uma_unica_vez(
+        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+    ) -> None:
+        """2 chamadas concorrentes ao mesmo escopo populam o cache 1x.
+
+        Sem lock em `_obter_metadados_schema`, duas threads poderiam ver o
+        cache do escopo vazio ao mesmo tempo e rodar as 6 queries de metadado
+        duas vezes cada — o ganho da consolidação (issue #104) dependeria de
+        sorte de timing, não de garantia. Mesmo padrão do teste equivalente do
+        `ExtratorPostgres` (issue #66), aplicado ao pool `blocking=True` do
+        MariaDB.
+        """
+        primeira_thread_entrou = threading.Event()
+        pode_prosseguir = threading.Event()
+        respostas = iter(
+            [
+                [
+                    ("pedidos", "id", "int", "int(11)", None, None, None, "NO")
+                ],  # colunas
+                [("pedidos", "id")],  # PK
+                [],  # FK
+                [],  # UNIQUE
+                [],  # JSON
+                [("pedidos", 10)],  # total_linhas
+            ]
+        )
+
+        def fetchall_lento_na_primeira_chamada() -> list[tuple[object, ...]]:
+            if not primeira_thread_entrou.is_set():
+                primeira_thread_entrou.set()
+                pode_prosseguir.wait(timeout=1)
+            return next(respostas)
+
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = fetchall_lento_na_primeira_chamada
+        pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+        extrator = ExtratorMariaDB(
+            host="fake",
+            user="root",
+            password="senha",
+            configuracao=configuracao,
+            max_conexoes=10,
+        )
+
+        thread_lenta = threading.Thread(
+            target=lambda: extrator._obter_metadados_schema("vendas")
+        )
+        thread_lenta.start()
+        assert primeira_thread_entrou.wait(timeout=1) is True
+
+        resultado_concorrente = extrator._obter_metadados_schema("vendas")
+        pode_prosseguir.set()
+        thread_lenta.join(timeout=1)
+
+        assert cursor_fake.fetchall.call_count == 6
+        assert isinstance(resultado_concorrente, Sucesso)
+        assert extrator._cache_schemas["vendas"] is resultado_concorrente.valor
 
     def test_max_conexoes_um_faz_segunda_chamada_concorrente_esperar(
         self, monkeypatch: pytest.MonkeyPatch, configuracao: ConfiguracaoDeExtracao
