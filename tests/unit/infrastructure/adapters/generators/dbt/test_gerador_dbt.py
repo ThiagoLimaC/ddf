@@ -437,6 +437,70 @@ class TestFeliz:
         coluna_yaml = _coluna(modelo, "entidade_id")
         assert "tests" not in coluna_yaml
 
+    def test_fk_polimorfica_com_3_referencias_lista_todos_os_alvos_no_aviso(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Borda: 3+ referências (não só 2) continuam suprimindo o teste.
+
+        Prova que `len(referencias) > 1` generaliza de verdade — a
+        mensagem do Aviso permanece legível e cita as 3 tabelas alvo.
+        """
+        coluna_fk = construir_coluna(
+            nome="entidade_id",
+            chave_estrangeira=True,
+            referencias=[
+                ReferenciaDeColuna(
+                    nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
+                ),
+                ReferenciaDeColuna(
+                    nome_escopo="vendas", nome_tabela="fornecedores", nome_coluna="id"
+                ),
+                ReferenciaDeColuna(
+                    nome_escopo="vendas", nome_tabela="parceiros", nome_coluna="id"
+                ),
+            ],
+            metricas=[],
+        )
+        tabela = construir_tabela(
+            colunas=[coluna_fk], nome_tabela="movimentos", nome_escopo="vendas"
+        )
+        clientes = construir_tabela(
+            colunas=[construir_coluna(nome="id", chave_primaria=True)],
+            nome_tabela="clientes",
+            nome_escopo="vendas",
+        )
+        fornecedores = construir_tabela(
+            colunas=[construir_coluna(nome="id", chave_primaria=True)],
+            nome_tabela="fornecedores",
+            nome_escopo="vendas",
+        )
+        parceiros = construir_tabela(
+            colunas=[construir_coluna(nome="id", chave_primaria=True)],
+            nome_tabela="parceiros",
+            nome_escopo="vendas",
+        )
+        banco = construir_banco([tabela, clientes, fornecedores, parceiros])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        assert len(resultado.avisos) == 1
+        mensagem = resultado.avisos[0].mensagem
+        assert "entidade_id" in mensagem
+        assert "3 FKs distintas" in mensagem
+        assert "vendas.clientes" in mensagem
+        assert "vendas.fornecedores" in mensagem
+        assert "vendas.parceiros" in mensagem
+
+        schema = _schema_yml(tmp_path, "vendas")
+        modelo = _modelo(schema, "stg_vendas__movimentos")
+        coluna_yaml = _coluna(modelo, "entidade_id")
+        assert "tests" not in coluna_yaml
+
     def test_fk_composta_suprime_relationships_por_coluna_e_gera_teste_de_model(
         self,
         tmp_path: Path,
