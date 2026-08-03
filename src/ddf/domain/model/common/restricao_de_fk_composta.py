@@ -10,7 +10,7 @@ class RestricaoDeFkComposta(BaseModel):
     Compartilhada pelos três Bounded Contexts (Extraction, Curation,
     Analysis), mesmo padrão de RestricaoUnica. Uma FK de coluna única
     continua representada por ColunaExtraida/ColunaCurada/ColunaAnalisada
-    `.referencia: ReferenciaDeColuna | None` — RestricaoDeFkComposta só
+    `.referencias: list[ReferenciaDeColuna]` — RestricaoDeFkComposta só
     existe para o caso composto, que uma `ReferenciaDeColuna` por coluna
     não consegue expressar (não agrupa colunas de uma mesma constraint).
     """

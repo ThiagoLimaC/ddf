@@ -475,9 +475,11 @@ class TestFeliz:
         coluna_fk_unica = construir_coluna(
             nome="perfil_id",
             chave_estrangeira=True,
-            referencia=ReferenciaDeColuna(
-                nome_escopo="rh", nome_tabela="perfis", nome_coluna="id"
-            ),
+            referencias=[
+                ReferenciaDeColuna(
+                    nome_escopo="rh", nome_tabela="perfis", nome_coluna="id"
+                ),
+            ],
             unica=True,
             metricas=[metrica_coluna_completa],
         )
@@ -494,6 +496,42 @@ class TestFeliz:
         )
         assert "FK → rh.perfis.id" in linha_perfil
         assert "UNIQUE" in linha_perfil
+
+    def test_coluna_com_fk_polimorfica_mostra_um_marcador_por_referencia(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+        metrica_coluna_completa: MetricasBaseColuna,
+    ) -> None:
+        """Coluna com 2+ FKs distintas (#105) mostra um "FK → ..." por referência."""
+        coluna_fk_polimorfica = construir_coluna(
+            nome="entidade_id",
+            chave_estrangeira=True,
+            referencias=[
+                ReferenciaDeColuna(
+                    nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
+                ),
+                ReferenciaDeColuna(
+                    nome_escopo="vendas", nome_tabela="fornecedores", nome_coluna="id"
+                ),
+            ],
+            metricas=[metrica_coluna_completa],
+        )
+        tabela = construir_tabela(colunas=[coluna_fk_polimorfica])
+        banco = construir_banco([tabela])
+
+        resultado = GeradorMarkdown()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        conteudo = (tmp_path / "escopo" / "tabela.md").read_text()
+        secao_colunas = conteudo.split("## Colunas")[1].split("## Qualidade")[0]
+        linha_entidade = next(
+            linha for linha in secao_colunas.splitlines() if "entidade_id" in linha
+        )
+        assert "FK → vendas.clientes.id" in linha_entidade
+        assert "FK → vendas.fornecedores.id" in linha_entidade
 
     def test_minimo_e_maximo_suprimidos_para_categoria_json(
         self,
@@ -668,16 +706,22 @@ class TestFeliz:
         coluna_pais = construir_coluna(
             nome="pais_id",
             chave_estrangeira=True,
-            referencia=ReferenciaDeColuna(
-                nome_escopo="geografia", nome_tabela="estados", nome_coluna="pais_id"
-            ),
+            referencias=[
+                ReferenciaDeColuna(
+                    nome_escopo="geografia",
+                    nome_tabela="estados",
+                    nome_coluna="pais_id",
+                ),
+            ],
         )
         coluna_estado = construir_coluna(
             nome="estado_id",
             chave_estrangeira=True,
-            referencia=ReferenciaDeColuna(
-                nome_escopo="geografia", nome_tabela="estados", nome_coluna="id"
-            ),
+            referencias=[
+                ReferenciaDeColuna(
+                    nome_escopo="geografia", nome_tabela="estados", nome_coluna="id"
+                ),
+            ],
         )
         tabela = construir_tabela(
             colunas=[coluna_pais, coluna_estado],
@@ -714,9 +758,13 @@ class TestFeliz:
         coluna_pais = construir_coluna(
             nome="pais_id",
             chave_estrangeira=True,
-            referencia=ReferenciaDeColuna(
-                nome_escopo="geografia", nome_tabela="estados", nome_coluna="pais_id"
-            ),
+            referencias=[
+                ReferenciaDeColuna(
+                    nome_escopo="geografia",
+                    nome_tabela="estados",
+                    nome_coluna="pais_id",
+                ),
+            ],
         )
         coluna_fora = construir_coluna(nome="descricao")
         tabela = construir_tabela(

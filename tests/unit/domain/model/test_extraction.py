@@ -23,15 +23,39 @@ class TestFeliz:
             nome="cliente_id",
             tipo_dado=tipo_integer,
             chave_estrangeira=True,
-            referencia=ReferenciaDeColuna(
-                nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
-            ),
+            referencias=[
+                ReferenciaDeColuna(
+                    nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
+                )
+            ],
         )
 
         assert coluna.chave_estrangeira is True
-        assert coluna.referencia == ReferenciaDeColuna(
-            nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
+        assert coluna.referencias == [
+            ReferenciaDeColuna(
+                nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
+            )
+        ]
+
+    def test_cria_coluna_extraida_com_fk_polimorfica(
+        self, tipo_integer: TipoDeDado
+    ) -> None:
+        """ColunaExtraida guarda 2+ referências quando a FK é polimórfica."""
+        coluna = ColunaExtraida(
+            nome="entidade_id",
+            tipo_dado=tipo_integer,
+            chave_estrangeira=True,
+            referencias=[
+                ReferenciaDeColuna(
+                    nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
+                ),
+                ReferenciaDeColuna(
+                    nome_escopo="public", nome_tabela="fornecedores", nome_coluna="id"
+                ),
+            ],
         )
+
+        assert len(coluna.referencias) == 2
 
     def test_cria_tabela_extraida_com_amostra(
         self,
@@ -137,9 +161,11 @@ class TestErro:
             ColunaExtraida(
                 nome="cliente_id",
                 tipo_dado=tipo_integer,
-                referencia=ReferenciaDeColuna(
-                    nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
-                ),
+                referencias=[
+                    ReferenciaDeColuna(
+                        nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
+                    )
+                ],
             )
 
     def test_tabela_extraida_total_linhas_negativo_levanta_validation_error(
@@ -250,7 +276,7 @@ class TestBorda:
 
         assert coluna.chave_primaria is False
         assert coluna.chave_estrangeira is False
-        assert coluna.referencia is None
+        assert coluna.referencias == []
 
     def test_tabela_extraida_sem_restricoes_unicas_usa_lista_vazia(
         self,

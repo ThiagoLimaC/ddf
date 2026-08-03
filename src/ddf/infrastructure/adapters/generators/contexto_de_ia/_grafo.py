@@ -49,29 +49,29 @@ def _montar_grafo(tabelas: list[TabelaAnalisada]) -> dict[str, Any]:
     for tabela in tabelas:
         chave_origem = _chave_tabela(tabela.nome_escopo, tabela.nome_tabela)
         for coluna in tabela.colunas:
-            if not coluna.chave_estrangeira or coluna.referencia is None:
+            if not coluna.chave_estrangeira:
                 continue
-            referencia = coluna.referencia
-            grafo[chave_origem]["referencia"].append(
-                {
-                    "coluna": coluna.nome,
-                    "tabela_destino": _chave_tabela(
-                        referencia.nome_escopo, referencia.nome_tabela
-                    ),
-                    "coluna_destino": referencia.nome_coluna,
-                }
-            )
-            chave_destino = _chave_tabela(
-                referencia.nome_escopo, referencia.nome_tabela
-            )
-            if chave_destino in grafo:
-                grafo[chave_destino]["referenciado_por"].append(
+            for referencia in coluna.referencias:
+                grafo[chave_origem]["referencia"].append(
                     {
-                        "tabela_origem": chave_origem,
-                        "coluna_origem": coluna.nome,
-                        "coluna": referencia.nome_coluna,
+                        "coluna": coluna.nome,
+                        "tabela_destino": _chave_tabela(
+                            referencia.nome_escopo, referencia.nome_tabela
+                        ),
+                        "coluna_destino": referencia.nome_coluna,
                     }
                 )
+                chave_destino = _chave_tabela(
+                    referencia.nome_escopo, referencia.nome_tabela
+                )
+                if chave_destino in grafo:
+                    grafo[chave_destino]["referenciado_por"].append(
+                        {
+                            "tabela_origem": chave_origem,
+                            "coluna_origem": coluna.nome,
+                            "coluna": referencia.nome_coluna,
+                        }
+                    )
 
     return {
         "nota_de_escopo": _NOTA_DE_ESCOPO_DO_GRAFO,

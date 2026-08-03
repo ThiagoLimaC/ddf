@@ -99,9 +99,11 @@ class TestErro:
             ColunaCurada(
                 nome="cliente_id",
                 tipo_dado=tipo_integer,
-                referencia=ReferenciaDeColuna(
-                    nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
-                ),
+                referencias=[
+                    ReferenciaDeColuna(
+                        nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
+                    )
+                ],
             )
 
     def test_tabela_curada_total_linhas_negativo_levanta_validation_error(

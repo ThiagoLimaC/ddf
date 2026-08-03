@@ -23,9 +23,9 @@ def construir_restricoes_fk_compostas(
     """Agrupa linhas de FK de uma tabela por constraint, isolando as compostas.
 
     Espelha `construir_colunas_fk` (mesmo padrão de helper agnóstico de
-    fonte), mas em vez de resolver a referência por coluna, agrupa as
+    fonte), mas em vez de resolver as referências por coluna, agrupa as
     linhas que pertencem à mesma constraint — uma FK de coluna única
-    continua representada só por `ColunaExtraida.referencia`; este helper
+    continua representada só por `ColunaExtraida.referencias`; este helper
     só produz `RestricaoDeFkComposta` para grupos de 2+ colunas.
 
     Args:

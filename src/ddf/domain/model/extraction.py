@@ -18,7 +18,16 @@ class ColunaExtraida(BaseModel):
     tipo_dado: TipoDeDado
     chave_primaria: bool = False
     chave_estrangeira: bool = False
-    referencia: ReferenciaDeColuna | None = None
+    referencias: list[ReferenciaDeColuna] = Field(
+        default_factory=list,
+        description=(
+            "Uma entrada por constraint FK de coluna única que referencia "
+            "esta coluna — pode ter 2+ quando a coluna é FK polimórfica "
+            "(2+ constraints distintas apontando pra tabelas diferentes). "
+            "FK composta (2+ colunas locais numa mesma constraint) não "
+            "aparece aqui, ver TabelaExtraida.restricoes_fk_compostas."
+        ),
+    )
     nao_nulavel: bool = Field(
         default=False,
         description=(
@@ -37,11 +46,11 @@ class ColunaExtraida(BaseModel):
 
     @model_validator(mode="after")
     def _valida_referencia_de_chave_estrangeira(self) -> Self:
-        """Garante que chave_estrangeira e a referência de destino andam juntas."""
-        if self.chave_estrangeira and self.referencia is None:
-            raise ValueError("chave_estrangeira=True exige referencia preenchida.")
-        if not self.chave_estrangeira and self.referencia is not None:
-            raise ValueError("referencia só faz sentido com chave_estrangeira=True.")
+        """Garante que chave_estrangeira e as referências de destino andam juntas."""
+        if self.chave_estrangeira and not self.referencias:
+            raise ValueError("chave_estrangeira=True exige ao menos uma referência.")
+        if not self.chave_estrangeira and self.referencias:
+            raise ValueError("referencias só faz sentido com chave_estrangeira=True.")
         return self
 
 
@@ -68,7 +77,7 @@ class TabelaExtraida(BaseModel):
         description=(
             "FK composta (2+ colunas locais) real do schema, agrupada por "
             "constraint. FK de coluna única continua representada por "
-            "ColunaExtraida.referencia."
+            "ColunaExtraida.referencias."
         ),
     )
 

@@ -101,11 +101,9 @@ def _serializar_coluna(coluna: ColunaAnalisada) -> dict[str, Any]:
         "tipo_dado": coluna.tipo_dado.model_dump(mode="json", exclude_none=True),
         "chave_primaria": coluna.chave_primaria,
         "chave_estrangeira": coluna.chave_estrangeira,
-        "referencia": (
-            coluna.referencia.model_dump(mode="json")
-            if coluna.referencia is not None
-            else None
-        ),
+        "referencias": [
+            referencia.model_dump(mode="json") for referencia in coluna.referencias
+        ],
         "nao_nulavel": coluna.nao_nulavel,
         "unica": coluna.unica,
         "papel_de_negocio": coluna.papel_de_negocio,

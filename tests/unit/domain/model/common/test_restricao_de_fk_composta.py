@@ -39,7 +39,7 @@ class TestErro:
     """Erro esperado."""
 
     def test_uma_coluna_local_levanta_validation_error(self) -> None:
-        """1 coluna não é composta — cabe em `ColunaExtraida.referencia`."""
+        """1 coluna não é composta — cabe em `ColunaExtraida.referencias`."""
         with pytest.raises(ValidationError, match="mínimo 2 colunas locais"):
             RestricaoDeFkComposta(
                 colunas_locais=("id",),
