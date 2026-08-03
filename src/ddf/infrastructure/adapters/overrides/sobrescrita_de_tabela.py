@@ -48,9 +48,7 @@ def _calcular_hash_estrutural(tabela: TabelaExtraida) -> str:
         partes.append(str(coluna.nao_nulavel))
         partes.append(str(coluna.unica))
         partes.append(
-            coluna.referencia.model_dump_json()
-            if coluna.referencia is not None
-            else "None"
+            "|".join(referencia.model_dump_json() for referencia in coluna.referencias)
         )
     for restricao in tabela.restricoes_unicas:
         partes.append("restricao_unica:" + ",".join(restricao.colunas))
