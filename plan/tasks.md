@@ -484,6 +484,46 @@
   - Testes de integração novos contra Postgres 16 e MariaDB 11 reais
     (`testcontainers`) — fixture `geografia.pais`/`geografia.filial` (PK
     composta real), criada também no MariaDB (não existia)
+- [x] Issue #105 — modela múltiplas FK numa mesma coluna, hoje descartada
+  com Aviso. Evidência real: MariaDB gerenciado com 843 tabelas, 3
+  colunas em produção com 2+ constraints FK de coluna única distintas
+  apontando pra tabelas diferentes (FK polimórfica sem discriminator,
+  achado durante o teste pós-implementação da #104). Diferente de FK
+  composta (#95, 1 constraint com 2+ colunas) — aqui são 2+ constraints
+  distintas de coluna única na mesma coluna; os dois mecanismos convivem
+  sem conflito:
+  - `ColunaExtraida`/`ColunaCurada`/`ColunaAnalisada`: `referencia:
+    ReferenciaDeColuna | None` → `referencias: list[ReferenciaDeColuna]`
+    (substitui o campo singular, não duplica); validator estrutural
+    `_valida_referencia_de_chave_estrangeira` ajustado nos 3 modelos
+  - `construir_colunas_fk` (helper compartilhado pelos dois Extratores)
+    reescrito: agrupa por coluna sem descartar nada, retorna
+    `dict[str, list[ReferenciaDeColuna]]`, sem `Aviso`/parâmetro `origem`
+    (nada mais é perdido) — nenhuma query SQL nova, Postgres
+    (`pg_constraint`) e MariaDB (`key_column_usage`) já retornam uma
+    linha por constraint mesmo com 2+ constraints na mesma coluna
+  - `SobrescritaDeTabela._calcular_hash_estrutural` inclui todas as
+    referências da coluna, não só uma
+  - `GeradorDbt`: achado bloqueante do engenheiro-de-dados na banca de
+    revisão do plano — emitir um teste `relationships` por referência
+    seria falso positivo garantido pra FK polimórfica sem discriminator
+    (o teste assume "toda linha satisfaz a relação A", mas uma linha que
+    aponta pra B falha). Coluna com 2+ referências não recebe
+    `relationships` automático — emite `Aviso` explicando a ambiguidade
+    em vez de testar
+  - `GeradorMarkdown`/`GeradorContextoDeIA`: simetria completa "de
+    graça" (efeito do loop substituindo valor único) — marcador `"FK →
+    ..."` por referência no Markdown, `"referencias": [...]` sempre
+    presente (mesmo vazia) no JSON por coluna do contexto de IA
+  - Banca de revisão completa (Arquiteto de Software + Engenheiro de
+    Dados + PO) antes da implementação, exigência explícita da própria
+    issue por mudar contrato estrutural cross-context (mesmo critério de
+    #44/#89/#95) — achados incorporados ao plano antes do código,
+    registrados em `plan/registry-plan/issue-105-*.md`
+  - Testes de integração novos contra Postgres 16 e MariaDB 11 reais
+    (`testcontainers`) — fixture `polimorfismo.clientes`/
+    `polimorfismo.fornecedores`/`polimorfismo.movimentos`, replicando o
+    padrão real da issue
 
 ## 7. CLI real wizard (issue #16) — concluída
 

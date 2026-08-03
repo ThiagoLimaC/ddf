@@ -199,7 +199,7 @@ class ColunaExtraida(BaseModel):
     tipo_dado: TipoDeDado
     chave_primaria: bool = False
     chave_estrangeira: bool = False
-    referencia: ReferenciaDeColuna | None = None
+    referencias: list[ReferenciaDeColuna] = Field(default_factory=list)
     nao_nulavel: bool = False  # NOT NULL real do schema
     unica: bool = False        # UNIQUE single-column real do schema (PK excluída)
 ```
@@ -212,15 +212,30 @@ não muda). `unica=True` significa "unicidade single-column garantida pelo
 schema": uma constraint UNIQUE composta de 2+ colunas não marca nenhuma
 coluna individual como única — esse caso é deliberadamente não representado.
 
-**`referencia: ReferenciaDeColuna | None`** — Value Object compartilhado
-(`domain/model/common/referencia_de_coluna.py`) com `nome_escopo`,
-`nome_tabela`, `nome_coluna`. Substituiu `tabela_referenciada`/
+**`referencias: list[ReferenciaDeColuna]`** — uma entrada por constraint FK
+de coluna única que referencia esta coluna. `ReferenciaDeColuna` é um Value
+Object compartilhado (`domain/model/common/referencia_de_coluna.py`) com
+`nome_escopo`, `nome_tabela`, `nome_coluna`. Substituiu `tabela_referenciada`/
 `coluna_referenciada: str | None` soltos (issue #10, achado ao testar
 contra um schema real multi-escopo): sem o escopo de destino, uma FK que
 aponta pra uma tabela em **outro** escopo perdia essa informação — o modelo
 só guardava o nome da tabela, nunca em qual escopo ela estava, deixando a
 referência ambígua (ou errada) quando dois escopos tinham tabela com o
 mesmo nome.
+
+**Lista, não `Optional` único (issue #105):** uma coluna pode ter 2+
+constraints FK de coluna única distintas apontando pra tabelas diferentes —
+FK polimórfica sem discriminator, modelagem rara mas válida no motor.
+Evidência real: MariaDB gerenciado com 843 tabelas, 3 colunas em produção
+com esse padrão (achado durante o teste pós-implementação da #104). Antes
+da #105, `construir_colunas_fk` mantinha só a última referência lida e
+descartava as demais com `Aviso`; agora nenhuma é descartada — a lista
+guarda todas, na ordem em que a query de catálogo do Extrator concreto as
+retorna (ambas ordenam por `constraint_name`, garantindo ordem
+determinística entre execuções sem trabalho extra). Diferente de FK
+composta (`RestricaoDeFkComposta`, issue #95, ver abaixo): lá é **1**
+constraint com 2+ colunas; aqui são **2+** constraints distintas de coluna
+única na mesma coluna — os dois mecanismos convivem sem conflito.
 
 ### `TabelaExtraida`
 
@@ -263,7 +278,7 @@ Context abaixo), sem exigir mudança em nenhum dos dois pontos de tradução.
 **`restricoes_fk_compostas` (issue #95):** FK composta (2+ colunas locais
 apontando pra 2+ colunas de uma mesma tabela referenciada) real do
 schema — mesmo nível epistemológico de `restricoes_unicas`, por isso
-também campo direto de nível **tabela**. `ColunaExtraida.referencia`
+também campo direto de nível **tabela**. `ColunaExtraida.referencias`
 (per-coluna) **fica inalterado** e continua populado normalmente pra
 toda coluna FK, inclusive as que fazem parte de uma constraint
 composta — `RestricaoDeFkComposta` só existe para o agrupamento que uma
@@ -294,7 +309,7 @@ class ColunaCurada(BaseModel):
     tipo_dado: TipoDeDado
     chave_primaria: bool = False
     chave_estrangeira: bool = False
-    referencia: ReferenciaDeColuna | None = None
+    referencias: list[ReferenciaDeColuna] = Field(default_factory=list)
     nao_nulavel: bool = False  # NOT NULL real do schema (issue #44)
     unica: bool = False        # UNIQUE single-column real do schema (issue #44)
     papel_de_negocio: str | None = None     # adicionado neste contexto
@@ -397,7 +412,7 @@ class ColunaAnalisada(BaseModel):
     tipo_dado: TipoDeDado
     chave_primaria: bool
     chave_estrangeira: bool
-    referencia: ReferenciaDeColuna | None
+    referencias: list[ReferenciaDeColuna]
     nao_nulavel: bool  # NOT NULL real do schema (issue #44)
     unica: bool         # UNIQUE single-column real do schema (issue #44)
     papel_de_negocio: str | None
@@ -881,6 +896,21 @@ schemas de sistema do Postgres (`information_schema`, `pg_catalog`,
    depois que todas as tabelas do escopo foram extraídas; ver seção do
    `OrquestradorParalelo` abaixo), em vez de confiar na `RestricaoDeFkComposta`
    silenciosamente.
+
+   **`construir_colunas_fk` (issue #105, reabertura de escopo):** antes,
+   quando uma coluna tinha 2+ constraints FK de coluna única distintas
+   (grupo de 1 dentro de `construir_restricoes_fk_compostas`, mas
+   múltiplos grupos de 1 pra mesma coluna — FK polimórfica sem
+   discriminator), `construir_colunas_fk` mantinha só a última referência
+   lida e emitia `Aviso` pela perda das demais. Passa a agrupar por
+   coluna sem descartar nada: retorna `dict[str, list[ReferenciaDeColuna]]`
+   (antes `dict[str, ReferenciaDeColuna]`), sem `Aviso`/parâmetro `origem`
+   (nada mais é perdido, então não há mais o que avisar).
+   `ColunaExtraida.referencias`/`ColunaCurada.referencias`/
+   `ColunaAnalisada.referencias` acompanham a mudança (ver seções dos
+   3 Contexts acima). Evidência real: MariaDB gerenciado com 843 tabelas,
+   3 colunas em produção com esse padrão (achado durante o teste
+   pós-implementação da #104).
 2. Mapeia tipos Postgres → `TipoDeDado` (tabela abaixo).
 3. Lê `total_linhas` via `COALESCE(NULLIF(n_live_tup, 0), CASE WHEN relkind
    <> 'p' AND pg_relation_size(oid) = 0 THEN 0 ELSE NULLIF(reltuples, -1)
@@ -1119,14 +1149,17 @@ class SobrescritaDeTabela:
 1. Calcula hash SHA-256 sobre `(nome_escopo, nome_tabela, [(col.nome,
    col.tipo_dado.model_dump_json(), col.chave_primaria, col.chave_estrangeira,
    col.nao_nulavel, col.unica,
-   col.referencia.model_dump_json() if col.referencia else "None") for col
+   "|".join(r.model_dump_json() for r in col.referencias)) for col
    in colunas])` — `model_dump_json()` porque `TipoDeDado`/`ReferenciaDeColuna`
    são `BaseModel`, não primitivos hasheáveis diretamente; inclui o destino
-   completo da FK (escopo + tabela + coluna, issue #10 reabre o hash
-   original da #7/#8; mesma issue introduz `ReferenciaDeColuna` pra incluir
-   o escopo de destino, corrigindo perda de informação em FK cross-escopo)
-   pra detectar mudança de referência mesmo quando `chave_estrangeira`
-   continua `True`. `nao_nulavel`/`unica` entraram no hash na issue #44 —
+   completo de **todas** as FKs da coluna (escopo + tabela + coluna cada,
+   issue #10 reabre o hash original da #7/#8 introduzindo
+   `ReferenciaDeColuna` pra incluir o escopo de destino, corrigindo perda de
+   informação em FK cross-escopo; issue #105 generaliza de valor único pra
+   lista, sem isso uma 2ª/3ª FK adicionada ou removida na mesma coluna não
+   dispararia aviso de estrutura alterada) pra detectar mudança de
+   referência mesmo quando `chave_estrangeira` continua `True`.
+   `nao_nulavel`/`unica` entraram no hash na issue #44 —
    sem eles, uma coluna que virasse NOT NULL/UNIQUE no banco não disparava
    aviso de mudança estrutural nem regeneração do skeleton. `restricoes_unicas`
    (nível tabela) entra no hash na issue #89, uma parte
@@ -1379,12 +1412,18 @@ lexicográfica já corrigida pras demais categorias textuais/estruturadas).
 (determinismo entre reextrações). Na tabela de Colunas, marcador
 `"FK (composta)"` sinaliza participação, **sem substituir** o marcador
 `"FK → escopo.tabela.coluna"` individual — a coluna continua mostrando sua
-própria referência (`ColunaAnalisada.referencia` fica inalterado para FK
+própria referência (`ColunaAnalisada.referencias` fica inalterado para FK
 composta) mais o sinal de que ela participa de um grupo. Diferente de
 `"UNIQUE (composto)"`, **não** é suprimido quando a coluna é PK — uma
 coluna pode legitimamente ser PK e parte de uma FK composta ao mesmo tempo
 (ex.: tabela de junção), diferente de UNIQUE onde PK já implica
 unicidade.
+
+**FK polimórfica (issue #105):** coluna com 2+ referências em
+`ColunaAnalisada.referencias` mostra um marcador `"FK → escopo.tabela.
+coluna"` por referência (mesmo separador por vírgula já usado pelos
+demais marcadores) — puramente documentacional, sem risco de falso
+positivo (diferente do `GeradorDbt`, ver abaixo).
 
 ---
 
@@ -1442,10 +1481,25 @@ componentes.
 |---|---|
 | `percentual_unico == 100.0` **ou** `coluna.unica` | `unique` |
 | `percentual_nulo == 0.0` **ou** `coluna.nao_nulavel` | `not_null` |
-| `chave_estrangeira == True`, coluna **não** pertence a nenhuma FK composta **e** tabela referenciada presente no lote analisado | `relationships` → `ref()` do staging model referenciado |
-| `chave_estrangeira == True` **e** tabela referenciada ausente do lote | sem teste + `Aviso` |
+| `chave_estrangeira == True`, `len(referencias) == 1`, coluna **não** pertence a nenhuma FK composta **e** tabela referenciada presente no lote analisado | `relationships` → `ref()` do staging model referenciado |
+| `chave_estrangeira == True`, `len(referencias) == 1` **e** tabela referenciada ausente do lote | sem teste + `Aviso` |
+| `chave_estrangeira == True` **e** `len(referencias) >= 2` (FK polimórfica, issue #105) | sem teste + `Aviso` — ver nota abaixo |
 | coluna pertence a alguma `RestricaoDeFkComposta` da tabela | `relationships` per-coluna **suprimido** — ver `composite_relationships` model-level abaixo (issue #95) |
 | `_elegivel_para_enumeracao` aprova a coluna (ver critérios abaixo) | `accepted_values`, com `config: {severity: warn}` |
+
+**FK polimórfica não recebe `relationships` automático (issue #105,
+achado bloqueante da banca de revisão):** o teste `relationships` assume
+"toda linha satisfaz esta relação". Para uma coluna com 2+ referências
+(ex.: `entidade_id` que aponta ora pra `clientes` ora pra `fornecedores`,
+sem coluna discriminadora), qualquer linha que aponte pra B falha o teste
+escrito contra A — falso positivo garantido na maioria dos casos reais,
+não cobertura extra. Precedente de mercado (dbt/DataHub/OpenMetadata): FK
+ambígua é documentada, não testada automaticamente; um engenheiro com FK
+polimórfica real escreve `relationships` manual com `where` filtrando
+pelo discriminador. Por isso o `GeradorDbt` nunca escolhe uma referência
+arbitrária pra testar — omite o teste e emite `Aviso` citando as N
+referências. `GeradorMarkdown`/`GeradorContextoDeIA` continuam listando
+todas normalmente (documentação, sem risco de falso positivo).
 
 `unique`/`not_null` são suprimidos quando a coluna já é `chave_primaria`
 (PK implica os dois). Combinar o fato estrutural do schema
@@ -1621,7 +1675,7 @@ coluna referenciada, não que a combinação das colunas juntas forma uma
 linha válida na tabela referenciada (a integridade referencial real de uma
 FK composta). Modelar isso de verdade exigiria agrupar colunas de uma
 mesma constraint composta no Extraction Context (`ColunaAnalisada.
-referencia` é por coluna hoje, sem esse agrupamento) — mudança de escopo
+referencias` é por coluna hoje, sem esse agrupamento) — mudança de escopo
 maior que as demais sugestões da auditoria, tocando 3 Bounded Contexts.
 Decisão registrada: documentar a limitação, não modelar FK composta nesta
 issue.
@@ -1711,6 +1765,17 @@ carrega 4 campos, sem estrutura simples o bastante pra virar lista de
 listas sem perder informação (ao contrário de `RestricaoUnica`, que só
 carrega `colunas`). Grupos ordenados por `colunas_locais`, mesmo motivo
 de determinismo entre reextrações já aplicado a `restricoes_unicas`.
+
+**`referencias` por coluna (issue #105):** cada coluna no chunk carrega
+`"referencias": [...]`, lista de `ReferenciaDeColuna` serializadas
+(`nome_escopo`, `nome_tabela`, `nome_coluna`), sempre presente — mesmo
+vazia — por consistência com os demais campos de **coluna**
+(`chave_primaria`, `chave_estrangeira`, etc., que nunca são omitidos),
+diferente da convenção de omissão usada pelos campos de **tabela**
+(`restricoes_unicas`/`restricoes_fk_compostas` acima). Coluna com 2+
+entradas é FK polimórfica sem discriminator — só documentacional aqui,
+sem risco de falso positivo (diferente do `GeradorDbt`, que não gera
+teste `relationships` pra esse caso, ver seção acima).
 
 Fora de escopo (decisão registrada, não implícita): inferência de
 `papel_de_negocio`/`regras_de_negocio` a partir de estatísticas exigiria
