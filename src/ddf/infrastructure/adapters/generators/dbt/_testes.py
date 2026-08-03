@@ -95,8 +95,13 @@ def _sugestoes_de_teste(
 
     `unique`/`not_null` combinam o fato estrutural do schema com a métrica
     amostral, priorizando sempre o fato do schema; suprimidos se a coluna
-    já é PK. `relationships` só é sugerido se a tabela referenciada está no
-    lote analisado — senão emite `Aviso` e omite o teste; coluna em
+    já é PK. `relationships` só é sugerido se a coluna tem exatamente 1
+    referência **e** a tabela referenciada está no lote analisado — senão
+    emite `Aviso` e omite o teste. Coluna com 2+ referências (FK
+    polimórfica sem discriminator) nunca recebe `relationships`
+    automático — o teste assumiria "toda linha satisfaz a relação A",
+    falso positivo garantido quando a linha na verdade satisfaz a relação
+    B; emite `Aviso` explicando a ambiguidade em vez de testar. Coluna em
     `colunas_em_fk_composta` nunca recebe `relationships` per-coluna, esse
     teste vai para `_testes_de_modelo` (`composite_relationships`).
     `accepted_values` exige `_elegivel_para_enumeracao` (critérios em
@@ -170,10 +175,32 @@ def _sugestoes_de_teste(
 
     if (
         coluna.chave_estrangeira
-        and coluna.referencia is not None
+        and len(coluna.referencias) > 1
         and coluna.nome not in colunas_em_fk_composta
     ):
-        referencia = coluna.referencia
+        alvos = ", ".join(
+            f"'{referencia.nome_escopo}.{referencia.nome_tabela}."
+            f"{referencia.nome_coluna}'"
+            for referencia in coluna.referencias
+        )
+        avisos.append(
+            Aviso(
+                mensagem=(
+                    f"Coluna '{coluna.nome}' tem {len(coluna.referencias)} FKs "
+                    f"distintas ({alvos}) — FK polimórfica sem discriminator não "
+                    "tem relação única a testar automaticamente, teste "
+                    "relationships omitido. Adicione um teste manual com `where` "
+                    "filtrando pelo discriminator se quiser validar cada relação."
+                ),
+                origem=_ORIGEM,
+            )
+        )
+    elif (
+        coluna.chave_estrangeira
+        and len(coluna.referencias) == 1
+        and coluna.nome not in colunas_em_fk_composta
+    ):
+        referencia = coluna.referencias[0]
         if (referencia.nome_escopo, referencia.nome_tabela) in presentes:
             nome_model_referenciado = _nome_model(
                 referencia.nome_escopo, referencia.nome_tabela

@@ -104,13 +104,14 @@ def _marcadores_de_restricao(
         "Chaves estrangeiras compostas" em "Fatos extraídos".
         "FK (composta)" não substitui "FK → ..." — a coluna continua
         mostrando sua própria referência individual, mais o sinal de que
-        ela participa de um grupo.
+        ela participa de um grupo. Coluna com 2+ FKs distintas (FK
+        polimórfica sem discriminator) mostra um marcador "FK → ..." por
+        referência, na mesma ordem de `coluna.referencias`.
     """
     marcadores: list[str] = []
     if coluna.chave_primaria:
         marcadores.append("PK")
-    if coluna.chave_estrangeira and coluna.referencia is not None:
-        referencia = coluna.referencia
+    for referencia in coluna.referencias:
         marcadores.append(
             f"FK → {referencia.nome_escopo}.{referencia.nome_tabela}."
             f"{referencia.nome_coluna}"
