@@ -6,6 +6,9 @@ import pytest
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.ports.estrategia_de_amostragem import EstrategiaDeAmostragem
+from ddf.infrastructure.adapters.extractors.estrategias.amostragem_por_faixa import (
+    AmostragemPorFaixa,
+)
 from ddf.infrastructure.adapters.extractors.estrategias.percentual_de_linhas import (
     PercentualDeLinhas,
 )
@@ -15,6 +18,12 @@ from ddf.infrastructure.adapters.extractors.estrategias.percentual_de_linhas imp
 def configuracao() -> ConfiguracaoDeExtracao:
     """Retorna uma ConfiguracaoDeExtracao com PercentualDeLinhas(10%)."""
     return ConfiguracaoDeExtracao(estrategia=PercentualDeLinhas(percentual=10.0))
+
+
+@pytest.fixture
+def configuracao_por_faixa() -> ConfiguracaoDeExtracao:
+    """Retorna uma ConfiguracaoDeExtracao com AmostragemPorFaixa(10%)."""
+    return ConfiguracaoDeExtracao(estrategia=AmostragemPorFaixa(percentual=10.0))
 
 
 @pytest.fixture

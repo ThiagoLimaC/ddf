@@ -740,6 +740,122 @@ class TestBorda:
         assert resultado.valor.metadados_amostra.seed is not None
         assert isinstance(resultado.valor.metadados_amostra.seed, int)
 
+    def test_amostragem_por_faixa_com_pk_elegivel_usa_uniao_de_faixas(
+        self,
+        pool_classe_fake: MagicMock,
+        configuracao_por_faixa: ConfiguracaoDeExtracao,
+    ) -> None:
+        """PK bigint de coluna única: consulta vira UNIÃO de faixas por RAND(seed_k).
+
+        Aviso de viés cita o mecanismo real (faixas contíguas de chave
+        primária), distinto do texto do ExtratorPostgres (página física).
+        """
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            *montar_metadados_side_effect(
+                tabela="tabela",
+                colunas=[("id", "bigint", "bigint(20)", None, None, None, "NO")],
+                pks=["id"],
+                total_linhas=20,  # n_pedido pequeno (2), 3 linhas não é "gap denso"
+            ),
+            [(1,), (2,), (3,)],  # amostra
+        ]
+        cursor_fake.fetchone.return_value = (999,)
+        cursor_fake.description = [("id",)]
+        pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+        extrator = ExtratorMariaDB(
+            host="fake",
+            user="root",
+            password="senha",
+            configuracao=configuracao_por_faixa,
+        )
+        resultado = extrator.extrair_tabela("vendas", "tabela")
+
+        assert isinstance(resultado, Sucesso)
+        assert resultado.valor.metadados_amostra.estrategia == "amostragem_por_faixa"
+        assert len(resultado.avisos) == 1
+        assert "faixas contíguas de chave primária" in resultado.avisos[0].mensagem
+        consulta_amostra = cursor_fake.execute.call_args_list[-1].args[0]
+        assert consulta_amostra.count("UNION ALL") == 9  # 10 faixas, 9 uniões
+        assert "FLOOR(RAND(%s) * %s)" in consulta_amostra
+
+    def test_amostragem_por_faixa_sem_pk_cai_no_fallback_probabilistico(
+        self,
+        pool_classe_fake: MagicMock,
+        configuracao_por_faixa: ConfiguracaoDeExtracao,
+    ) -> None:
+        """Tabela sem PK: cai para WHERE RAND(seed) <= p, com Aviso de fallback.
+
+        O fallback reusa exatamente o mecanismo de PercentualDeLinhas — soma
+        os dois Avisos: o de fallback (explica o motivo) e o de varredura
+        sequencial completa (automático, mesmo caminho de AmostragemProbabilistica).
+        """
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            *montar_metadados_side_effect(
+                tabela="tabela_sem_pk",
+                colunas=[("valor", "int", "int(11)", None, None, None, "NO")],
+                total_linhas=1_000,
+            ),
+            [(1,), (2,)],  # amostra
+        ]
+        cursor_fake.description = [("valor",)]
+        pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+        extrator = ExtratorMariaDB(
+            host="fake",
+            user="root",
+            password="senha",
+            configuracao=configuracao_por_faixa,
+        )
+        resultado = extrator.extrair_tabela("vendas", "tabela_sem_pk")
+
+        assert isinstance(resultado, Sucesso)
+        assert len(resultado.avisos) == 2
+        assert "caiu para o mecanismo probabilístico padrão" in (
+            resultado.avisos[0].mensagem
+        )
+        assert "tabela sem chave primária" in resultado.avisos[0].mensagem
+        assert "varredura sequencial completa" in resultado.avisos[1].mensagem
+        consulta_amostra = cursor_fake.execute.call_args_list[-1].args[0]
+        assert "RAND(%s) <= %s" in consulta_amostra
+
+    def test_amostragem_por_faixa_com_poucos_resultados_avisa_gaps_densos(
+        self,
+        pool_classe_fake: MagicMock,
+        configuracao_por_faixa: ConfiguracaoDeExtracao,
+    ) -> None:
+        """Amostra bem menor que o n pedido soma um Aviso de gaps densos na PK."""
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            *montar_metadados_side_effect(
+                tabela="tabela",
+                colunas=[("id", "bigint", "bigint(20)", None, None, None, "NO")],
+                pks=["id"],
+                total_linhas=1_000,
+            ),
+            [(1,)],  # amostra — bem menos que os 100 linhas pedidas (10% de 1000)
+        ]
+        cursor_fake.fetchone.return_value = (999,)
+        cursor_fake.description = [("id",)]
+        pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+        extrator = ExtratorMariaDB(
+            host="fake",
+            user="root",
+            password="senha",
+            configuracao=configuracao_por_faixa,
+        )
+        resultado = extrator.extrair_tabela("vendas", "tabela")
+
+        assert isinstance(resultado, Sucesso)
+        assert len(resultado.avisos) == 2
+        assert "gaps densos" in resultado.avisos[0].mensagem
+
     def test_tinyint_um_com_valor_atipico_na_amostra_mantem_integer(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
     ) -> None:

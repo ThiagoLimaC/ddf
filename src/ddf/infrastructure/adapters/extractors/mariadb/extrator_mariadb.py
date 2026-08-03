@@ -15,6 +15,7 @@ from ddf.domain.model.common.requisicao_de_amostragem import (
     AmostragemIntegral,
     AmostragemProbabilistica,
     RequisicaoDeAmostragem,
+    RequisicaoPorFaixa,
 )
 from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
@@ -35,8 +36,11 @@ from ddf.infrastructure.adapters.extractors.mariadb._construcao import (
     _agrupar_colunas_unicas_por_tabela,
     _colunas_json_de_check_clauses,
     _construir_coluna,
+    _elegibilidade_de_pk_para_faixa,
     _LinhaColuna,
     _MetadadosDoSchema,
+    _PkElegivel,
+    _PkNaoElegivel,
     _promover_booleanos_pela_amostra,
     _quotar_identificador,
 )
@@ -50,6 +54,13 @@ from ddf.infrastructure.adapters.extractors.mariadb._queries import (
     _LISTAR_TABELAS_SQL,
     _TOTAL_LINHAS_SQL,
 )
+
+# Nº de faixas contíguas sorteadas independentemente em RequisicaoPorFaixa —
+# aproxima o comportamento de blocos espalhados do TABLESAMPLE SYSTEM do
+# Postgres sem exigir uma consulta por linha amostrada (inviável em lote).
+# Candidato inicial, calibrado pelo benchmark da issue #114 — não um valor
+# definitivo.
+_K_FAIXAS = 10
 
 
 class ExtratorMariaDB:
@@ -344,6 +355,7 @@ class ExtratorMariaDB:
                 identificador_tabela = (
                     f"{_quotar_identificador(escopo)}.{_quotar_identificador(tabela)}"
                 )
+                n_pedido_por_faixa: int | None = None
                 match requisicao:
                     case AmostragemProbabilistica(percentual=percentual, seed=seed):
                         seed_usado = seed_efetivo(seed)
@@ -357,6 +369,70 @@ class ExtratorMariaDB:
                     case AmostragemIntegral():
                         requisicao_efetiva = requisicao
                         cursor.execute(f"SELECT * FROM {identificador_tabela}")
+                    case RequisicaoPorFaixa(percentual=percentual, seed=seed):
+                        seed_usado = seed_efetivo(seed)
+                        elegibilidade = _elegibilidade_de_pk_para_faixa(
+                            colunas_pk, linhas_colunas
+                        )
+                        match elegibilidade:
+                            case _PkElegivel(nome_coluna=nome_pk):
+                                requisicao_efetiva = RequisicaoPorFaixa(
+                                    percentual=percentual, seed=seed_usado
+                                )
+                                identificador_pk = _quotar_identificador(nome_pk)
+                                cursor.execute(
+                                    f"SELECT MAX({identificador_pk}) "
+                                    f"FROM {identificador_tabela}"
+                                )
+                                linha_max = cursor.fetchone()
+                                max_pk = linha_max[0] if linha_max else None
+                                n_pedido_por_faixa = max(
+                                    1, round(total_linhas * percentual / 100)
+                                )
+                                linhas_por_faixa = max(
+                                    1, n_pedido_por_faixa // _K_FAIXAS
+                                )
+                                subconsultas: list[str] = []
+                                parametros: list[object] = []
+                                for indice_faixa in range(_K_FAIXAS):
+                                    seed_da_faixa = seed_usado + indice_faixa
+                                    subconsultas.append(
+                                        f"(SELECT * FROM {identificador_tabela} "
+                                        f"WHERE {identificador_pk} >= "
+                                        f"FLOOR(RAND(%s) * %s) "
+                                        f"ORDER BY {identificador_pk} LIMIT %s)"
+                                    )
+                                    parametros.extend(
+                                        [seed_da_faixa, max_pk, linhas_por_faixa]
+                                    )
+                                consulta_amostra = " UNION ALL ".join(subconsultas)
+                                cursor.execute(consulta_amostra, tuple(parametros))
+                            case _PkNaoElegivel(motivo=motivo):
+                                requisicao_efetiva = AmostragemProbabilistica(
+                                    percentual=percentual, seed=seed_usado
+                                )
+                                avisos.append(
+                                    Aviso(
+                                        mensagem=(
+                                            f"'{identificador_tabela}': amostragem "
+                                            "por faixa caiu para o mecanismo "
+                                            f"probabilístico padrão ({motivo}) — "
+                                            "sem chave primária de coluna única e "
+                                            "tipo inteiro, não há como cortar a "
+                                            "tabela em faixas contíguas."
+                                        ),
+                                        origem="ExtratorMariaDB",
+                                    )
+                                )
+                                consulta_amostra = (
+                                    f"SELECT * FROM {identificador_tabela} "
+                                    "WHERE RAND(%s) <= %s"
+                                )
+                                cursor.execute(
+                                    consulta_amostra, (seed_usado, percentual / 100)
+                                )
+                            case _ as nunca_elegibilidade:
+                                assert_never(nunca_elegibilidade)
                     case _ as nunca:
                         assert_never(nunca)
 
@@ -375,6 +451,23 @@ class ExtratorMariaDB:
                     else pl.DataFrame(schema=nomes_colunas)
                 )
 
+                if (
+                    n_pedido_por_faixa is not None
+                    and len(amostra) < 0.5 * n_pedido_por_faixa
+                ):
+                    avisos.append(
+                        Aviso(
+                            mensagem=(
+                                f"'{identificador_tabela}': amostra por faixa "
+                                f"trouxe {len(amostra)} linhas, bem menos que as "
+                                f"{n_pedido_por_faixa} pedidas — sintoma de gaps "
+                                "densos na chave primária logo após os pontos "
+                                "sorteados."
+                            ),
+                            origem="ExtratorMariaDB",
+                        )
+                    )
+
                 colunas = _promover_booleanos_pela_amostra(
                     colunas, amostra, candidatos_booleanos
                 )
@@ -382,7 +475,7 @@ class ExtratorMariaDB:
             match requisicao_efetiva:
                 case AmostragemIntegral():
                     total_linhas_final = len(amostra)
-                case AmostragemProbabilistica():
+                case AmostragemProbabilistica() | RequisicaoPorFaixa():
                     total_linhas_final = total_linhas
                 case _ as nunca:
                     assert_never(nunca)
@@ -395,6 +488,15 @@ class ExtratorMariaDB:
                 origem="ExtratorMariaDB",
                 causa_provavel="sem ANALYZE TABLE recente",
                 identificador_tabela=f"{escopo}.{tabela}",
+                descricao_vies_por_faixa=(
+                    f"amostragem por {_K_FAIXAS} faixas contíguas de chave "
+                    "primária, não por bloco físico de disco — pode "
+                    "distorcer percentual_nulo/percentual_unico/"
+                    "valores_frequentes em tabelas com padrão de inserção "
+                    "em lote. Uma amostra verdadeiramente aleatória por PK "
+                    "exigiria uma consulta por linha amostrada, custo "
+                    "inviável em lote."
+                ),
             )
             avisos.extend(avisos_amostra)
             return Sucesso(
