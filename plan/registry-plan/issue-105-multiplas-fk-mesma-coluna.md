@@ -189,10 +189,12 @@ qualidade de dados. Achados e decisões:
 - **Mensagem do `Aviso` do dbt densa para usuário não-técnico** (achado
   do engenheiro-de-dados e do PO, mesmo ponto independente): o texto
   original citava só termos técnicos (`where`/discriminator) sem
-  explicar em linguagem simples o que está acontecendo. **Aplicado:**
-  `_testes.py` agora abre com uma frase simples ("coluna X pode se
-  referir a mais de uma tabela... o ddf não sabe qual delas testar
-  automaticamente"), seguida do detalhe técnico como complemento.
+  explicar em linguagem simples o que está acontecendo. Primeira
+  correção adicionou uma frase simples + o detalhe técnico completo (2
+  listas redundantes: tabelas e colunas). **Revisado a pedido do
+  usuário** (excessivamente longo na prática, testado contra base real)
+  — mensagem final em frase única: conta + tabelas alvo (sem repetir a
+  coluna referenciada, já óbvia) + motivo + orientação de teste manual.
 - **Sem teste cobrindo 3+ referências** (achado do engenheiro-de-dados):
   o código generaliza corretamente (`len > 1`), mas nada provava a
   mensagem do `Aviso` com N > 2 alvos. **Aplicado:** teste novo em
