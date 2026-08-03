@@ -16,6 +16,7 @@ from ddf.domain.model.common.requisicao_de_amostragem import (
     AmostragemIntegral,
     AmostragemProbabilistica,
     RequisicaoDeAmostragem,
+    RequisicaoPorFaixa,
 )
 from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
@@ -324,6 +325,20 @@ class ExtratorPostgres:
                         consulta_amostra = sql.SQL("SELECT * FROM {}.{}").format(
                             sql.Identifier(schema), sql.Identifier(tabela)
                         )
+                    case RequisicaoPorFaixa(percentual=percentual, seed=seed):
+                        seed_usado = seed_efetivo(seed)
+                        requisicao_efetiva = RequisicaoPorFaixa(
+                            percentual=percentual, seed=seed_usado
+                        )
+                        consulta_amostra = sql.SQL(
+                            "SELECT * FROM {}.{} TABLESAMPLE SYSTEM ({}) "
+                            "REPEATABLE ({})"
+                        ).format(
+                            sql.Identifier(schema),
+                            sql.Identifier(tabela),
+                            sql.Literal(percentual),
+                            sql.Literal(seed_usado),
+                        )
                     case _ as nunca:
                         assert_never(nunca)
 
@@ -346,7 +361,7 @@ class ExtratorPostgres:
             match requisicao_efetiva:
                 case AmostragemIntegral():
                     total_linhas_final = len(amostra)
-                case AmostragemProbabilistica():
+                case AmostragemProbabilistica() | RequisicaoPorFaixa():
                     total_linhas_final = total_linhas
                 case _ as nunca:
                     assert_never(nunca)
@@ -359,6 +374,13 @@ class ExtratorPostgres:
                 origem="ExtratorPostgres",
                 causa_provavel="sem ANALYZE recente",
                 identificador_tabela=f"{schema}.{tabela}",
+                descricao_vies_por_faixa=(
+                    "amostragem por página física de disco (TABLESAMPLE "
+                    "SYSTEM), não por linha — pode distorcer percentual_nulo/"
+                    "percentual_unico/valores_frequentes em tabelas com "
+                    "padrão de inserção em lote (staging, eventos, colunas "
+                    "populadas via ALTER TABLE ... DEFAULT recente)."
+                ),
             )
             avisos.extend(avisos_amostra)
             return Sucesso(

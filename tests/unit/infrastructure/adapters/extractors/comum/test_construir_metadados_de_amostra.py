@@ -3,6 +3,7 @@
 from ddf.domain.model.common.requisicao_de_amostragem import (
     AmostragemIntegral,
     AmostragemProbabilistica,
+    RequisicaoPorFaixa,
 )
 from ddf.infrastructure.adapters.extractors.comum.construir_metadados_de_amostra import (  # noqa: E501
     construir_metadados_de_amostra,
@@ -50,6 +51,28 @@ class TestFeliz:
         assert metadados.percentual is None
         assert metadados.seed is None
         assert avisos == []
+
+    def test_requisicao_por_faixa_registra_percentual_e_seed_e_avisa_vies(
+        self,
+    ) -> None:
+        """percentual/seed ficam em MetadadosDeAmostra; Aviso é incondicional."""
+        metadados, avisos = construir_metadados_de_amostra(
+            nome="amostragem_por_faixa",
+            requisicao=RequisicaoPorFaixa(percentual=10.0, seed=42),
+            tamanho_amostra=1_000,
+            total_linhas=10_000,
+            origem="ExtratorFake",
+            causa_provavel="sem ANALYZE recente",
+            identificador_tabela="public.clientes",
+            descricao_vies_por_faixa="amostragem por página física de disco.",
+        )
+
+        assert metadados.estrategia == "amostragem_por_faixa"
+        assert metadados.percentual == 10.0
+        assert metadados.seed == 42
+        assert len(avisos) == 1
+        assert "página física de disco" in avisos[0].mensagem
+        assert "public.clientes" in avisos[0].mensagem
 
 
 class TestBorda:

@@ -767,6 +767,43 @@ class TestBorda:
         assert resultado.valor.metadados_amostra.seed is not None
         assert isinstance(resultado.valor.metadados_amostra.seed, int)
 
+    def test_amostragem_por_faixa_usa_tablesample_system_e_avisa_vies(
+        self,
+        pool_classe_fake: MagicMock,
+        configuracao_por_faixa: ConfiguracaoDeExtracao,
+    ) -> None:
+        """RequisicaoPorFaixa gera TABLESAMPLE SYSTEM e emite Aviso de viés.
+
+        Diferente de PercentualDeLinhas (BERNOULLI), o Aviso aqui não é sobre
+        varredura sequencial completa — é sobre viés de cluster, incondicional
+        toda vez que a estratégia é usada.
+        """
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            [("tabela", "id", "int4", None, None, None, "NO")],  # colunas
+            [("tabela", "id")],  # PK
+            [],  # FK
+            [],  # UNIQUE
+            [("tabela", 100.0)],  # total_linhas
+            [(1,)],  # amostra
+        ]
+        cursor_fake.description = [SimpleNamespace(name="id")]
+        pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+        extrator = ExtratorPostgres(
+            dsn="postgresql://fake", configuracao=configuracao_por_faixa
+        )
+        resultado = extrator.extrair_tabela("public", "tabela")
+
+        assert isinstance(resultado, Sucesso)
+        assert resultado.valor.metadados_amostra.estrategia == "amostragem_por_faixa"
+        assert resultado.valor.total_linhas == 100
+        assert len(resultado.avisos) == 1
+        assert "página física de disco" in resultado.avisos[0].mensagem
+        consulta_amostra = cursor_fake.execute.call_args_list[-1].args[0]
+        assert "TABLESAMPLE SYSTEM" in str(consulta_amostra)
+
     def test_max_conexoes_um_faz_segunda_chamada_concorrente_esperar(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
     ) -> None:
