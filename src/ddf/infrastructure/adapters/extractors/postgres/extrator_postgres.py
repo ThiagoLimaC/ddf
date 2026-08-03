@@ -20,6 +20,7 @@ from ddf.domain.model.common.requisicao_de_amostragem import (
 from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
+from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.extractors.comum.construir_colunas_fk import (
     construir_colunas_fk,
@@ -281,9 +282,8 @@ class ExtratorPostgres:
             linhas_fk_por_coluna.append(
                 (nome_coluna, escopo_ref, tabela_ref, coluna_ref)
             )
-        colunas_fk, avisos = construir_colunas_fk(
-            linhas_fk_por_coluna, origem="ExtratorPostgres"
-        )
+        colunas_fk = construir_colunas_fk(linhas_fk_por_coluna)
+        avisos: list[Aviso] = []
         colunas_unicas = metadados.unicas_por_tabela.get(tabela, set())
         restricoes_unicas = metadados.restricoes_unicas_por_tabela.get(tabela, [])
         restricoes_fk_compostas = metadados.restricoes_fk_compostas_por_tabela.get(

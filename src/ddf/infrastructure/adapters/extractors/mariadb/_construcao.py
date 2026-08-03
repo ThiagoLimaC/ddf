@@ -69,7 +69,7 @@ def _quotar_identificador(nome: str) -> str:
 def _construir_coluna(
     linha: _LinhaColuna,
     colunas_pk: set[str],
-    colunas_fk: dict[str, ReferenciaDeColuna],
+    colunas_fk: dict[str, list[ReferenciaDeColuna]],
     colunas_unicas: set[str],
     colunas_json: set[str],
 ) -> ColunaExtraida:
@@ -81,7 +81,7 @@ def _construir_coluna(
     coluna `LONGTEXT` é na real uma coluna `JSON` é via essa reclassificação
     baseada no `CHECK_CLAUSE`, não via `data_type`.
     """
-    referencia = colunas_fk.get(linha.nome)
+    referencias = colunas_fk.get(linha.nome, [])
     tipo_dado = (
         TipoDeDado(categoria=CategoriaDeDado.JSON)
         if linha.nome in colunas_json
@@ -97,8 +97,8 @@ def _construir_coluna(
         nome=linha.nome,
         tipo_dado=tipo_dado,
         chave_primaria=linha.nome in colunas_pk,
-        chave_estrangeira=referencia is not None,
-        referencia=referencia,
+        chave_estrangeira=bool(referencias),
+        referencias=referencias,
         nao_nulavel=linha.is_nullable == "NO",
         unica=linha.nome in colunas_unicas,
     )
