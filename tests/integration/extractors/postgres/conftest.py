@@ -229,6 +229,32 @@ _SETUP_SQL = """
     ANALYZE colisao_fk.alvo_b;
     ANALYZE colisao_fk.filho_a;
     ANALYZE colisao_fk.filho_b;
+
+    -- FK polimórfica (issue #105): coluna com 2 constraints FK distintas de
+    -- coluna única apontando pra tabelas diferentes — achado real contra um
+    -- MariaDB gerenciado com 843 tabelas (issue #104), replicado aqui contra
+    -- Postgres real pra provar que a mudança é agnóstica de fonte.
+    CREATE SCHEMA polimorfismo;
+
+    CREATE TABLE polimorfismo.clientes (id INTEGER PRIMARY KEY);
+    CREATE TABLE polimorfismo.fornecedores (id INTEGER PRIMARY KEY);
+
+    CREATE TABLE polimorfismo.movimentos (
+        id SERIAL PRIMARY KEY,
+        entidade_id INTEGER NOT NULL,
+        CONSTRAINT fk_movimentos_clientes
+            FOREIGN KEY (entidade_id) REFERENCES polimorfismo.clientes(id),
+        CONSTRAINT fk_movimentos_fornecedores
+            FOREIGN KEY (entidade_id) REFERENCES polimorfismo.fornecedores(id)
+    );
+
+    INSERT INTO polimorfismo.clientes (id) VALUES (1);
+    INSERT INTO polimorfismo.fornecedores (id) VALUES (1);
+    INSERT INTO polimorfismo.movimentos (entidade_id) VALUES (1);
+
+    ANALYZE polimorfismo.clientes;
+    ANALYZE polimorfismo.fornecedores;
+    ANALYZE polimorfismo.movimentos;
 """
 
 

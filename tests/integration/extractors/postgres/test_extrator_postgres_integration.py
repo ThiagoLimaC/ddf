@@ -66,9 +66,11 @@ def test_extrair_tabela_retorna_estrutura_completa(
 
     assert coluna_fk.chave_estrangeira is True
     assert coluna_fk.nao_nulavel is True
-    assert coluna_fk.referencia == ReferenciaDeColuna(
-        nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
-    )
+    assert coluna_fk.referencias == [
+        ReferenciaDeColuna(
+            nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
+        )
+    ]
 
     assert coluna_valor.tipo_dado.categoria == CategoriaDeDado.NUMERIC
     assert coluna_valor.tipo_dado.precisao == 10
@@ -126,6 +128,7 @@ def test_listar_escopos_retorna_escopos_semeados(
             "colisao_fk",
             "geografia",
             "pessoa",
+            "polimorfismo",
             "public",
             "reprodutibilidade",
             "restricoes",
@@ -169,9 +172,11 @@ def test_extrair_duas_tabelas_do_mesmo_schema_reaproveita_cache_de_metadados(
     coluna_fk = pedidos.colunas[1]
     assert coluna_fk.nome == "cliente_id"
     assert coluna_fk.chave_estrangeira is True
-    assert coluna_fk.referencia == ReferenciaDeColuna(
-        nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
-    )
+    assert coluna_fk.referencias == [
+        ReferenciaDeColuna(
+            nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
+        )
+    ]
 
 
 # Erro esperado
@@ -223,9 +228,11 @@ def test_extrair_tabela_com_fk_cross_schema_captura_escopo_de_destino(
     coluna_fk = resultado.valor.colunas[1]
     assert coluna_fk.nome == "pessoa_id"
     assert coluna_fk.chave_estrangeira is True
-    assert coluna_fk.referencia == ReferenciaDeColuna(
-        nome_escopo="pessoa", nome_tabela="pessoa", nome_coluna="id"
-    )
+    assert coluna_fk.referencias == [
+        ReferenciaDeColuna(
+            nome_escopo="pessoa", nome_tabela="pessoa", nome_coluna="id"
+        )
+    ]
 
 
 def test_listar_tabelas_schema_vazio_retorna_lista_vazia(
@@ -341,13 +348,17 @@ def test_extrair_tabela_com_fk_composta_pareia_colunas_corretamente(
     coluna_codigo = resultado.valor.colunas[1]
     coluna_estado = resultado.valor.colunas[2]
     assert coluna_codigo.nome == "pais_codigo"
-    assert coluna_codigo.referencia == ReferenciaDeColuna(
-        nome_escopo="geografia", nome_tabela="pais", nome_coluna="codigo"
-    )
+    assert coluna_codigo.referencias == [
+        ReferenciaDeColuna(
+            nome_escopo="geografia", nome_tabela="pais", nome_coluna="codigo"
+        )
+    ]
     assert coluna_estado.nome == "pais_estado"
-    assert coluna_estado.referencia == ReferenciaDeColuna(
-        nome_escopo="geografia", nome_tabela="pais", nome_coluna="estado"
-    )
+    assert coluna_estado.referencias == [
+        ReferenciaDeColuna(
+            nome_escopo="geografia", nome_tabela="pais", nome_coluna="estado"
+        )
+    ]
     # Não gera Aviso de FK composta espúrio — só o Aviso de custo, esperado
     # para qualquer extração via PercentualDeLinhas (ver
     # construir_metadados_de_amostra).
@@ -390,12 +401,49 @@ def test_extrair_tabela_com_fk_de_nome_colidente_resolve_alvo_correto(
     coluna_fk_a = next(c for c in resultado_a.valor.colunas if c.nome == "alvo_id")
     coluna_fk_b = next(c for c in resultado_b.valor.colunas if c.nome == "alvo_id")
 
-    assert coluna_fk_a.referencia == ReferenciaDeColuna(
-        nome_escopo="colisao_fk", nome_tabela="alvo_a", nome_coluna="id"
+    assert coluna_fk_a.referencias == [
+        ReferenciaDeColuna(
+            nome_escopo="colisao_fk", nome_tabela="alvo_a", nome_coluna="id"
+        )
+    ]
+    assert coluna_fk_b.referencias == [
+        ReferenciaDeColuna(
+            nome_escopo="colisao_fk", nome_tabela="alvo_b", nome_coluna="id"
+        )
+    ]
+
+
+def test_extrair_tabela_com_fk_polimorfica_mantem_as_duas_referencias(
+    dsn: str, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Coluna com 2 constraints FK distintas mantém as duas, sem Aviso (#105).
+
+    Contra Postgres real: `polimorfismo.movimentos.entidade_id` tem 2
+    constraints FK de coluna única, uma pra `clientes` e outra pra
+    `fornecedores` — replica o achado real da issue (MariaDB gerenciado,
+    843 tabelas) pra provar que a mudança é agnóstica de fonte.
+    """
+    extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+
+    resultado = extrator.extrair_tabela("polimorfismo", "movimentos")
+
+    assert isinstance(resultado, Sucesso)
+    coluna_entidade = next(
+        c for c in resultado.valor.colunas if c.nome == "entidade_id"
     )
-    assert coluna_fk_b.referencia == ReferenciaDeColuna(
-        nome_escopo="colisao_fk", nome_tabela="alvo_b", nome_coluna="id"
-    )
+    assert coluna_entidade.chave_estrangeira is True
+    assert coluna_entidade.referencias == [
+        ReferenciaDeColuna(
+            nome_escopo="polimorfismo", nome_tabela="clientes", nome_coluna="id"
+        ),
+        ReferenciaDeColuna(
+            nome_escopo="polimorfismo", nome_tabela="fornecedores", nome_coluna="id"
+        ),
+    ]
+    # Único Aviso é o de varredura completa da AmostragemProbabilistica
+    # (fixture `configuracao`) — nenhum Aviso de FK descartada.
+    assert len(resultado.avisos) == 1
+    assert "varredura sequencial completa" in resultado.avisos[0].mensagem
 
 
 def test_coluna_array_com_valores_vazios_e_nulos_nao_quebra_analisador(
@@ -450,9 +498,11 @@ def test_extracao_paralela_de_tabelas_do_mesmo_schema_via_orquestrador(
     assert tabelas["clientes"].total_linhas == 3
     assert tabelas["pedidos"].total_linhas == 3
     coluna_fk = tabelas["pedidos"].colunas[1]
-    assert coluna_fk.referencia == ReferenciaDeColuna(
-        nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
-    )
+    assert coluna_fk.referencias == [
+        ReferenciaDeColuna(
+            nome_escopo="public", nome_tabela="clientes", nome_coluna="id"
+        )
+    ]
 
 
 def test_total_linhas_apos_truncate_nao_usa_reltuples_desatualizado(

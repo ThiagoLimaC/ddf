@@ -56,11 +56,11 @@ class _MetadadosDoSchema(NamedTuple):
 def _construir_coluna(
     linha: _LinhaColuna,
     colunas_pk: set[str],
-    colunas_fk: dict[str, ReferenciaDeColuna],
+    colunas_fk: dict[str, list[ReferenciaDeColuna]],
     colunas_unicas: set[str],
 ) -> ColunaExtraida:
     """Combina uma linha de information_schema.columns com PK/FK/UNIQUE já lidas."""
-    referencia = colunas_fk.get(linha.nome)
+    referencias = colunas_fk.get(linha.nome, [])
     return ColunaExtraida(
         nome=linha.nome,
         tipo_dado=mapear_tipo_postgres(
@@ -70,8 +70,8 @@ def _construir_coluna(
             linha.escala,
         ),
         chave_primaria=linha.nome in colunas_pk,
-        chave_estrangeira=referencia is not None,
-        referencia=referencia,
+        chave_estrangeira=bool(referencias),
+        referencias=referencias,
         nao_nulavel=linha.is_nullable == "NO",
         unica=linha.nome in colunas_unicas,
     )

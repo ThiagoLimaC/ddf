@@ -174,6 +174,28 @@ _SETUP_STATEMENTS = [
         SELECT CONCAT('item_', seq) FROM reprodutibilidade.seq_1_to_500
     """,
     "ANALYZE TABLE reprodutibilidade.itens",
+    # FK polimórfica (issue #105): coluna com 2 constraints FK distintas de
+    # coluna única apontando pra tabelas diferentes — achado real contra
+    # este mesmo motor num MariaDB gerenciado com 843 tabelas (issue #104).
+    "CREATE DATABASE polimorfismo",
+    "CREATE TABLE polimorfismo.clientes (id INT PRIMARY KEY) ENGINE=InnoDB",
+    "CREATE TABLE polimorfismo.fornecedores (id INT PRIMARY KEY) ENGINE=InnoDB",
+    """
+    CREATE TABLE polimorfismo.movimentos (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        entidade_id INT NOT NULL,
+        CONSTRAINT fk_movimentos_clientes
+            FOREIGN KEY (entidade_id) REFERENCES polimorfismo.clientes(id),
+        CONSTRAINT fk_movimentos_fornecedores
+            FOREIGN KEY (entidade_id) REFERENCES polimorfismo.fornecedores(id)
+    ) ENGINE=InnoDB
+    """,
+    "INSERT INTO polimorfismo.clientes (id) VALUES (1)",
+    "INSERT INTO polimorfismo.fornecedores (id) VALUES (1)",
+    "INSERT INTO polimorfismo.movimentos (entidade_id) VALUES (1)",
+    "ANALYZE TABLE polimorfismo.clientes",
+    "ANALYZE TABLE polimorfismo.fornecedores",
+    "ANALYZE TABLE polimorfismo.movimentos",
 ]
 
 
