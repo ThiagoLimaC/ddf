@@ -60,9 +60,11 @@ def test_extrair_tabela_retorna_estrutura_completa(
 
     assert coluna_fk.chave_estrangeira is True
     assert coluna_fk.nao_nulavel is True
-    assert coluna_fk.referencia == ReferenciaDeColuna(
-        nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
-    )
+    assert coluna_fk.referencias == [
+        ReferenciaDeColuna(
+            nome_escopo="vendas", nome_tabela="clientes", nome_coluna="id"
+        )
+    ]
 
     assert coluna_valor.tipo_dado.categoria == CategoriaDeDado.NUMERIC
     assert coluna_valor.tipo_dado.precisao == 10
@@ -168,6 +170,7 @@ def test_listar_escopos_retorna_escopos_semeados(
         [
             "geografia",
             "pessoa",
+            "polimorfismo",
             "reprodutibilidade",
             "restricoes",
             "rh",
@@ -232,9 +235,11 @@ def test_extrair_tabela_com_fk_cross_database_captura_escopo_de_destino(
         coluna for coluna in resultado.valor.colunas if coluna.nome == "pessoa_id"
     )
     assert coluna_fk.chave_estrangeira is True
-    assert coluna_fk.referencia == ReferenciaDeColuna(
-        nome_escopo="pessoa", nome_tabela="pessoa", nome_coluna="id"
-    )
+    assert coluna_fk.referencias == [
+        ReferenciaDeColuna(
+            nome_escopo="pessoa", nome_tabela="pessoa", nome_coluna="id"
+        )
+    ]
 
 
 def test_extrair_tabela_com_fk_composta_pareia_colunas_corretamente(
@@ -256,12 +261,16 @@ def test_extrair_tabela_com_fk_composta_pareia_colunas_corretamente(
     assert isinstance(resultado, Sucesso)
     coluna_codigo = next(c for c in resultado.valor.colunas if c.nome == "pais_codigo")
     coluna_estado = next(c for c in resultado.valor.colunas if c.nome == "pais_estado")
-    assert coluna_codigo.referencia == ReferenciaDeColuna(
-        nome_escopo="geografia", nome_tabela="pais", nome_coluna="codigo"
-    )
-    assert coluna_estado.referencia == ReferenciaDeColuna(
-        nome_escopo="geografia", nome_tabela="pais", nome_coluna="estado"
-    )
+    assert coluna_codigo.referencias == [
+        ReferenciaDeColuna(
+            nome_escopo="geografia", nome_tabela="pais", nome_coluna="codigo"
+        )
+    ]
+    assert coluna_estado.referencias == [
+        ReferenciaDeColuna(
+            nome_escopo="geografia", nome_tabela="pais", nome_coluna="estado"
+        )
+    ]
     assert resultado.valor.restricoes_fk_compostas == [
         RestricaoDeFkComposta(
             colunas_locais=("pais_codigo", "pais_estado"),
@@ -270,6 +279,42 @@ def test_extrair_tabela_com_fk_composta_pareia_colunas_corretamente(
             colunas_referenciadas=("codigo", "estado"),
         )
     ]
+
+
+def test_extrair_tabela_com_fk_polimorfica_mantem_as_duas_referencias(
+    conexao: tuple[str, int, str, str], configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Coluna com 2 constraints FK distintas mantém as duas, sem Aviso (#105).
+
+    Contra MariaDB real: `polimorfismo.movimentos.entidade_id` tem 2
+    constraints FK de coluna única, uma pra `clientes` e outra pra
+    `fornecedores` — replica o achado real da issue (MariaDB gerenciado,
+    843 tabelas, issue #104) e prova que a mudança é agnóstica de fonte.
+    """
+    host, port, user, password = conexao
+    extrator = ExtratorMariaDB(
+        host=host, port=port, user=user, password=password, configuracao=configuracao
+    )
+
+    resultado = extrator.extrair_tabela("polimorfismo", "movimentos")
+
+    assert isinstance(resultado, Sucesso)
+    coluna_entidade = next(
+        c for c in resultado.valor.colunas if c.nome == "entidade_id"
+    )
+    assert coluna_entidade.chave_estrangeira is True
+    assert coluna_entidade.referencias == [
+        ReferenciaDeColuna(
+            nome_escopo="polimorfismo", nome_tabela="clientes", nome_coluna="id"
+        ),
+        ReferenciaDeColuna(
+            nome_escopo="polimorfismo", nome_tabela="fornecedores", nome_coluna="id"
+        ),
+    ]
+    # Único Aviso é o de varredura completa da AmostragemProbabilistica
+    # (fixture `configuracao`) — nenhum Aviso de FK descartada.
+    assert len(resultado.avisos) == 1
+    assert "varredura sequencial completa" in resultado.avisos[0].mensagem
 
 
 def test_extrair_tabela_com_constraint_de_mesmo_nome_em_outra_tabela_nao_confunde(
