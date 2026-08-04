@@ -1,5 +1,6 @@
 """Testes de ExtratorMariaDB."""
 
+import logging
 import threading
 from unittest.mock import MagicMock
 
@@ -13,7 +14,7 @@ from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado
 from ddf.domain.ports.extrator import Extrator
 from ddf.domain.shared.resultado import Falha, Sucesso
-from ddf.infrastructure.adapters.extractors.mariadb._queries import (
+from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
     LARGURA_MEDIA_PADRAO_BYTES,
 )
 from ddf.infrastructure.adapters.extractors.mariadb.extrator_mariadb import (
@@ -194,7 +195,10 @@ class TestFeliz:
         assert conexao_fake.close.call_count == 2
 
     def test_tabela_acima_do_limiar_de_linhas_usa_sscursor_em_lotes(
-        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+        self,
+        pool_classe_fake: MagicMock,
+        configuracao: ConfiguracaoDeExtracao,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """total_linhas > limiar ativa streaming: SSCursor lido via fetchmany."""
         conexao_fake = MagicMock()
@@ -214,13 +218,16 @@ class TestFeliz:
         extrator = ExtratorMariaDB(
             host="fake", user="root", password="senha", configuracao=configuracao
         )
-        resultado = extrator.extrair_tabela("vendas", "grande")
+        with caplog.at_level(logging.INFO):
+            resultado = extrator.extrair_tabela("vendas", "grande")
 
         assert isinstance(resultado, Sucesso)
         assert resultado.valor.metadados_amostra.tamanho_amostra == 2
         conexao_fake.cursor.assert_called_with(pymysql.cursors.SSCursor)
         # 6 queries de metadado (fetchall) + amostra via fetchmany, não fetchall.
         assert cursor_fake.fetchall.call_count == 6
+        assert "streaming ativado" in caplog.text
+        assert "vendas.grande" in caplog.text
 
     def test_segunda_extracao_no_mesmo_schema_reaproveita_cache_de_metadados(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
@@ -978,6 +985,10 @@ class TestBorda:
         resultado = extrator.extrair_tabela("vendas", "tabela_sem_pk")
 
         assert isinstance(resultado, Sucesso)
+        # Mecanismo real usado foi o probabilístico (fallback), não a faixa
+        # que o usuário pediu no wizard — o campo precisa refletir o que foi
+        # lido de fato, não a escolha original da Estrategia.
+        assert resultado.valor.metadados_amostra.estrategia == "percentual_de_linhas"
         assert len(resultado.avisos) == 2
         assert "caiu para o mecanismo probabilístico padrão" in (
             resultado.avisos[0].mensagem

@@ -644,7 +644,9 @@ def test_amostragem_por_faixa_sem_pk_cai_no_fallback_probabilistico(
     resultado = extrator.extrair_tabela("sem_pk", "tabela_sem_pk")
 
     assert isinstance(resultado, Sucesso)
-    assert resultado.valor.metadados_amostra.estrategia == "amostragem_por_faixa"
+    # Mecanismo real usado foi o probabilístico (fallback), não a faixa
+    # pedida no wizard — reflete o que foi lido de fato.
+    assert resultado.valor.metadados_amostra.estrategia == "percentual_de_linhas"
     mensagens = [aviso.mensagem for aviso in resultado.avisos]
     assert any("caiu para o mecanismo probabilístico padrão" in m for m in mensagens)
 

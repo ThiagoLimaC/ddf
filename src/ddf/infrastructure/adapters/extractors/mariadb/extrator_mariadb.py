@@ -1,5 +1,6 @@
 """Extrator concreto para bancos MariaDB."""
 
+import logging
 import random
 import threading
 from collections import defaultdict
@@ -7,7 +8,6 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any, assert_never
 
-import polars as pl
 import pymysql
 from dbutils.pooled_db import PooledDB
 
@@ -32,9 +32,11 @@ from ddf.infrastructure.adapters.extractors.comum.construir_restricoes_fk_compos
     construir_restricoes_fk_compostas,
 )
 from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
+    LARGURA_MEDIA_PADRAO_BYTES,
     calcular_tamanho_lote,
     deve_usar_streaming,
     ler_amostra_em_lotes,
+    ler_amostra_fetchall,
 )
 from ddf.infrastructure.adapters.extractors.comum.seed_efetivo import seed_efetivo
 from ddf.infrastructure.adapters.extractors.mariadb._construcao import (
@@ -59,7 +61,6 @@ from ddf.infrastructure.adapters.extractors.mariadb._queries import (
     _LISTAR_ESCOPOS_SQL,
     _LISTAR_TABELAS_SQL,
     _TOTAL_LINHAS_SQL,
-    LARGURA_MEDIA_PADRAO_BYTES,
 )
 
 # Nº de faixas contíguas sorteadas independentemente em RequisicaoPorFaixa —
@@ -68,6 +69,8 @@ from ddf.infrastructure.adapters.extractors.mariadb._queries import (
 # Candidato inicial, calibrado pelo benchmark da issue #114 — não um valor
 # definitivo.
 _K_FAIXAS = 10
+
+_logger = logging.getLogger(__name__)
 
 
 class ExtratorMariaDB:
@@ -365,6 +368,15 @@ class ExtratorMariaDB:
             tabela, LARGURA_MEDIA_PADRAO_BYTES
         )
         usa_streaming = deve_usar_streaming(total_linhas, largura_media_bytes)
+        if usa_streaming:
+            _logger.info(
+                "'%s.%s': streaming ativado (~%d linhas, ~%d bytes/linha) — "
+                "SSCursor lê em lotes em vez de fetchall().",
+                escopo,
+                tabela,
+                total_linhas,
+                largura_media_bytes,
+            )
         with self._conexao() as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
@@ -478,20 +490,7 @@ class ExtratorMariaDB:
                     tamanho_lote = calcular_tamanho_lote(largura_media_bytes)
                     amostra = ler_amostra_em_lotes(cursor, tamanho_lote)
                 else:
-                    nomes_colunas: list[str] = []
-                    for coluna_amostra in cursor.description or ():
-                        nomes_colunas.append(coluna_amostra[0])
-                    linhas_amostra = cursor.fetchall()
-                    amostra = (
-                        pl.DataFrame(
-                            linhas_amostra,
-                            schema=nomes_colunas,
-                            orient="row",
-                            infer_schema_length=None,
-                        )
-                        if linhas_amostra
-                        else pl.DataFrame(schema=nomes_colunas)
-                    )
+                    amostra = ler_amostra_fetchall(cursor)
 
                 if (
                     n_pedido_por_faixa is not None
@@ -517,13 +516,23 @@ class ExtratorMariaDB:
             match requisicao_efetiva:
                 case AmostragemIntegral():
                     total_linhas_final = len(amostra)
-                case AmostragemProbabilistica() | RequisicaoPorFaixa():
+                    nome_efetivo = "tabela_inteira"
+                case AmostragemProbabilistica():
                     total_linhas_final = total_linhas
+                    nome_efetivo = "percentual_de_linhas"
+                case RequisicaoPorFaixa():
+                    total_linhas_final = total_linhas
+                    nome_efetivo = "amostragem_por_faixa"
                 case _ as nunca:
                     assert_never(nunca)
 
             metadados_amostra, avisos_amostra = construir_metadados_de_amostra(
-                nome=estrategia.nome,
+                # nome_efetivo, não estrategia.nome: no fallback de PK não
+                # elegível, requisicao_efetiva vira AmostragemProbabilistica
+                # mesmo com estrategia="amostragem_por_faixa" escolhida no
+                # wizard — o mecanismo real de leitura é o que importa aqui,
+                # não a escolha original do usuário.
+                nome=nome_efetivo,
                 requisicao=requisicao_efetiva,
                 tamanho_amostra=len(amostra),
                 total_linhas=total_linhas_final,

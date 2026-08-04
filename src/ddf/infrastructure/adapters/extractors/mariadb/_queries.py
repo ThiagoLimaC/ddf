@@ -90,11 +90,3 @@ _COLUNAS_JSON_SQL = """
     FROM information_schema.check_constraints
     WHERE constraint_schema = %s
 """
-
-LARGURA_MEDIA_PADRAO_BYTES = 200
-"""Fallback conservador (bytes/linha) para `avg_row_length` NULL/0.
-
-Tabela nunca analisada não tem essa estatística populada — ausência não
-impede o cálculo de tamanho de lote do streaming, só faz a estimativa cair
-nesse valor conservador.
-"""
