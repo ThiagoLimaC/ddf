@@ -443,6 +443,48 @@ class TestFeliz:
 class TestErro:
     """Erro esperado."""
 
+    def test_excecao_durante_streaming_fecha_cursor_e_conexao_antes_de_propagar(
+        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+    ) -> None:
+        """Erro no meio do fetchmany fecha o SSCursor antes de propagar.
+
+        Sem isso, um SSCursor não drenado ficaria pra ser fechado só pelo
+        GC (via `__del__`), gerando o AttributeError silenciosamente
+        engolido apontado pelo engenheiro de dados.
+        """
+        conexao_fake = MagicMock()
+        cursor_context = conexao_fake.cursor.return_value
+        cursor_context.__exit__.return_value = False  # não suprime a exceção
+        cursor_fake = cursor_context.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            *montar_metadados_side_effect(
+                tabela="grande",
+                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                pks=["id"],
+                total_linhas=200_000,  # acima do limiar
+            ),
+        ]
+        cursor_fake.description = [("id",)]
+        cursor_fake.fetchmany.side_effect = pymysql.err.OperationalError(
+            "conexão perdida"
+        )
+        pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+        extrator = ExtratorMariaDB(
+            host="fake", user="root", password="senha", configuracao=configuracao
+        )
+
+        with pytest.raises(pymysql.err.OperationalError):
+            extrator.extrair_tabela("vendas", "grande")
+
+        # 1ª chamada (metadados) sai normal; 2ª (amostra streaming) carrega
+        # a exceção — prova que o __exit__ do SSCursor rodou antes dela
+        # propagar, não só o da 1ª conexão (metadados).
+        ultima_saida = cursor_context.__exit__.call_args_list[-1]
+        assert ultima_saida.args[0] is pymysql.err.OperationalError
+        # 2 conexões (metadados + amostra) — a 2ª fecha mesmo com exceção.
+        assert conexao_fake.close.call_count == 2
+
     def test_max_conexoes_zero_levanta_value_error(
         self,
         configuracao: ConfiguracaoDeExtracao,
