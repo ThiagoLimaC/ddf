@@ -242,7 +242,7 @@ class TestFeliz:
             [("grande", 200_000.0)],  # total_linhas — acima de 100_000
             [("grande", 200)],  # largura_media
         ]
-        cursor_fake.description = [SimpleNamespace(name="id")]
+        cursor_fake.description = [("id",)]
         cursor_fake.fetchmany.side_effect = [[(1,), (2,)], []]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 

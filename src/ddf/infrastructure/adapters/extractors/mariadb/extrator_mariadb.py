@@ -465,13 +465,13 @@ class ExtratorMariaDB:
                     case _ as nunca:
                         assert_never(nunca)
 
-                nomes_colunas: list[str] = []
-                for coluna_amostra in cursor.description or ():
-                    nomes_colunas.append(coluna_amostra[0])
                 if usa_streaming:
                     tamanho_lote = calcular_tamanho_lote(largura_media_bytes)
-                    amostra = ler_amostra_em_lotes(cursor, nomes_colunas, tamanho_lote)
+                    amostra = ler_amostra_em_lotes(cursor, tamanho_lote)
                 else:
+                    nomes_colunas: list[str] = []
+                    for coluna_amostra in cursor.description or ():
+                        nomes_colunas.append(coluna_amostra[0])
                     linhas_amostra = cursor.fetchall()
                     amostra = (
                         pl.DataFrame(

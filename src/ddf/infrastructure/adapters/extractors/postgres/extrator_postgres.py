@@ -386,8 +386,7 @@ class ExtratorPostgres:
                 with conexao.cursor(name=f"amostra_{schema}_{tabela}") as cursor:
                     cursor.itersize = tamanho_lote
                     cursor.execute(consulta_amostra)
-                    nomes_colunas = _nomes_colunas(cursor)
-                    amostra = ler_amostra_em_lotes(cursor, nomes_colunas, tamanho_lote)
+                    amostra = ler_amostra_em_lotes(cursor, tamanho_lote)
                 conexao.commit()
             else:
                 with conexao.cursor() as cursor:

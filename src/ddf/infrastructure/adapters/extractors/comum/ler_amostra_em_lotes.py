@@ -1,5 +1,6 @@
 """Lê um cursor de streaming em lotes, sem materializar o resultset inteiro."""
 
+from collections.abc import Sequence
 from typing import Protocol
 
 import polars as pl
@@ -64,27 +65,44 @@ def calcular_tamanho_lote(
     return max(minimo, min(maximo, linhas_por_lote))
 
 
+class _ColunaDescricao(Protocol):
+    """1º item é o nome da coluna — psycopg2.Column e a tupla do pymysql cabem aqui."""
+
+    def __getitem__(self, indice: int) -> object: ...
+
+
 class _CursorComFetchmany(Protocol):
     """Cursor nomeado (Postgres) e SSCursor (MariaDB) satisfazem sem tipo comum."""
+
+    @property
+    def description(self) -> Sequence[_ColunaDescricao] | None: ...
 
     def fetchmany(self, size: int) -> list[tuple[object, ...]]: ...
 
 
 def ler_amostra_em_lotes(
     cursor: _CursorComFetchmany,
-    nomes_colunas: list[str],
     tamanho_lote: int,
 ) -> pl.DataFrame:
     """Lê um cursor já posicionado (query executada) em lotes de `fetchmany`.
 
+    Nomes de coluna vêm de `cursor.description`, lido depois de cada
+    `fetchmany` — não antes, como parâmetro. Cursor nomeado do psycopg2
+    só popula `description` depois do 1º fetch (documentado no driver);
+    ler antes disso devolve nomes vazios silenciosamente, sem erro —
+    achado só contra Postgres real (testcontainers), não reproduzível com
+    cursor mockado.
+
     Args:
         cursor: cursor já com a query de amostra executada.
-        nomes_colunas: nomes das colunas retornadas, na ordem do SELECT.
         tamanho_lote: nº de linhas lidas por chamada de `fetchmany`
             (tipicamente o resultado de `calcular_tamanho_lote`).
     """
     lotes: list[pl.DataFrame] = []
+    nomes_colunas: list[str] = []
     while lote := cursor.fetchmany(tamanho_lote):
+        if not nomes_colunas:
+            nomes_colunas = [str(coluna[0]) for coluna in cursor.description or ()]
         lotes.append(
             pl.DataFrame(
                 lote,
@@ -94,5 +112,6 @@ def ler_amostra_em_lotes(
             )
         )
     if not lotes:
+        nomes_colunas = [str(coluna[0]) for coluna in cursor.description or ()]
         return pl.DataFrame(schema=nomes_colunas)
     return pl.concat(lotes)
