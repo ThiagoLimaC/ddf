@@ -228,6 +228,35 @@ class TestFeliz:
         # tabela (2) = 3 — não 4, que seria o caso sem o cache reaproveitado.
         assert pool_classe_fake.return_value.putconn.call_count == 3
 
+    def test_tabela_acima_do_limiar_de_linhas_usa_cursor_nomeado_em_lotes(
+        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+    ) -> None:
+        """total_linhas > limiar ativa streaming: cursor nomeado, itersize, commit."""
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            [("grande", "id", "int4", None, None, None, "NO")],  # colunas
+            [("grande", "id")],  # PK
+            [],  # FK
+            [],  # UNIQUE
+            [("grande", 200_000.0)],  # total_linhas — acima de 100_000
+            [("grande", 200)],  # largura_media
+        ]
+        cursor_fake.description = [SimpleNamespace(name="id")]
+        cursor_fake.fetchmany.side_effect = [[(1,), (2,)], []]
+        pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+        extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
+        resultado = extrator.extrair_tabela("public", "grande")
+
+        assert isinstance(resultado, Sucesso)
+        assert resultado.valor.metadados_amostra.tamanho_amostra == 2
+        conexao_fake.cursor.assert_called_with(name="amostra_public_grande")
+        assert cursor_fake.itersize == 50_000  # calcular_tamanho_lote(200)
+        conexao_fake.commit.assert_called_once()
+        # 6 queries de metadado (fetchall) + amostra via fetchmany, não fetchall.
+        assert cursor_fake.fetchall.call_count == 6
+
 
 class TestErro:
     """Erro esperado."""
@@ -344,6 +373,32 @@ class TestErro:
 
 class TestBorda:
     """Bordas."""
+
+    def test_tabela_exatamente_no_limiar_de_linhas_nao_ativa_streaming(
+        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+    ) -> None:
+        """total_linhas == limiar (não >) segue com fetchall direto."""
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            [("tabela", "id", "int4", None, None, None, "NO")],  # colunas
+            [("tabela", "id")],  # PK
+            [],  # FK
+            [],  # UNIQUE
+            [("tabela", 100_000.0)],  # total_linhas — exatamente no limiar
+            [("tabela", 200)],  # largura_media
+            [(1,)],  # amostra
+        ]
+        cursor_fake.description = [SimpleNamespace(name="id")]
+        pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+        extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
+        resultado = extrator.extrair_tabela("public", "tabela")
+
+        assert isinstance(resultado, Sucesso)
+        conexao_fake.cursor.assert_called_with()
+        cursor_fake.fetchmany.assert_not_called()
+        conexao_fake.commit.assert_not_called()
 
     def test_connect_timeout_customizado_e_repassado_ao_pool(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao

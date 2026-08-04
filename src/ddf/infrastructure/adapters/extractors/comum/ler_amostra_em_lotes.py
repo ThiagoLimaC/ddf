@@ -13,6 +13,36 @@ _TETO_BYTES_PADRAO = 10_000_000
 _MINIMO_PADRAO = 1_000
 _MAXIMO_PADRAO = 100_000
 
+# Candidatos iniciais, calibrados pelo benchmark da issue #114 — não valores
+# finais. Dois critérios (linhas OU bytes) em vez de um só: um limiar de
+# bytes sozinho depende da estimativa de largura média, que cai num
+# fallback conservador quando a tabela nunca foi analisada — nesse caso
+# subestimaria o risco; um limiar de linhas sozinho não distingue 1M linhas
+# estreitas (INTEGER) de 1M linhas largas (JSON). Cada critério cobre o
+# ponto cego do outro.
+_LIMIAR_LINHAS_STREAMING = 100_000
+_LIMIAR_BYTES_STREAMING = 100_000_000
+
+
+def deve_usar_streaming(total_linhas: int, largura_media_bytes: int) -> bool:
+    """Decide se a tabela justifica o custo de manter uma transação aberta.
+
+    Streaming via cursor server-side reduz o pico de memória client-side,
+    mas mantém uma transação aberta pela duração da leitura — em Postgres,
+    isso represa `VACUUM` no banco inteiro enquanto durar. Só compensa
+    acima de um limiar de linhas OU de bytes estimados; tabelas pequenas
+    seguem lidas com `fetchall()` direto.
+
+    Args:
+        total_linhas: total de linhas estimado da tabela (catálogo).
+        largura_media_bytes: estimativa de largura média de linha.
+    """
+    tamanho_estimado_bytes = total_linhas * largura_media_bytes
+    return (
+        total_linhas > _LIMIAR_LINHAS_STREAMING
+        or tamanho_estimado_bytes > _LIMIAR_BYTES_STREAMING
+    )
+
 
 def calcular_tamanho_lote(
     largura_media_bytes: int,

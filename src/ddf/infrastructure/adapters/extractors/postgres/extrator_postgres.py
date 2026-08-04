@@ -9,6 +9,7 @@ from typing import assert_never
 import polars as pl
 from psycopg2 import OperationalError, sql
 from psycopg2.extensions import connection as conexao_postgres
+from psycopg2.extensions import cursor as cursor_postgres
 from psycopg2.pool import ThreadedConnectionPool
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
@@ -32,6 +33,11 @@ from ddf.infrastructure.adapters.extractors.comum.construir_metadados_de_amostra
 from ddf.infrastructure.adapters.extractors.comum.construir_restricoes_fk_compostas import (  # noqa: E501
     construir_restricoes_fk_compostas,
 )
+from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
+    calcular_tamanho_lote,
+    deve_usar_streaming,
+    ler_amostra_em_lotes,
+)
 from ddf.infrastructure.adapters.extractors.comum.seed_efetivo import seed_efetivo
 from ddf.infrastructure.adapters.extractors.postgres._construcao import (
     _construir_coluna,
@@ -49,6 +55,11 @@ from ddf.infrastructure.adapters.extractors.postgres._queries import (
     _TOTAL_LINHAS_SCHEMA_SQL,
     LARGURA_MEDIA_PADRAO_BYTES,
 )
+
+
+def _nomes_colunas(cursor: cursor_postgres) -> list[str]:
+    """Extrai os nomes de coluna de `cursor.description`, na ordem do SELECT."""
+    return [coluna.name for coluna in cursor.description or ()]
 
 
 class ExtratorPostgres:
@@ -107,7 +118,9 @@ class ExtratorPostgres:
         return Sucesso(self._pool)
 
     @contextmanager
-    def _conexao(self) -> Generator[Resultado[conexao_postgres], None, None]:
+    def _conexao(
+        self, autocommit: bool = True
+    ) -> Generator[Resultado[conexao_postgres], None, None]:
         """Empresta uma conexão do pool, sob o semáforo, com release garantido.
 
         `yield`a um `Falha` cedo, sem entrar no bloco `try`/`finally` de
@@ -116,6 +129,17 @@ class ExtratorPostgres:
         semáforo a devolver. Quando a conexão é obtida com sucesso, o
         `finally` garante `putconn` + liberação do semáforo mesmo se o
         corpo do `with` levantar uma exceção não tratada.
+
+        Args:
+            autocommit: `False` sustenta uma transação aberta na conexão
+                emprestada — obrigatório para cursor nomeado (streaming).
+                Quem pede `autocommit=False` é responsável por chamar
+                `conexao.commit()` no caminho de sucesso, antes do `with`
+                terminar; no caminho de erro, o `rollback()` automático do
+                `ThreadedConnectionPool.putconn` cobre a limpeza — sem
+                vazamento de estado entre quem pegar a conexão emprestada
+                depois, só a duração da transação fica maior enquanto
+                durar o streaming.
         """
         resultado_pool = self._obter_pool()
         if isinstance(resultado_pool, Falha):
@@ -130,7 +154,7 @@ class ExtratorPostgres:
             yield Falha(f"Não foi possível conectar: {erro}")
             return
         try:
-            conexao.autocommit = True
+            conexao.autocommit = autocommit
             yield Sucesso(conexao)
         finally:
             pool.putconn(conexao)
@@ -311,64 +335,75 @@ class ExtratorPostgres:
             )
 
         requisicao = estrategia.requisicao
-        with self._conexao() as resultado_conexao:
+        largura_media_bytes = metadados.largura_media_por_tabela.get(
+            tabela, LARGURA_MEDIA_PADRAO_BYTES
+        )
+        usa_streaming = deve_usar_streaming(total_linhas, largura_media_bytes)
+        with self._conexao(autocommit=not usa_streaming) as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
             conexao = resultado_conexao.valor
-            with conexao.cursor() as cursor:
-                requisicao_efetiva: RequisicaoDeAmostragem
-                match requisicao:
-                    case AmostragemProbabilistica(percentual=percentual, seed=seed):
-                        seed_usado = seed_efetivo(seed)
-                        requisicao_efetiva = AmostragemProbabilistica(
-                            percentual=percentual, seed=seed_usado
-                        )
-                        consulta_amostra = sql.SQL(
-                            "SELECT * FROM {}.{} TABLESAMPLE BERNOULLI ({}) "
-                            "REPEATABLE ({})"
-                        ).format(
-                            sql.Identifier(schema),
-                            sql.Identifier(tabela),
-                            sql.Literal(percentual),
-                            sql.Literal(seed_usado),
-                        )
-                    case AmostragemIntegral():
-                        requisicao_efetiva = requisicao
-                        consulta_amostra = sql.SQL("SELECT * FROM {}.{}").format(
-                            sql.Identifier(schema), sql.Identifier(tabela)
-                        )
-                    case RequisicaoPorFaixa(percentual=percentual, seed=seed):
-                        seed_usado = seed_efetivo(seed)
-                        requisicao_efetiva = RequisicaoPorFaixa(
-                            percentual=percentual, seed=seed_usado
-                        )
-                        consulta_amostra = sql.SQL(
-                            "SELECT * FROM {}.{} TABLESAMPLE SYSTEM ({}) "
-                            "REPEATABLE ({})"
-                        ).format(
-                            sql.Identifier(schema),
-                            sql.Identifier(tabela),
-                            sql.Literal(percentual),
-                            sql.Literal(seed_usado),
-                        )
-                    case _ as nunca:
-                        assert_never(nunca)
-
-                cursor.execute(consulta_amostra)
-                nomes_colunas: list[str] = []
-                for coluna_amostra in cursor.description or ():
-                    nomes_colunas.append(coluna_amostra.name)
-                linhas_amostra = cursor.fetchall()
-                amostra = (
-                    pl.DataFrame(
-                        linhas_amostra,
-                        schema=nomes_colunas,
-                        orient="row",
-                        infer_schema_length=None,
+            requisicao_efetiva: RequisicaoDeAmostragem
+            match requisicao:
+                case AmostragemProbabilistica(percentual=percentual, seed=seed):
+                    seed_usado = seed_efetivo(seed)
+                    requisicao_efetiva = AmostragemProbabilistica(
+                        percentual=percentual, seed=seed_usado
                     )
-                    if linhas_amostra
-                    else pl.DataFrame(schema=nomes_colunas)
-                )
+                    consulta_amostra = sql.SQL(
+                        "SELECT * FROM {}.{} TABLESAMPLE BERNOULLI ({}) "
+                        "REPEATABLE ({})"
+                    ).format(
+                        sql.Identifier(schema),
+                        sql.Identifier(tabela),
+                        sql.Literal(percentual),
+                        sql.Literal(seed_usado),
+                    )
+                case AmostragemIntegral():
+                    requisicao_efetiva = requisicao
+                    consulta_amostra = sql.SQL("SELECT * FROM {}.{}").format(
+                        sql.Identifier(schema), sql.Identifier(tabela)
+                    )
+                case RequisicaoPorFaixa(percentual=percentual, seed=seed):
+                    seed_usado = seed_efetivo(seed)
+                    requisicao_efetiva = RequisicaoPorFaixa(
+                        percentual=percentual, seed=seed_usado
+                    )
+                    consulta_amostra = sql.SQL(
+                        "SELECT * FROM {}.{} TABLESAMPLE SYSTEM ({}) "
+                        "REPEATABLE ({})"
+                    ).format(
+                        sql.Identifier(schema),
+                        sql.Identifier(tabela),
+                        sql.Literal(percentual),
+                        sql.Literal(seed_usado),
+                    )
+                case _ as nunca:
+                    assert_never(nunca)
+
+            if usa_streaming:
+                tamanho_lote = calcular_tamanho_lote(largura_media_bytes)
+                with conexao.cursor(name=f"amostra_{schema}_{tabela}") as cursor:
+                    cursor.itersize = tamanho_lote
+                    cursor.execute(consulta_amostra)
+                    nomes_colunas = _nomes_colunas(cursor)
+                    amostra = ler_amostra_em_lotes(cursor, nomes_colunas, tamanho_lote)
+                conexao.commit()
+            else:
+                with conexao.cursor() as cursor:
+                    cursor.execute(consulta_amostra)
+                    nomes_colunas = _nomes_colunas(cursor)
+                    linhas_amostra = cursor.fetchall()
+                    amostra = (
+                        pl.DataFrame(
+                            linhas_amostra,
+                            schema=nomes_colunas,
+                            orient="row",
+                            infer_schema_length=None,
+                        )
+                        if linhas_amostra
+                        else pl.DataFrame(schema=nomes_colunas)
+                    )
 
             match requisicao_efetiva:
                 case AmostragemIntegral():
