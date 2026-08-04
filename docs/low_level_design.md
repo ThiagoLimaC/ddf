@@ -741,7 +741,13 @@ class AmostragemProbabilistica(BaseModel):  # frozen
 class AmostragemIntegral(BaseModel):  # frozen, sem campos
     ...
 
-RequisicaoDeAmostragem = AmostragemProbabilistica | AmostragemIntegral
+class RequisicaoPorFaixa(BaseModel):  # frozen
+    percentual: float  # (0, 100]
+    seed: int | None = None
+
+RequisicaoDeAmostragem = (
+    AmostragemProbabilistica | AmostragemIntegral | RequisicaoPorFaixa
+)
 ```
 
 **Comportamento:** descreve só a *política* de amostragem (quanto amostrar),
@@ -759,13 +765,23 @@ diretamente — funcionava com uma única estratégia, mas ao introduzir
 `TabelaInteira` (que não tem percentual nenhum) isso forçaria a nova estratégia a
 "mentir" um valor fictício só para satisfazer o Protocol, violando
 Interface Segregation. `RequisicaoDeAmostragem` é uma união fechada
-(`AmostragemProbabilistica | AmostragemIntegral`); cada `Extrator` faz
+(`AmostragemProbabilistica | AmostragemIntegral | RequisicaoPorFaixa`,
+3º membro adicionado na issue #114); cada `Extrator` faz
 `match`/`assert_never` sobre ela — uma estratégia futura não reconhecida
 quebra `mypy --strict` no Extrator, em vez de cair silenciosamente num
-`else` que trata tudo como probabilístico. `seed` vive só em
-`AmostragemProbabilistica` (nunca no Port nem em `AmostragemIntegral`, que
-não tem o que reproduzir) — torna a amostragem reprodutível via
-`REPEATABLE`/`RAND(seed)` de cada dialeto.
+`else` que trata tudo como probabilístico. `seed` vive em
+`AmostragemProbabilistica`/`RequisicaoPorFaixa` (nunca no Port nem em
+`AmostragemIntegral`, que não tem o que reproduzir) — torna a amostragem
+reprodutível via `REPEATABLE`/`RAND(seed)` de cada dialeto.
+
+**`RequisicaoPorFaixa` — nome deliberadamente diferente de
+`AmostragemPorFaixa` (issue #114):** mesmo shape de `AmostragemProbabilistica`
+(`percentual`/`seed`), tipo distinto — a Estratégia (`AmostragemPorFaixa`,
+ver seção própria abaixo) e a Requisição (`RequisicaoPorFaixa`) não
+compartilham nome, para não reabrir a ambiguidade Estratégia/Requisição
+que a revisão do arquiteto pediu para evitar quando as duas primeiras
+(`PercentualDeLinhas`/`AmostragemProbabilistica`,
+`TabelaInteira`/`AmostragemIntegral`) já usam nomes diferentes por par.
 
 ---
 
@@ -949,6 +965,15 @@ schemas de sistema do Postgres (`information_schema`, `pg_catalog`,
      reprodutibilidade nunca ser opt-in silencioso.
    - `AmostragemIntegral()`: `SELECT * FROM {schema}.{tabela}` puro, sem
      `TABLESAMPLE` — a estratégia `TabelaInteira`.
+   - `RequisicaoPorFaixa(percentual, seed)` (issue #114): `SELECT * FROM
+     {schema}.{tabela} TABLESAMPLE SYSTEM(percentual) REPEATABLE(seed)` —
+     `SYSTEM` sorteia páginas físicas inteiras, não linhas individuais
+     (`BERNOULLI`), lendo só as páginas sorteadas em vez de decidir linha
+     a linha sobre a tabela inteira — resolve a limitação de custo
+     conhecida (issue #56) às custas de viés de cluster (linhas de uma
+     mesma página tendem a ser semelhantes/inseridas juntas). `Aviso`
+     incondicional em toda extração que usa essa Requisição, texto
+     próprio (página física de disco), distinto do MariaDB.
 5. `MetadadosDeAmostra.tamanho_amostra` é o número de linhas efetivamente
    retornadas pela amostra (`len(dataframe)`), não um valor calculado —
    `TABLESAMPLE` decide dinamicamente quantas linhas sorteia.
@@ -968,6 +993,38 @@ percentual/100` no lugar de `TABLESAMPLE`/`REPEATABLE` (MariaDB não tem
 `information_schema.tables.TABLE_ROWS`, sem mudança — MariaDB não tem fonte
 equivalente a `n_live_tup` sem escrita (`ANALYZE TABLE`) ou full-scan
 (`COUNT(*)`).
+
+**`RequisicaoPorFaixa` no MariaDB (issue #114) — sem `TABLESAMPLE`, via `K`
+faixas de PK:** MariaDB não tem equivalente a `TABLESAMPLE SYSTEM`. A
+alternativa de mercado (`WHERE pk >= FLOOR(RAND(seed) * MAX(pk)) ORDER BY
+pk LIMIT n` com `n` grande) devolve uma **única janela contígua** de PKs a
+partir de um ponto sorteado, não uma amostra espalhada — achado bloqueante
+da banca de revisão, validado empiricamente: em tabela onde PK correlaciona
+com tempo de inserção (caso comum), isso pode devolver só uma fatia
+temporal estreita, viés bem mais severo que cluster genérico. Resolução:
+`_elegibilidade_de_pk_para_faixa` (função pura em `mariadb/_construcao.py`)
+decide o caminho:
+- **PK elegível** (exatamente 1 coluna, tipo `INTEGER`/`BIGINT`): `K=10`
+  faixas contíguas menores (candidato, a calibrar pelo benchmark), cada uma
+  `WHERE pk >= FLOOR(RAND(seed_k) * max_pk) ORDER BY pk LIMIT n/K`, com
+  `seed_k = seed_usado + k` (reprodutível) e `max_pk` lido uma vez por
+  tabela (`SELECT MAX(pk)`, 1 round-trip extra), unidas via `UNION ALL` —
+  aproxima o comportamento de blocos espalhados do `TABLESAMPLE SYSTEM` do
+  Postgres, sem exigir `LIMIT 1` repetido `n` vezes (inviável: um
+  round-trip por linha amostrada). `Aviso` de viés distinto do Postgres —
+  explica o trade-off de origem (custo de amostra verdadeiramente
+  aleatória por PK), não só o efeito. Gaps densos na PK (linhas deletadas)
+  podem fazer a amostra sair bem menor que o pedido — `Aviso` condicional
+  adicional quando `tamanho_amostra < 0.5 * n_pedido`.
+- **PK não elegível** (composta, ausente, ou não numérica): fallback pra
+  `WHERE RAND(seed) <= percentual/100` — o mesmo SQL de
+  `AmostragemProbabilistica`. `requisicao_efetiva` vira
+  `AmostragemProbabilistica` (não uma variação de `RequisicaoPorFaixa`) —
+  reaproveita o `case` já existente em `construir_metadados_de_amostra`,
+  que emite sozinho o `Aviso` de "varredura sequencial completa" (correto:
+  o fallback é exatamente esse SQL). O Extrator soma um segundo `Aviso`
+  explicando por que caiu no fallback, sem duplicar a mensagem de viés de
+  cluster errada (esse caminho não tem mais viés de cluster nenhum).
 
 **`restricoes_unicas` no MariaDB (issue #89):** sem query nova — a mesma
 `_COLUNAS_UNICAS_SQL` (que já agrupa por `constraint_name` desde a #44 para
@@ -1131,6 +1188,158 @@ da issue #76). Zero mudança nos dois Extratores foi necessária para
 adicionar esta estratégia: o vocabulário (`AmostragemIntegral`) já existia
 no Port desde a mesma issue — prova prática do ponto de Open/Closed
 perseguido no redesenho de `EstrategiaDeAmostragem`.
+
+### `AmostragemPorFaixa` (issue #114, opt-in)
+
+```python
+class AmostragemPorFaixa:
+    def __init__(self, percentual: float, seed: int | None = None) -> None: ...
+    # ValidationError (via RequisicaoPorFaixa) se percentual não estiver
+    # em (0, 100]
+
+    @property
+    def nome(self) -> str:
+        """Retorna 'amostragem_por_faixa'."""
+
+    @property
+    def requisicao(self) -> RequisicaoPorFaixa:
+        """Retorna percentual e seed configurados, como RequisicaoPorFaixa."""
+```
+
+**Contexto (o que motivou a issue):** investigação de lentidão numa
+extração real contra Postgres de produção (122 tabelas). Uma tabela
+outlier (`token_acesso`, 4.118.390 linhas/778MB, ~40x maior que a 2ª
+maior tabela do mesmo schema) reproduziu RSS de pico ~900MB isolado,
+mesmo com `PercentualDeLinhas(10)` (default do wizard, não só
+`TabelaInteira`) — não é só a limitação de custo já conhecida (issue
+#56, varredura completa independente do percentual), é também que
+`cursor.execute()` sem cursor nomeado (psycopg2) ou sem `SSCursor`
+(pymysql) materializa o resultset inteiro client-side antes de qualquer
+`fetch*`, comportamento padrão dos dois drivers (ver seção "Streaming
+via cursor server-side" abaixo, que resolve esse 2º problema
+independente da Estratégia escolhida).
+
+**Comportamento:** custo de leitura escala com `percentual`, não com
+`total_linhas` — cada Extrator traduz isso num mecanismo que evita
+varredura sequencial completa no próprio dialeto (`TABLESAMPLE SYSTEM`
+no Postgres, `K` faixas de PK no MariaDB — ver seções de cada Extrator
+acima). Em troca, sujeita a viés de cluster: linhas de uma mesma
+faixa/página/bloco tendem a ser semelhantes (inseridas juntas, mesmo
+padrão temporal), podendo distorcer `percentual_nulo`/`percentual_unico`/
+`valores_frequentes` em tabelas com padrão de inserção em lote. Por isso
+é **opt-in** — nunca troca silenciosa do default (`PercentualDeLinhas`)
+— e todo Extrator emite um `Aviso` incondicional explicando o viés em
+toda extração que a usa, texto próprio por motor (página física no
+Postgres, faixas contíguas de PK no MariaDB — a banca de revisão pediu
+mensagens distintas, não uma genérica compartilhada).
+
+**Por que reverte a escolha "sem viés" das outras duas Estratégias:**
+`PercentualDeLinhas`/`TabelaInteira` foram desenhadas deliberadamente
+para não ter viés de amostragem (`BERNOULLI`/`RAND()` decidem linha a
+linha, cada uma com probabilidade independente). `AmostragemPorFaixa`
+troca essa garantia por custo menor — não é uma contradição não
+explicada da decisão original, é um trade-off novo e explícito, só
+disponível como escolha ativa do usuário, nunca herdado por acidente.
+
+**Nomenclatura (fechada com a banca):** ver a nota de `RequisicaoPorFaixa`
+acima — nome da Estratégia (`AmostragemPorFaixa`) deliberadamente
+diferente do nome da Requisição (`RequisicaoPorFaixa`), para não reabrir
+a ambiguidade Estratégia/Requisição que a revisão do arquiteto já tinha
+pedido para evitar nas duas Estratégias anteriores.
+
+**Escopo descartado nesta issue:** padronizar as 3 Estratégias
+(`PercentualDeLinhas`/`TabelaInteira`/`AmostragemPorFaixa`) e as 3
+Requisições (`AmostragemProbabilistica`/`AmostragemIntegral`/
+`RequisicaoPorFaixa`) sob um prefixo único foi cogitado e descartado — o
+blast radius (~55 arquivos entre `src/`, `tests/` e `docs/`, puro rename
+sem ganho funcional) não se justificava agora; registrado como possível
+reabertura de escopo futura.
+
+---
+
+## Streaming via cursor server-side (issue #114)
+
+Aplica-se às 3 Estratégias por igual — o problema resolvido aqui é do
+padrão `execute()` + `fetchall()` (materializa o resultset inteiro
+client-side antes de qualquer `fetch`), não de qual SQL cada Estratégia
+gera. Só ativa acima de um limiar (linhas OU bytes estimados — ver
+abaixo); tabelas pequenas continuam com `fetchall()` direto, sem mudança
+de comportamento.
+
+**`deve_usar_streaming`/`calcular_tamanho_lote`/`ler_amostra_em_lotes`**
+(`extractors/comum/ler_amostra_em_lotes.py`, um único arquivo — os três
+formam um único fluxo de decisão: se streama, quanto por lote, como ler
+— não helpers independentes o bastante pra justificar 3 arquivos):
+
+```python
+def deve_usar_streaming(total_linhas: int, largura_media_bytes: int) -> bool: ...
+def calcular_tamanho_lote(largura_media_bytes: int, teto_bytes=..., minimo=..., maximo=...) -> int: ...
+def ler_amostra_em_lotes(cursor: _CursorComFetchmany, tamanho_lote: int) -> pl.DataFrame: ...
+```
+
+**Limiar de ativação — dois critérios, não um só:** `total_linhas >
+_LIMIAR_LINHAS_STREAMING` OU `total_linhas * largura_media_bytes >
+_LIMIAR_BYTES_STREAMING` (candidatos: 100.000 linhas / 100MB — **não
+valores finais**, calibrados pelo `test_extrator_postgres_benchmark_
+streaming.py`, rodado manualmente). Um limiar de bytes sozinho depende da
+estimativa de largura média (`largura_media_por_tabela`, populada via
+`pg_stats.avg_width` no Postgres — query nova, agregada por schema — e
+`information_schema.tables.avg_row_length` no MariaDB — zero query nova,
+já lido junto de `table_rows`), que cai num fallback conservador
+(`LARGURA_MEDIA_PADRAO_BYTES = 200`) quando a tabela nunca foi
+analisada — nesse caso subestimaria o risco. Um limiar de linhas sozinho
+não distingue 1M linhas estreitas (`INTEGER`) de 1M linhas largas
+(`JSON`). Cada critério cobre o ponto cego do outro.
+
+**`ler_amostra_em_lotes`:** lê nomes de coluna de `cursor.description`
+**depois** de cada `fetchmany`, nunca antes, nunca como parâmetro — achado
+real contra Postgres (não reproduzível com cursor mockado): cursor
+nomeado do psycopg2 só popula `description` depois do 1º fetch
+(documentado no driver); ler antes disso devolve nomes vazios
+silenciosamente, sem erro. `pl.concat(lotes, how="vertical_relaxed")`,
+não o modo estrito — achado real contra produção (não reproduzível com
+tabela sintética pequena): cada lote infere seu próprio dtype por coluna,
+isolado dos outros; uma coluna nulável cujo 1º lote sai inteiro `NULL`
+infere dtype `Null`, e um lote seguinte com valor real (`Int64` etc.)
+quebraria `pl.concat` estrito por divergência de schema entre lotes —
+`vertical_relaxed` funde pra um supertipo comum (`Null` sempre funde com
+qualquer tipo).
+
+**`ExtratorPostgres`:** `_conexao(autocommit: bool = True)` — `False`
+sustenta a transação que um cursor nomeado (`conexao.cursor(name=...)`)
+exige. `_conexao` não commita sozinha: quem pede `autocommit=False` é
+responsável por `conexao.commit()` no caminho de sucesso, antes do `with`
+terminar; no caminho de erro, o `rollback()` automático do
+`ThreadedConnectionPool.putconn` cobre a limpeza — sem vazamento de
+estado entre quem pegar a conexão emprestada depois, só a duração da
+transação fica maior enquanto durar o streaming.
+
+**Limitação aceita, não testada:** cursor nomeado do Postgres represa
+`VACUUM` no banco **inteiro** (não só na tabela lida) enquanto a
+transação estiver aberta — confirmado empiricamente pela banca de
+revisão. Mitigado pelo gating por limiar (só tabelas grandes pagam esse
+custo, e só pelo tempo de leitura da amostra), não eliminado. Sem teste
+de carga concorrente de escrita — infraestrutura fora do escopo
+pragmático da issue; risco documentado como limitação aceita, não
+validado por teste.
+
+**`ExtratorMariaDB`:** `conexao.cursor(pymysql.cursors.SSCursor)` acima do
+mesmo limiar, no lugar do cursor comum. Fechamento determinístico do
+cursor antes de qualquer exceção propagar (achado do engenheiro de
+dados: `SSCursor` não drenado, deixado para o GC fechar via `__del__`,
+gera `AttributeError` silenciosamente engolido, mascarando a causa raiz
+real do erro) é garantido pelo `with cursor_bruto as cursor:` que já
+envolve todo o dispatch — não precisou de `try/except` manual, o
+protocolo de context manager já chama `cursor.close()` no `__exit__`
+antes de qualquer exceção sair do bloco.
+
+**Validação:** benchmark sintético (1M linhas, ~150 bytes/linha, amostra
+~100k linhas) não mostrou redução de RSS mensurável — a baseline fixa de
+memória do processo (Python + psycopg2 + polars, ~185MB) domina nessa
+escala. Confirmado na prática contra o schema real que motivou a issue
+(122 tabelas, incluindo `token_acesso`): RSS ficou baixo — o efeito só
+aparece em escala próxima da real (multi-milhões de linhas), não na
+escala sintética do benchmark automatizado.
 
 ---
 

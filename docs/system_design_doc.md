@@ -130,18 +130,46 @@ Controla a query de amostragem por tabela. Plugável via
 - `TabelaInteira` (issue #76) — lê a tabela inteira, sem `TABLESAMPLE`/`RAND()`.
   `total_linhas` sai exato (`len(amostra)`) nesse caso, em vez da estimativa
   de catálogo usada por `PercentualDeLinhas`.
+- `AmostragemPorFaixa` (issue #114, opt-in) — amostra `percentual`% das
+  linhas lidas por faixa/bloco, não por linha: custo escala com
+  `percentual`, não com `total_linhas` (resolve a limitação de custo
+  abaixo, mas troca por viés de cluster). `ExtratorPostgres` usa
+  `TABLESAMPLE SYSTEM ... REPEATABLE` (amostra por página física);
+  `ExtratorMariaDB` usa `K` faixas contíguas de chave primária sorteadas
+  independentemente (sem PK inteira de coluna única, cai no fallback
+  probabilístico de `PercentualDeLinhas`, com Aviso explicando o motivo).
+  Todo Extrator emite um `Aviso` de viés em toda extração que a usa —
+  nunca é o default, sempre opt-in explícito no wizard.
 - O Port expõe `requisicao: RequisicaoDeAmostragem` (união fechada
-  `AmostragemProbabilistica | AmostragemIntegral`), não mais `percentual`
-  solto — ver `low_level_design.md` para o raciocínio completo (Interface
-  Segregation + dispatch exaustivo nos Extratores).
+  `AmostragemProbabilistica | AmostragemIntegral | RequisicaoPorFaixa`),
+  não mais `percentual` solto — ver `low_level_design.md` para o
+  raciocínio completo (Interface Segregation + dispatch exaustivo nos
+  Extratores).
 
-**Limitação de custo conhecida (issue #56):** as duas implementações acima
-fazem varredura sequencial completa da tabela, independente do `percentual`
-pedido — o custo escala com `total_linhas`, não com o tamanho da amostra
-resultante. Relevante pra NFR9 ("dezenas ou centenas de tabelas... tempo
-razoável") em bancos com tabelas muito grandes; nenhum dos dois motores
-oferece amostragem sem varredura completa por padrão. Documentado também em
-`PercentualDeLinhas`/`EstrategiaDeAmostragem` no código.
+**Limitação de custo conhecida (issue #56):** `PercentualDeLinhas` e
+`TabelaInteira` fazem varredura sequencial completa da tabela,
+independente do `percentual` pedido — o custo escala com `total_linhas`,
+não com o tamanho da amostra resultante. Relevante pra NFR9 ("dezenas ou
+centenas de tabelas... tempo razoável") em bancos com tabelas muito
+grandes; nenhum dos dois motores oferece amostragem sem varredura
+completa por padrão nessas duas estratégias. `AmostragemPorFaixa` (acima)
+é a saída opt-in pra esse custo, não uma correção do default — trocar o
+default exigiria aceitar viés de cluster silenciosamente, rejeitado pela
+issue #114.
+
+**Streaming via cursor server-side (issue #114):** independente da
+estratégia escolhida, tabelas acima de um limiar (linhas OU bytes
+estimados, ver `low_level_design.md`) são lidas em lotes (`fetchmany`)
+via cursor nomeado (Postgres) / `SSCursor` (MariaDB), em vez de
+`fetchall()` direto — mitiga o pico de memória client-side que motivou a
+issue (`cursor.execute()` sem cursor nomeado/`SSCursor` materializa o
+resultset inteiro antes de qualquer `fetch`, comportamento padrão dos
+dois drivers). Limitação aceita: cursor nomeado do Postgres sustenta uma
+transação aberta pela duração da leitura, o que represa `VACUUM` no banco
+inteiro (não só na tabela lida) enquanto durar — mitigado pelo gating por
+limiar (só tabelas grandes pagam esse custo), não eliminado; sem teste de
+carga concorrente de escrita (infraestrutura fora do escopo pragmático da
+issue).
 
 ### 3. MetadadosDeAmostra
 
@@ -149,7 +177,8 @@ Value Object que viaja com `TabelaExtraida` e `TabelaCurada`:
 
 ```python
 class MetadadosDeAmostra(BaseModel):
-    estrategia: str               # "percentual_de_linhas", "tabela_inteira"
+    estrategia: str               # "percentual_de_linhas", "tabela_inteira",
+                                   # "amostragem_por_faixa"
     tamanho_amostra: int          # linhas efetivamente amostradas
     percentual: float | None = None  # efetivo; None em tabela_inteira (issue #76)
     seed: int | None = None          # efetivo; None em tabela_inteira (issue #76)
