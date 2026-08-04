@@ -30,6 +30,11 @@ from ddf.infrastructure.adapters.extractors.comum.construir_metadados_de_amostra
 from ddf.infrastructure.adapters.extractors.comum.construir_restricoes_fk_compostas import (  # noqa: E501
     construir_restricoes_fk_compostas,
 )
+from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
+    calcular_tamanho_lote,
+    deve_usar_streaming,
+    ler_amostra_em_lotes,
+)
 from ddf.infrastructure.adapters.extractors.comum.seed_efetivo import seed_efetivo
 from ddf.infrastructure.adapters.extractors.mariadb._construcao import (
     _agrupar_colunas_json_por_tabela,
@@ -355,11 +360,25 @@ class ExtratorMariaDB:
                 )
             )
 
+        largura_media_bytes = metadados.largura_media_por_tabela.get(
+            tabela, LARGURA_MEDIA_PADRAO_BYTES
+        )
+        usa_streaming = deve_usar_streaming(total_linhas, largura_media_bytes)
         with self._conexao() as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
             conexao = resultado_conexao.valor
-            with conexao.cursor() as cursor:
+            cursor_bruto = (
+                conexao.cursor(pymysql.cursors.SSCursor)
+                if usa_streaming
+                else conexao.cursor()
+            )
+            # `with` garante `cursor.close()` determinístico antes de
+            # qualquer exceção propagar — SSCursor não drenado, deixado
+            # para o GC fechar via `__del__`, gera AttributeError
+            # silenciosamente engolido (achado do engenheiro de dados),
+            # mascarando a causa raiz real do erro.
+            with cursor_bruto as cursor:
                 requisicao = estrategia.requisicao
                 requisicao_efetiva: RequisicaoDeAmostragem
                 identificador_tabela = (
@@ -449,17 +468,21 @@ class ExtratorMariaDB:
                 nomes_colunas: list[str] = []
                 for coluna_amostra in cursor.description or ():
                     nomes_colunas.append(coluna_amostra[0])
-                linhas_amostra = cursor.fetchall()
-                amostra = (
-                    pl.DataFrame(
-                        linhas_amostra,
-                        schema=nomes_colunas,
-                        orient="row",
-                        infer_schema_length=None,
+                if usa_streaming:
+                    tamanho_lote = calcular_tamanho_lote(largura_media_bytes)
+                    amostra = ler_amostra_em_lotes(cursor, nomes_colunas, tamanho_lote)
+                else:
+                    linhas_amostra = cursor.fetchall()
+                    amostra = (
+                        pl.DataFrame(
+                            linhas_amostra,
+                            schema=nomes_colunas,
+                            orient="row",
+                            infer_schema_length=None,
+                        )
+                        if linhas_amostra
+                        else pl.DataFrame(schema=nomes_colunas)
                     )
-                    if linhas_amostra
-                    else pl.DataFrame(schema=nomes_colunas)
-                )
 
                 if (
                     n_pedido_por_faixa is not None

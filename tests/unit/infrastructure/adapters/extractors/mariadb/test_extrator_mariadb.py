@@ -193,6 +193,35 @@ class TestFeliz:
         # 2 conexões: 1 pra popular o cache de metadados do escopo, 1 pra amostra.
         assert conexao_fake.close.call_count == 2
 
+    def test_tabela_acima_do_limiar_de_linhas_usa_sscursor_em_lotes(
+        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+    ) -> None:
+        """total_linhas > limiar ativa streaming: SSCursor lido via fetchmany."""
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            *montar_metadados_side_effect(
+                tabela="grande",
+                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                pks=["id"],
+                total_linhas=200_000,  # acima de 100_000
+            ),
+        ]
+        cursor_fake.description = [("id",)]
+        cursor_fake.fetchmany.side_effect = [[(1,), (2,)], []]
+        pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+        extrator = ExtratorMariaDB(
+            host="fake", user="root", password="senha", configuracao=configuracao
+        )
+        resultado = extrator.extrair_tabela("vendas", "grande")
+
+        assert isinstance(resultado, Sucesso)
+        assert resultado.valor.metadados_amostra.tamanho_amostra == 2
+        conexao_fake.cursor.assert_called_with(pymysql.cursors.SSCursor)
+        # 6 queries de metadado (fetchall) + amostra via fetchmany, não fetchall.
+        assert cursor_fake.fetchall.call_count == 6
+
     def test_segunda_extracao_no_mesmo_schema_reaproveita_cache_de_metadados(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
     ) -> None:
@@ -506,6 +535,33 @@ class TestErro:
 
 class TestBorda:
     """Bordas."""
+
+    def test_tabela_exatamente_no_limiar_de_linhas_nao_ativa_streaming(
+        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+    ) -> None:
+        """total_linhas == limiar (não >) segue com fetchall direto."""
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            *montar_metadados_side_effect(
+                tabela="tabela",
+                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                pks=["id"],
+                total_linhas=100_000,  # exatamente no limiar
+            ),
+            [(1,)],  # amostra
+        ]
+        cursor_fake.description = [("id",)]
+        pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+        extrator = ExtratorMariaDB(
+            host="fake", user="root", password="senha", configuracao=configuracao
+        )
+        resultado = extrator.extrair_tabela("vendas", "tabela")
+
+        assert isinstance(resultado, Sucesso)
+        conexao_fake.cursor.assert_called_with()
+        cursor_fake.fetchmany.assert_not_called()
 
     def test_connect_timeout_customizado_e_repassado_ao_pool(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
