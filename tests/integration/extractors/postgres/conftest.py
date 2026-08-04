@@ -255,6 +255,53 @@ _SETUP_SQL = """
     ANALYZE polimorfismo.clientes;
     ANALYZE polimorfismo.fornecedores;
     ANALYZE polimorfismo.movimentos;
+
+    -- Coluna TEXT altamente compressível: pg_stats.avg_width reflete o
+    -- tamanho armazenado após compressão TOAST, não o tamanho real que o
+    -- driver recebe ao ler a linha — repeat('a', 50000) comprime pra uma
+    -- fração do tamanho real, prova que a sonda física (TABLESAMPLE +
+    -- octet_length) mede o valor real, não o comprimido.
+    CREATE SCHEMA largura_real;
+
+    CREATE TABLE largura_real.tabela_larga (
+        id SERIAL PRIMARY KEY,
+        conteudo TEXT NOT NULL
+    );
+
+    INSERT INTO largura_real.tabela_larga (conteudo)
+        SELECT repeat('a', 50000) FROM generate_series(1, 50);
+
+    ANALYZE largura_real.tabela_larga;
+
+    -- Coluna ARRAY também é sujeita a compressão TOAST, mas seu
+    -- udt_name (`_text`) não bate com nenhum nome de tipo escalar —
+    -- prova que a detecção via `pg_attribute.attstorage` cobre isso, ao
+    -- contrário de uma lista fixa de nomes de tipo.
+    CREATE TABLE largura_real.tabela_com_array (
+        id SERIAL PRIMARY KEY,
+        tags TEXT[] NOT NULL
+    );
+
+    INSERT INTO largura_real.tabela_com_array (tags)
+        SELECT ARRAY(SELECT repeat('x', 100) FROM generate_series(1, 500))
+        FROM generate_series(1, 20);
+
+    ANALYZE largura_real.tabela_com_array;
+
+    -- Coluna com STORAGE EXTERNAL (fora de linha, sem compressão) —
+    -- avg_width reflete só o ponteiro TOAST (poucos bytes), subestimativa
+    -- ainda maior que EXTENDED/MAIN, e continua sujeita à mesma sonda.
+    CREATE TABLE largura_real.tabela_com_external (
+        id SERIAL PRIMARY KEY,
+        conteudo TEXT NOT NULL
+    );
+    ALTER TABLE largura_real.tabela_com_external
+        ALTER COLUMN conteudo SET STORAGE EXTERNAL;
+
+    INSERT INTO largura_real.tabela_com_external (conteudo)
+        SELECT repeat('y', 50000) FROM generate_series(1, 20);
+
+    ANALYZE largura_real.tabela_com_external;
 """
 
 

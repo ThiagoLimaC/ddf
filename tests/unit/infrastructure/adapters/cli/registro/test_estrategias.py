@@ -7,8 +7,12 @@ from ddf.domain.ports.estrategia_de_amostragem import EstrategiaDeAmostragem
 from ddf.infrastructure.adapters.cli.registro.estrategias import (
     ESTRATEGIAS_REGISTRADAS,
     EstrategiaRegistrada,
+    _construir_amostragem_por_faixa,
     _construir_percentual_de_linhas,
     registrar_estrategia,
+)
+from ddf.infrastructure.adapters.extractors.estrategias.amostragem_por_faixa import (
+    AmostragemPorFaixa,
 )
 from ddf.infrastructure.adapters.extractors.estrategias.percentual_de_linhas import (
     PercentualDeLinhas,
@@ -64,9 +68,62 @@ class TestFeliz:
         }
         assert "Fake" not in ESTRATEGIAS_REGISTRADAS
 
+    def test_amostragem_por_faixa_confirmada_com_percentual_e_seed(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Confirmação aceita + percentual/seed preenchidos monta a estratégia."""
+        monkeypatch.setattr(
+            "questionary.confirm", lambda *args, **kwargs: _RespostaFake(True)
+        )
+        respostas = iter(["5", "42"])
+        monkeypatch.setattr(
+            "questionary.text",
+            lambda *args, **kwargs: _RespostaFake(next(respostas)),
+        )
+
+        estrategia = _construir_amostragem_por_faixa()
+
+        assert isinstance(estrategia, AmostragemPorFaixa)
+        assert estrategia.requisicao.percentual == 5.0
+        assert estrategia.requisicao.seed == 42
+
 
 class TestErro:
     """Erro esperado."""
+
+    def test_amostragem_por_faixa_nao_confirmada_sai_sem_erro(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Recusar a confirmação de viés sai limpo (exit code 0), sem prompt de mais."""
+        monkeypatch.setattr(
+            "questionary.confirm", lambda *args, **kwargs: _RespostaFake(False)
+        )
+
+        with pytest.raises(SystemExit) as excecao:
+            _construir_amostragem_por_faixa()
+
+        assert excecao.value.code == 0
+
+    def test_amostragem_por_faixa_com_percentual_fora_de_faixa_sai_com_erro(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Percentual > 100 (ValidationError) sai com código 1."""
+        monkeypatch.setattr(
+            "questionary.confirm", lambda *args, **kwargs: _RespostaFake(True)
+        )
+        respostas = iter(["150", ""])
+        monkeypatch.setattr(
+            "questionary.text",
+            lambda *args, **kwargs: _RespostaFake(next(respostas)),
+        )
+
+        with pytest.raises(SystemExit) as excecao:
+            _construir_amostragem_por_faixa()
+
+        assert excecao.value.code == 1
 
     def test_registrar_estrategia_com_nome_duplicado_falha(
         self,

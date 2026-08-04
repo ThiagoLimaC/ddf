@@ -127,3 +127,36 @@ _RESTRICOES_UNICAS_SCHEMA_SQL = """
         AND n.nspname = %s
     ORDER BY t.relname, i.indexrelid, k.ord
 """
+
+# avg_width é preenchido pelo ANALYZE (estatística por coluna, em bytes) —
+# tabela nunca analisada simplesmente não aparece aqui (sem linha, não
+# NULL); quem lê trata a ausência com um fallback conservador
+# (LARGURA_MEDIA_PADRAO_BYTES), não uma exceção. Soma por tabela: estimativa
+# de largura de linha completa, não só de uma coluna. Reflete o tamanho
+# armazenado no disco (após compressão TOAST), não o tamanho que o driver
+# recebe ao ler a linha — confiável só para tabela sem nenhuma coluna
+# comprimível (ver _COLUNAS_COMPRIMIVEIS_SCHEMA_SQL); tabelas com alguma
+# usam a sonda física de `ExtratorPostgres._largura_media_real`.
+_LARGURA_MEDIA_LINHA_SCHEMA_SQL = """
+    SELECT tablename, SUM(avg_width)
+    FROM pg_stats
+    WHERE schemaname = %s
+    GROUP BY tablename
+"""
+
+# attstorage 'p' (PLAIN) é a única classe de largura fixa, nunca
+# armazenada fora de linha — qualquer outra sofre a subestimativa de
+# avg_width que motiva a sonda física. Direto no catálogo real da
+# coluna, não uma lista de nomes de tipo. relkind restrito a tabela (r)
+# e tabela particionada (p), mesmo padrão de _TOTAL_LINHAS_SCHEMA_SQL.
+_COLUNAS_COMPRIMIVEIS_SCHEMA_SQL = """
+    SELECT DISTINCT c.relname
+    FROM pg_catalog.pg_attribute a
+    JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = %s
+        AND c.relkind IN ('r', 'p')
+        AND a.attnum > 0
+        AND NOT a.attisdropped
+        AND a.attstorage <> 'p'
+"""

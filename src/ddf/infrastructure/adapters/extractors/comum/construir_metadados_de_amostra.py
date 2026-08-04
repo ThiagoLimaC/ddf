@@ -7,6 +7,7 @@ from ddf.domain.model.common.requisicao_de_amostragem import (
     AmostragemIntegral,
     AmostragemProbabilistica,
     RequisicaoDeAmostragem,
+    RequisicaoPorFaixa,
 )
 from ddf.domain.shared.aviso import Aviso
 
@@ -19,15 +20,20 @@ def construir_metadados_de_amostra(
     origem: str,
     causa_provavel: str,
     identificador_tabela: str,
+    descricao_vies_por_faixa: str = "",
 ) -> tuple[MetadadosDeAmostra, list[Aviso]]:
     """Monta MetadadosDeAmostra e emite os Avisos de custo associados à estratégia.
 
     Dois Avisos independentes, nenhum fatal: (1) toda vez que a requisição é
     AmostragemProbabilistica, documenta que a leitura varre a tabela inteira
     independente do percentual pedido — limitação estrutural da estratégia
-    (ver docstring de `PercentualDeLinhas`), não uma condição de erro; (2)
-    quando a amostra excede `total_linhas`, sintoma de estimativa de
-    catálogo desatualizada. Ambos citam `identificador_tabela`, mesmo padrão
+    (ver docstring de `PercentualDeLinhas`), não uma condição de erro; (1b)
+    toda vez que a requisição é RequisicaoPorFaixa, documenta o viés de
+    cluster do mecanismo — texto próprio de cada Extrator concreto
+    (`descricao_vies_por_faixa`), já que o mecanismo (bloco físico no
+    Postgres, faixas de chave primária no MariaDB) difere entre motores;
+    (2) quando a amostra excede `total_linhas`, sintoma de estimativa de
+    catálogo desatualizada. Todos citam `identificador_tabela`, mesmo padrão
     de `construir_colunas_fk` — sem isso, os exemplos que `avisos.py` mostra
     antes de colapsar por contagem ficam anônimos, sem dizer qual tabela
     específica paga o custo.
@@ -35,8 +41,9 @@ def construir_metadados_de_amostra(
     Args:
         nome: identificador da EstrategiaDeAmostragem (MetadadosDeAmostra.estrategia).
         requisicao: o que foi efetivamente pedido ao Extrator — decide se
-            `percentual`/`seed` são registrados (AmostragemProbabilistica) ou
-            ficam None (AmostragemIntegral, sem política probabilística).
+            `percentual`/`seed` são registrados (AmostragemProbabilistica e
+            RequisicaoPorFaixa) ou ficam None (AmostragemIntegral, sem
+            política probabilística).
         tamanho_amostra: nº de linhas de fato lidas na amostra.
         total_linhas: estimativa de catálogo da tabela. Em AmostragemIntegral,
             o chamador já passa `len(amostra)` aqui — a divergência abaixo
@@ -47,6 +54,10 @@ def construir_metadados_de_amostra(
             total_linhas pode estar desatualizado (ex.: "sem ANALYZE
             recente" no Postgres, "sem ANALYZE TABLE recente" no MariaDB).
         identificador_tabela: "escopo.tabela", citado nas mensagens de Aviso.
+        descricao_vies_por_faixa: explicação, específica do motor, do
+            mecanismo de amostragem por faixa e do viés de cluster
+            resultante — obrigatória para todo Extrator que despacha
+            RequisicaoPorFaixa, ignorada nas outras duas requisições.
     """
     avisos: list[Aviso] = []
     match requisicao:
@@ -72,6 +83,21 @@ def construir_metadados_de_amostra(
         case AmostragemIntegral():
             metadados = MetadadosDeAmostra(
                 estrategia=nome, tamanho_amostra=tamanho_amostra
+            )
+        case RequisicaoPorFaixa(percentual=percentual, seed=seed):
+            metadados = MetadadosDeAmostra(
+                estrategia=nome,
+                tamanho_amostra=tamanho_amostra,
+                percentual=percentual,
+                seed=seed,
+            )
+            avisos.append(
+                Aviso(
+                    mensagem=(
+                        f"'{identificador_tabela}': {descricao_vies_por_faixa}"
+                    ),
+                    origem=origem,
+                )
             )
         case _ as nunca:
             assert_never(nunca)

@@ -1,12 +1,13 @@
 """Extrator concreto para bancos MariaDB."""
 
+import logging
+import random
 import threading
 from collections import defaultdict
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any, assert_never
 
-import polars as pl
 import pymysql
 from dbutils.pooled_db import PooledDB
 
@@ -15,6 +16,7 @@ from ddf.domain.model.common.requisicao_de_amostragem import (
     AmostragemIntegral,
     AmostragemProbabilistica,
     RequisicaoDeAmostragem,
+    RequisicaoPorFaixa,
 )
 from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
@@ -29,14 +31,24 @@ from ddf.infrastructure.adapters.extractors.comum.construir_metadados_de_amostra
 from ddf.infrastructure.adapters.extractors.comum.construir_restricoes_fk_compostas import (  # noqa: E501
     construir_restricoes_fk_compostas,
 )
+from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
+    LARGURA_MEDIA_PADRAO_BYTES,
+    calcular_tamanho_lote,
+    deve_usar_streaming,
+    ler_amostra_em_lotes,
+    ler_amostra_fetchall,
+)
 from ddf.infrastructure.adapters.extractors.comum.seed_efetivo import seed_efetivo
 from ddf.infrastructure.adapters.extractors.mariadb._construcao import (
     _agrupar_colunas_json_por_tabela,
     _agrupar_colunas_unicas_por_tabela,
     _colunas_json_de_check_clauses,
     _construir_coluna,
+    _elegibilidade_de_pk_para_faixa,
     _LinhaColuna,
     _MetadadosDoSchema,
+    _PkElegivel,
+    _PkNaoElegivel,
     _promover_booleanos_pela_amostra,
     _quotar_identificador,
 )
@@ -50,6 +62,29 @@ from ddf.infrastructure.adapters.extractors.mariadb._queries import (
     _LISTAR_TABELAS_SQL,
     _TOTAL_LINHAS_SQL,
 )
+
+_K_FAIXAS_MINIMO = 10
+_K_FAIXAS_MAXIMO = 50
+_LINHAS_POR_FAIXA_ADICIONAL = 100_000
+
+
+def _k_faixas_para(total_linhas: int) -> int:
+    """Nº de faixas contíguas sorteadas independentemente em RequisicaoPorFaixa.
+
+    Aproxima o comportamento de blocos espalhados do TABLESAMPLE SYSTEM do
+    Postgres sem exigir uma consulta por linha amostrada (inviável em lote).
+    Fixo em `_K_FAIXAS_MINIMO` até 1M linhas, cresce depois disso: K
+    constante em tabelas muito grandes concentra a amostra em poucos blocos
+    de PK, sujeito a viés de correlação PK↔atributo (ex.: autoincrement
+    correlacionado a data de inserção) mesmo com faixas espalhadas.
+    """
+    return min(
+        _K_FAIXAS_MAXIMO,
+        max(_K_FAIXAS_MINIMO, total_linhas // _LINHAS_POR_FAIXA_ADICIONAL),
+    )
+
+
+_logger = logging.getLogger(__name__)
 
 
 class ExtratorMariaDB:
@@ -261,11 +296,19 @@ class ExtratorMariaDB:
 
                     cursor.execute(_TOTAL_LINHAS_SQL, (escopo,))
                     total_linhas_por_tabela: dict[str, int] = {}
-                    for nome_tabela, linhas_estimadas in cursor.fetchall():
+                    largura_media_por_tabela: dict[str, int] = {}
+                    for nome_tabela, linhas_estimadas, largura_media in (
+                        cursor.fetchall()
+                    ):
                         total_linhas_por_tabela[nome_tabela] = (
                             max(0, round(linhas_estimadas))
                             if linhas_estimadas is not None
                             else 0
+                        )
+                        largura_media_por_tabela[nome_tabela] = (
+                            int(largura_media)
+                            if largura_media
+                            else LARGURA_MEDIA_PADRAO_BYTES
                         )
 
             metadados = _MetadadosDoSchema(
@@ -277,6 +320,7 @@ class ExtratorMariaDB:
                 restricoes_fk_compostas_por_tabela=restricoes_fk_compostas_por_tabela,
                 colunas_json_por_tabela=colunas_json_por_tabela,
                 total_linhas_por_tabela=total_linhas_por_tabela,
+                largura_media_por_tabela=largura_media_por_tabela,
             )
             self._cache_schemas[escopo] = metadados
             return Sucesso(metadados)
@@ -334,16 +378,41 @@ class ExtratorMariaDB:
                 )
             )
 
+        largura_media_bytes = metadados.largura_media_por_tabela.get(
+            tabela, LARGURA_MEDIA_PADRAO_BYTES
+        )
+        usa_streaming = deve_usar_streaming(total_linhas, largura_media_bytes)
+        if usa_streaming:
+            _logger.info(
+                "'%s.%s': streaming ativado (~%d linhas, ~%d bytes/linha) — "
+                "SSCursor lê em lotes em vez de fetchall().",
+                escopo,
+                tabela,
+                total_linhas,
+                largura_media_bytes,
+            )
         with self._conexao() as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
             conexao = resultado_conexao.valor
-            with conexao.cursor() as cursor:
+            cursor_bruto = (
+                conexao.cursor(pymysql.cursors.SSCursor)
+                if usa_streaming
+                else conexao.cursor()
+            )
+            # `with` garante `cursor.close()` determinístico antes de
+            # qualquer exceção propagar — SSCursor não drenado, deixado
+            # para o GC fechar via `__del__`, gera AttributeError
+            # silenciosamente engolido (achado do engenheiro de dados),
+            # mascarando a causa raiz real do erro.
+            with cursor_bruto as cursor:
                 requisicao = estrategia.requisicao
                 requisicao_efetiva: RequisicaoDeAmostragem
                 identificador_tabela = (
                     f"{_quotar_identificador(escopo)}.{_quotar_identificador(tabela)}"
                 )
+                n_pedido_por_faixa: int | None = None
+                k_faixas = _k_faixas_para(total_linhas)
                 match requisicao:
                     case AmostragemProbabilistica(percentual=percentual, seed=seed):
                         seed_usado = seed_efetivo(seed)
@@ -357,23 +426,103 @@ class ExtratorMariaDB:
                     case AmostragemIntegral():
                         requisicao_efetiva = requisicao
                         cursor.execute(f"SELECT * FROM {identificador_tabela}")
+                    case RequisicaoPorFaixa(percentual=percentual, seed=seed):
+                        seed_usado = seed_efetivo(seed)
+                        elegibilidade = _elegibilidade_de_pk_para_faixa(
+                            colunas_pk, linhas_colunas
+                        )
+                        match elegibilidade:
+                            case _PkElegivel(nome_coluna=nome_pk):
+                                requisicao_efetiva = RequisicaoPorFaixa(
+                                    percentual=percentual, seed=seed_usado
+                                )
+                                identificador_pk = _quotar_identificador(nome_pk)
+                                cursor.execute(
+                                    f"SELECT MAX({identificador_pk}) "
+                                    f"FROM {identificador_tabela}"
+                                )
+                                linha_max = cursor.fetchone()
+                                max_pk = linha_max[0] if linha_max else None
+                                n_pedido_por_faixa = max(
+                                    1, round(total_linhas * percentual / 100)
+                                )
+                                linhas_por_faixa = max(
+                                    1, n_pedido_por_faixa // k_faixas
+                                )
+                                # Corte sorteado em Python, não via RAND()
+                                # no SQL: dentro de um WHERE, RAND(seed) do
+                                # MariaDB é reavaliado a cada linha varrida
+                                # pelo motor, não uma vez só — usá-lo ali
+                                # faria o corte derivar para o início do
+                                # intervalo de PK, independente do seed.
+                                rng_faixas = random.Random(seed_usado)
+                                subconsultas: list[str] = []
+                                parametros: list[object] = []
+                                for _ in range(k_faixas):
+                                    cutoff = (
+                                        rng_faixas.randint(0, max_pk)
+                                        if max_pk is not None
+                                        else 0
+                                    )
+                                    subconsultas.append(
+                                        f"(SELECT * FROM {identificador_tabela} "
+                                        f"WHERE {identificador_pk} >= %s "
+                                        f"ORDER BY {identificador_pk} LIMIT %s)"
+                                    )
+                                    parametros.extend([cutoff, linhas_por_faixa])
+                                consulta_amostra = " UNION ALL ".join(subconsultas)
+                                cursor.execute(consulta_amostra, tuple(parametros))
+                            case _PkNaoElegivel(motivo=motivo):
+                                requisicao_efetiva = AmostragemProbabilistica(
+                                    percentual=percentual, seed=seed_usado
+                                )
+                                avisos.append(
+                                    Aviso(
+                                        mensagem=(
+                                            f"'{identificador_tabela}': amostragem "
+                                            "por faixa caiu para o mecanismo "
+                                            f"probabilístico padrão ({motivo}) — "
+                                            "sem chave primária de coluna única e "
+                                            "tipo inteiro, não há como cortar a "
+                                            "tabela em faixas contíguas."
+                                        ),
+                                        origem="ExtratorMariaDB",
+                                    )
+                                )
+                                consulta_amostra = (
+                                    f"SELECT * FROM {identificador_tabela} "
+                                    "WHERE RAND(%s) <= %s"
+                                )
+                                cursor.execute(
+                                    consulta_amostra, (seed_usado, percentual / 100)
+                                )
+                            case _ as nunca_elegibilidade:
+                                assert_never(nunca_elegibilidade)
                     case _ as nunca:
                         assert_never(nunca)
 
-                nomes_colunas: list[str] = []
-                for coluna_amostra in cursor.description or ():
-                    nomes_colunas.append(coluna_amostra[0])
-                linhas_amostra = cursor.fetchall()
-                amostra = (
-                    pl.DataFrame(
-                        linhas_amostra,
-                        schema=nomes_colunas,
-                        orient="row",
-                        infer_schema_length=None,
+                if usa_streaming:
+                    tamanho_lote = calcular_tamanho_lote(largura_media_bytes)
+                    amostra = ler_amostra_em_lotes(cursor, tamanho_lote)
+                else:
+                    amostra = ler_amostra_fetchall(cursor)
+
+                if (
+                    n_pedido_por_faixa is not None
+                    and len(amostra) < 0.5 * n_pedido_por_faixa
+                ):
+                    avisos.append(
+                        Aviso(
+                            mensagem=(
+                                f"'{identificador_tabela}': amostra por faixa "
+                                f"trouxe {len(amostra)} linhas, bem menos que as "
+                                f"{n_pedido_por_faixa} pedidas — sintoma de gaps "
+                                "densos na chave primária logo após os pontos "
+                                "sorteados."
+                            ),
+                            origem="ExtratorMariaDB",
+                        )
                     )
-                    if linhas_amostra
-                    else pl.DataFrame(schema=nomes_colunas)
-                )
 
                 colunas = _promover_booleanos_pela_amostra(
                     colunas, amostra, candidatos_booleanos
@@ -382,19 +531,38 @@ class ExtratorMariaDB:
             match requisicao_efetiva:
                 case AmostragemIntegral():
                     total_linhas_final = len(amostra)
+                    nome_efetivo = "tabela_inteira"
                 case AmostragemProbabilistica():
                     total_linhas_final = total_linhas
+                    nome_efetivo = "percentual_de_linhas"
+                case RequisicaoPorFaixa():
+                    total_linhas_final = total_linhas
+                    nome_efetivo = "amostragem_por_faixa"
                 case _ as nunca:
                     assert_never(nunca)
 
             metadados_amostra, avisos_amostra = construir_metadados_de_amostra(
-                nome=estrategia.nome,
+                # nome_efetivo, não estrategia.nome: no fallback de PK não
+                # elegível, requisicao_efetiva vira AmostragemProbabilistica
+                # mesmo com estrategia="amostragem_por_faixa" escolhida no
+                # wizard — o mecanismo real de leitura é o que importa aqui,
+                # não a escolha original do usuário.
+                nome=nome_efetivo,
                 requisicao=requisicao_efetiva,
                 tamanho_amostra=len(amostra),
                 total_linhas=total_linhas_final,
                 origem="ExtratorMariaDB",
                 causa_provavel="sem ANALYZE TABLE recente",
                 identificador_tabela=f"{escopo}.{tabela}",
+                descricao_vies_por_faixa=(
+                    f"amostragem por {k_faixas} faixas contíguas de chave "
+                    "primária, não por bloco físico de disco — pode "
+                    "distorcer percentual_nulo/percentual_unico/"
+                    "valores_frequentes em tabelas com padrão de inserção "
+                    "em lote. Uma amostra verdadeiramente aleatória por PK "
+                    "exigiria uma consulta por linha amostrada, custo "
+                    "inviável em lote."
+                ),
             )
             avisos.extend(avisos_amostra)
             return Sucesso(

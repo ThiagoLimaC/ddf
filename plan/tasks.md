@@ -214,6 +214,83 @@
   - `SobrescritaDeTabela._calcular_hash_estrutural` passou a incluir os dois
     campos novos — sem isso, mudança de NOT NULL/UNIQUE no banco não
     disparava aviso de estrutura alterada
+- [x] Reabertura de escopo da #114 — streaming via cursor server-side +
+      `AmostragemPorFaixa` (opt-in), motivada por RSS de pico ~900MB
+      observado numa extração real (tabela outlier de 4,1M linhas/778MB):
+  - `RequisicaoPorFaixa` (3º membro de `RequisicaoDeAmostragem`) +
+    `AmostragemPorFaixa(EstrategiaDeAmostragem)`, opt-in — nunca troca
+    silenciosa do default. `ExtratorPostgres` via `TABLESAMPLE SYSTEM ...
+    REPEATABLE` (amostra por página física); `ExtratorMariaDB` via `K`
+    faixas contíguas de PK sorteadas independentemente (sem PK inteira de
+    coluna única, cai no fallback probabilístico já existente, com Aviso
+    explicando o motivo). Todo Extrator emite Aviso de viés de cluster
+    incondicional, texto próprio por motor.
+  - `extractors/comum/ler_amostra_em_lotes.py` (um arquivo, três funções
+    formando um único fluxo de decisão): `deve_usar_streaming` (limiar de
+    linhas OU bytes estimados), `calcular_tamanho_lote` (bytes → nº de
+    linhas por lote, com clamps), `ler_amostra_em_lotes` (`fetchmany` em
+    lotes + `pl.concat`).
+  - `ExtratorPostgres`: `_conexao(autocommit: bool = True)`, cursor
+    nomeado + `itersize` acima do limiar, `commit()` explícito antes do
+    `putconn`. `ExtratorMariaDB`: `SSCursor` acima do mesmo limiar,
+    fechamento determinístico garantido pelo `with` já existente.
+  - Largura média de linha por tabela: `pg_stats.avg_width` (Postgres,
+    query nova agregada por schema) / `avg_row_length` (MariaDB, zero
+    query nova, já lido junto de `table_rows`) — `LARGURA_MEDIA_PADRAO_
+    BYTES = 200` como fallback quando o catálogo não tem estatística.
+  - **2 bugs reais encontrados e corrigidos, nenhum reproduzível com
+    dado sintético de teste:** (1) cursor nomeado do psycopg2 só popula
+    `cursor.description` depois do 1º `fetchmany` — lido antes disso,
+    devolvia nomes de coluna vazios silenciosamente; corrigido lendo
+    `description` de dentro do loop, depois de cada fetch. (2)
+    `pl.concat` estrito quebrava (`SchemaError`) quando um lote saía
+    inteiro `NULL` numa coluna nulável (infere dtype `Null`) e o lote
+    seguinte trazia um valor real pra essa coluna — corrigido com
+    `pl.concat(lotes, how="vertical_relaxed")`. O 2º só apareceu ao
+    rodar contra uma tabela de produção real (`token_acesso`), depois
+    dos testes de integração via `testcontainers` já estarem verdes.
+  - Limitação aceita, documentada, não testada: cursor nomeado do
+    Postgres represa `VACUUM` no banco inteiro (não só na tabela lida)
+    enquanto a transação estiver aberta — mitigado pelo gating por
+    limiar, sem teste de carga concorrente de escrita (infraestrutura
+    fora do escopo pragmático da issue).
+  - Benchmark versionado (`test_extrator_postgres_benchmark_
+    streaming.py`, marcado `benchmark`): não mostrou redução de RSS
+    mensurável na escala sintética (1M linhas — a baseline fixa do
+    processo domina), mas confirmado na prática contra o schema real que
+    motivou a issue. Limiares de streaming (`100.000` linhas / `100MB`)
+    e `K` faixas do MariaDB (`10`) seguem candidatos, não calibrados a
+    um valor final.
+- [x] Correções pós-banca de revisão da #114 (pré-PR) — arquiteto +
+      engenheiro de dados + po-revisor revisaram o diff final em modo
+      somente-leitura; 2 achados bloqueantes do engenheiro de dados,
+      ambos validados empiricamente contra Postgres 16/MariaDB 11 reais
+      (não hipóteses). Checklist completo com achados e correções em
+      `plan/registry-plan/issue-114-streaming-e-amostragem-por-faixa.md`.
+      Resumo:
+  - **[Bloqueante] MariaDB:** `RAND(seed)` dentro de um `WHERE` é
+    reavaliado por linha pelo motor, não sorteia um corte fixo — a
+    amostra por faixa colapsava pros PKs mais baixos, independente do
+    seed. Corrigido sorteando o corte em Python (`random.Random`), fixo
+    por faixa, embutido como parâmetro literal.
+  - **[Bloqueante] Postgres:** `pg_stats.avg_width` mede tamanho
+    comprimido por TOAST, não o tamanho real transferido — subestimava
+    a largura de colunas `text`/`json`/`bytea` em até ~85x, gerando
+    lotes de streaming superestimados. Corrigido com uma sonda física
+    (`TABLESAMPLE SYSTEM` + `octet_length`) só para tabelas com coluna
+    TOAST-ável.
+  - `MetadadosDeAmostra.estrategia` corrigido para refletir o mecanismo
+    efetivo (não a Estrategia escolhida) no fallback do MariaDB;
+    `pl.concat(how="vertical_relaxed")` restrito ao caso `Null`↔tipo-real
+    (qualquer outra divergência de dtype entre lotes propaga erro); log
+    estruturado (INFO) quando o streaming é ativado para uma tabela;
+    `ler_amostra_fetchall` extraído como função irmã compartilhada
+    (remove duplicação entre os dois Extratores no caminho não-streaming);
+    `LARGURA_MEDIA_PADRAO_BYTES` unificado em `ler_amostra_em_lotes.py`.
+  - Fora de escopo, registrado como follow-up: calibração formal dos
+    limiares de streaming/`K` faixas (depende da correção de largura
+    acima ter sido feita primeiro), checagem de PK monotônica na
+    elegibilidade de faixa, teste de carga concorrente de escrita.
 
 ## 4. Sobrescrita (ACL Extraction → Curation) e OrquestradorParalelo
 
