@@ -255,6 +255,24 @@ _SETUP_SQL = """
     ANALYZE polimorfismo.clientes;
     ANALYZE polimorfismo.fornecedores;
     ANALYZE polimorfismo.movimentos;
+
+    -- Coluna TEXT altamente compressível (achado da banca de revisão
+    -- pós-#114): pg_stats.avg_width reflete o tamanho armazenado após
+    -- compressão TOAST, não o tamanho real que o driver recebe ao ler a
+    -- linha — repeat('a', 50000) comprime pra uma fração do tamanho real,
+    -- prova que a sonda física (TABLESAMPLE + octet_length) mede o valor
+    -- real, não o comprimido.
+    CREATE SCHEMA largura_real;
+
+    CREATE TABLE largura_real.tabela_larga (
+        id SERIAL PRIMARY KEY,
+        conteudo TEXT NOT NULL
+    );
+
+    INSERT INTO largura_real.tabela_larga (conteudo)
+        SELECT repeat('a', 50000) FROM generate_series(1, 50);
+
+    ANALYZE largura_real.tabela_larga;
 """
 
 

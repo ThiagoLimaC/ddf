@@ -130,6 +130,7 @@ def test_listar_escopos_retorna_escopos_semeados(
             "arrays",
             "colisao_fk",
             "geografia",
+            "largura_real",
             "pessoa",
             "polimorfismo",
             "public",
@@ -683,3 +684,31 @@ def test_streaming_produz_o_mesmo_resultado_que_sem_streaming(
     ids_sem_streaming = sorted(resultado_sem_streaming.valor.amostra["id"].to_list())
     ids_com_streaming = sorted(resultado_com_streaming.valor.amostra["id"].to_list())
     assert ids_com_streaming == ids_sem_streaming
+
+
+def test_largura_media_real_mede_tamanho_apos_descompressao_toast(
+    dsn: str, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Sonda física mede o tamanho real da coluna TEXT, não o comprimido por TOAST.
+
+    'conteudo' é repeat('a', 50000) por linha — altamente compressível, então
+    pg_stats.avg_width subestima bastante o tamanho real recebido pelo
+    driver. A sonda usa octet_length sobre uma amostra física (TABLESAMPLE),
+    então deve refletir o tamanho real, não o comprimido.
+    """
+    extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+    resultado_metadados = extrator._obter_metadados_schema("largura_real")
+    assert isinstance(resultado_metadados, Sucesso)
+    metadados = resultado_metadados.valor
+    linhas_colunas = metadados.colunas_por_tabela["tabela_larga"]
+    total_linhas = metadados.total_linhas_por_tabela["tabela_larga"]
+    largura_catalogo = metadados.largura_media_por_tabela["tabela_larga"]
+
+    resultado_largura_real = extrator._largura_media_real(
+        "largura_real", "tabela_larga", linhas_colunas, total_linhas
+    )
+
+    assert isinstance(resultado_largura_real, Sucesso)
+    largura_real = resultado_largura_real.valor
+    assert largura_real > largura_catalogo * 10
+    assert largura_real > 40_000

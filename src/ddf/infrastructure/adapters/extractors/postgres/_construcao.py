@@ -29,6 +29,23 @@ class _LinhaColuna(NamedTuple):
     is_nullable: str
 
 
+_TIPOS_TOAST_AVEIS = frozenset(
+    {"text", "varchar", "bpchar", "json", "jsonb", "bytea", "xml"}
+)
+
+
+def _tabela_tem_coluna_toast_avel(linhas_colunas: list[_LinhaColuna]) -> bool:
+    """Indica se a tabela tem alguma coluna de tipo sujeito a compressão TOAST.
+
+    Colunas desses tipos (`text`/`varchar`/`bpchar`/`json`/`jsonb`/`bytea`/
+    `xml`) podem ser armazenadas comprimidas — `pg_stats.avg_width` reflete
+    o tamanho armazenado, não o tamanho real que o driver recebe ao ler a
+    linha. Tipos de largura fixa (numéricos, datas, booleanos) não sofrem
+    TOAST, então a estimativa de catálogo já é confiável para eles.
+    """
+    return any(linha.udt_name in _TIPOS_TOAST_AVEIS for linha in linhas_colunas)
+
+
 class _MetadadosDoSchema(NamedTuple):
     """Metadados de catálogo de todas as tabelas de um schema, lidos de uma vez.
 

@@ -132,7 +132,11 @@ _RESTRICOES_UNICAS_SCHEMA_SQL = """
 # tabela nunca analisada simplesmente não aparece aqui (sem linha, não
 # NULL); quem lê trata a ausência com um fallback conservador
 # (LARGURA_MEDIA_PADRAO_BYTES), não uma exceção. Soma por tabela: estimativa
-# de largura de linha completa, não só de uma coluna.
+# de largura de linha completa, não só de uma coluna. Reflete o tamanho
+# armazenado no disco (após compressão TOAST), não o tamanho que o driver
+# recebe ao ler a linha — confiável só para colunas de tipo de largura fixa;
+# tabelas com coluna comprimível (text/json/jsonb/bytea/varchar/xml) usam a
+# sonda física de `ExtratorPostgres._largura_media_real` em vez deste valor.
 _LARGURA_MEDIA_LINHA_SCHEMA_SQL = """
     SELECT tablename, SUM(avg_width)
     FROM pg_stats

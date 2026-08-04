@@ -148,6 +148,10 @@ class TestFeliz:
             [("pedidos", 200)],  # largura_media (schema inteiro)
             [(1, "ana", 10), (2, "bia", 20)],  # amostra (só desta tabela)
         ]
+        # "nome" é varchar (TOAST-ável) — extrair_tabela sonda a largura real
+        # via TABLESAMPLE antes de decidir streaming, em vez de usar só o
+        # avg_width de catálogo.
+        cursor_fake.fetchone.return_value = (123.0,)
         cursor_fake.description = [
             SimpleNamespace(name="id"),
             SimpleNamespace(name="nome"),
@@ -183,8 +187,9 @@ class TestFeliz:
         ]
         assert tabela.metadados_amostra.estrategia == "percentual_de_linhas"
         assert tabela.metadados_amostra.tamanho_amostra == 2
-        # 2 conexões: 1 pra popular o cache de metadados do schema, 1 pra amostra.
-        assert pool_classe_fake.return_value.putconn.call_count == 2
+        # 3 conexões: 1 pra popular o cache de metadados do schema, 1 pra
+        # sondar a largura real (coluna "nome" é TOAST-ável), 1 pra amostra.
+        assert pool_classe_fake.return_value.putconn.call_count == 3
         pool_classe_fake.return_value.putconn.assert_called_with(conexao_fake)
 
     def test_segunda_extracao_no_mesmo_schema_reaproveita_cache_de_metadados(

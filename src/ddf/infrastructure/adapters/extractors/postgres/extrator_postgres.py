@@ -43,6 +43,7 @@ from ddf.infrastructure.adapters.extractors.postgres._construcao import (
     _construir_coluna,
     _LinhaColuna,
     _MetadadosDoSchema,
+    _tabela_tem_coluna_toast_avel,
 )
 from ddf.infrastructure.adapters.extractors.postgres._queries import (
     _CHAVES_ESTRANGEIRAS_SCHEMA_SQL,
@@ -60,6 +61,11 @@ from ddf.infrastructure.adapters.extractors.postgres._queries import (
 def _nomes_colunas(cursor: cursor_postgres) -> list[str]:
     """Extrai os nomes de coluna de `cursor.description`, na ordem do SELECT."""
     return [coluna.name for coluna in cursor.description or ()]
+
+
+# Linhas-alvo da sonda de largura real (TABLESAMPLE) — bounded pelo LIMIT,
+# não pelo tamanho da tabela.
+_LINHAS_AMOSTRA_LARGURA_REAL = 500
 
 
 class ExtratorPostgres:
@@ -291,6 +297,57 @@ class ExtratorPostgres:
             self._cache_schemas[schema] = metadados
             return Sucesso(metadados)
 
+    def _largura_media_real(
+        self,
+        schema: str,
+        tabela: str,
+        linhas_colunas: list[_LinhaColuna],
+        total_linhas: int,
+    ) -> Resultado[int]:
+        """Mede a largura média real de linha lendo uma amostra física pequena.
+
+        `pg_stats.avg_width` reflete o tamanho armazenado após compressão
+        TOAST, não o tamanho que o driver recebe ao ler a linha — para
+        colunas comprimíveis, isso pode subestimar bastante a largura real.
+        `octet_length(coluna::text)` força a descompressão; `TABLESAMPLE
+        SYSTEM` limita o custo da leitura ao tamanho da amostra (mesmo
+        mecanismo de `AmostragemPorFaixa`), não ao tamanho da tabela.
+        """
+        percentual_amostra = min(
+            100.0,
+            max(0.01, (_LINHAS_AMOSTRA_LARGURA_REAL / total_linhas) * 100),
+        )
+        with self._conexao() as resultado_conexao:
+            if isinstance(resultado_conexao, Falha):
+                return resultado_conexao
+            conexao = resultado_conexao.valor
+            expressoes_coluna = [
+                sql.SQL("COALESCE(octet_length({}::text), 0)").format(
+                    sql.Identifier(linha.nome)
+                )
+                for linha in linhas_colunas
+            ]
+            soma_colunas = sql.SQL(" + ").join(expressoes_coluna)
+            consulta = sql.SQL(
+                "SELECT AVG(largura) FROM ("
+                "SELECT ({}) AS largura FROM {}.{} "
+                "TABLESAMPLE SYSTEM ({}) LIMIT {}"
+                ") amostra_largura"
+            ).format(
+                soma_colunas,
+                sql.Identifier(schema),
+                sql.Identifier(tabela),
+                sql.Literal(percentual_amostra),
+                sql.Literal(_LINHAS_AMOSTRA_LARGURA_REAL),
+            )
+            with conexao.cursor() as cursor:
+                cursor.execute(consulta)
+                linha_resultado = cursor.fetchone()
+                largura_media = linha_resultado[0] if linha_resultado else None
+        if largura_media is None:
+            return Sucesso(LARGURA_MEDIA_PADRAO_BYTES)
+        return Sucesso(max(1, int(largura_media)))
+
     def extrair_tabela(self, schema: str, tabela: str) -> Resultado[TabelaExtraida]:
         """Extrai estrutura, amostra e metadados de uma tabela específica."""
         resultado_estrategia = self._configuracao.estrategia_obrigatoria()
@@ -338,6 +395,13 @@ class ExtratorPostgres:
         largura_media_bytes = metadados.largura_media_por_tabela.get(
             tabela, LARGURA_MEDIA_PADRAO_BYTES
         )
+        if total_linhas > 0 and _tabela_tem_coluna_toast_avel(linhas_colunas):
+            resultado_largura = self._largura_media_real(
+                schema, tabela, linhas_colunas, total_linhas
+            )
+            if isinstance(resultado_largura, Falha):
+                return resultado_largura
+            largura_media_bytes = resultado_largura.valor
         usa_streaming = deve_usar_streaming(total_linhas, largura_media_bytes)
         with self._conexao(autocommit=not usa_streaming) as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
