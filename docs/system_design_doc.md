@@ -135,11 +135,15 @@ Controla a query de amostragem por tabela. Plugável via
   `percentual`, não com `total_linhas` (resolve a limitação de custo
   abaixo, mas troca por viés de cluster). `ExtratorPostgres` usa
   `TABLESAMPLE SYSTEM ... REPEATABLE` (amostra por página física);
-  `ExtratorMariaDB` usa `K` faixas contíguas de chave primária sorteadas
-  independentemente (sem PK inteira de coluna única, cai no fallback
-  probabilístico de `PercentualDeLinhas`, com Aviso explicando o motivo).
-  Todo Extrator emite um `Aviso` de viés em toda extração que a usa —
-  nunca é o default, sempre opt-in explícito no wizard.
+  `ExtratorMariaDB` usa `K` faixas contíguas de chave primária, cada uma
+  com corte sorteado em **Python** (não `RAND()` no SQL — reavaliado por
+  linha pelo motor, colapsaria a amostra pro início do intervalo de PK,
+  achado bloqueante da banca de revisão pós-#114) — sem PK inteira de
+  coluna única, cai no fallback probabilístico de `PercentualDeLinhas`,
+  com Aviso explicando o motivo. Todo Extrator emite um `Aviso` de viés em
+  toda extração que a usa — nunca é o default, sempre opt-in explícito no
+  wizard. `MetadadosDeAmostra.estrategia` reflete o mecanismo efetivamente
+  usado (inclusive no fallback), não a Estrategia escolhida no wizard.
 - O Port expõe `requisicao: RequisicaoDeAmostragem` (união fechada
   `AmostragemProbabilistica | AmostragemIntegral | RequisicaoPorFaixa`),
   não mais `percentual` solto — ver `low_level_design.md` para o
@@ -164,7 +168,18 @@ via cursor nomeado (Postgres) / `SSCursor` (MariaDB), em vez de
 `fetchall()` direto — mitiga o pico de memória client-side que motivou a
 issue (`cursor.execute()` sem cursor nomeado/`SSCursor` materializa o
 resultset inteiro antes de qualquer `fetch`, comportamento padrão dos
-dois drivers). Limitação aceita: cursor nomeado do Postgres sustenta uma
+dois drivers). A largura média de linha que decide o limiar e o tamanho
+do lote usa `pg_stats.avg_width`/`avg_row_length` de catálogo por padrão,
+mas troca por uma sonda física (`TABLESAMPLE SYSTEM` + `octet_length`)
+para tabelas com alguma coluna sujeita a compressão TOAST — o valor de
+catálogo reflete o tamanho após compressão, não o tamanho real recebido
+pelo driver. A detecção de coluna comprimível lê `pg_attribute.attstorage`
+direto do catálogo (não uma lista fixa de nomes de tipo), cobrindo
+arrays/domains/extensões sem precisar listar cada um. Ativação do
+streaming é logada (nível INFO); o wizard configura um handler pro
+logger `"ddf"` no início da execução (`cli/wizard.py`), então a mensagem
+aparece no terminal por padrão, sem configuração adicional do operador.
+Limitação aceita: cursor nomeado do Postgres sustenta uma
 transação aberta pela duração da leitura, o que represa `VACUUM` no banco
 inteiro (não só na tabela lida) enquanto durar — mitigado pelo gating por
 limiar (só tabelas grandes pagam esse custo), não eliminado; sem teste de

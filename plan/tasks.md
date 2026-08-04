@@ -261,6 +261,36 @@
     motivou a issue. Limiares de streaming (`100.000` linhas / `100MB`)
     e `K` faixas do MariaDB (`10`) seguem candidatos, não calibrados a
     um valor final.
+- [x] Correções pós-banca de revisão da #114 (pré-PR) — arquiteto +
+      engenheiro de dados + po-revisor revisaram o diff final em modo
+      somente-leitura; 2 achados bloqueantes do engenheiro de dados,
+      ambos validados empiricamente contra Postgres 16/MariaDB 11 reais
+      (não hipóteses). Checklist completo com achados e correções em
+      `plan/registry-plan/issue-114-streaming-e-amostragem-por-faixa.md`.
+      Resumo:
+  - **[Bloqueante] MariaDB:** `RAND(seed)` dentro de um `WHERE` é
+    reavaliado por linha pelo motor, não sorteia um corte fixo — a
+    amostra por faixa colapsava pros PKs mais baixos, independente do
+    seed. Corrigido sorteando o corte em Python (`random.Random`), fixo
+    por faixa, embutido como parâmetro literal.
+  - **[Bloqueante] Postgres:** `pg_stats.avg_width` mede tamanho
+    comprimido por TOAST, não o tamanho real transferido — subestimava
+    a largura de colunas `text`/`json`/`bytea` em até ~85x, gerando
+    lotes de streaming superestimados. Corrigido com uma sonda física
+    (`TABLESAMPLE SYSTEM` + `octet_length`) só para tabelas com coluna
+    TOAST-ável.
+  - `MetadadosDeAmostra.estrategia` corrigido para refletir o mecanismo
+    efetivo (não a Estrategia escolhida) no fallback do MariaDB;
+    `pl.concat(how="vertical_relaxed")` restrito ao caso `Null`↔tipo-real
+    (qualquer outra divergência de dtype entre lotes propaga erro); log
+    estruturado (INFO) quando o streaming é ativado para uma tabela;
+    `ler_amostra_fetchall` extraído como função irmã compartilhada
+    (remove duplicação entre os dois Extratores no caminho não-streaming);
+    `LARGURA_MEDIA_PADRAO_BYTES` unificado em `ler_amostra_em_lotes.py`.
+  - Fora de escopo, registrado como follow-up: calibração formal dos
+    limiares de streaming/`K` faixas (depende da correção de largura
+    acima ter sido feita primeiro), checagem de PK monotônica na
+    elegibilidade de faixa, teste de carga concorrente de escrita.
 
 ## 4. Sobrescrita (ACL Extraction → Curation) e OrquestradorParalelo
 

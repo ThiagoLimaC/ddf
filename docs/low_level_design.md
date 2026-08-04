@@ -1006,16 +1006,23 @@ temporal estreita, viés bem mais severo que cluster genérico. Resolução:
 decide o caminho:
 - **PK elegível** (exatamente 1 coluna, tipo `INTEGER`/`BIGINT`): `K=10`
   faixas contíguas menores (candidato, a calibrar pelo benchmark), cada uma
-  `WHERE pk >= FLOOR(RAND(seed_k) * max_pk) ORDER BY pk LIMIT n/K`, com
-  `seed_k = seed_usado + k` (reprodutível) e `max_pk` lido uma vez por
-  tabela (`SELECT MAX(pk)`, 1 round-trip extra), unidas via `UNION ALL` —
-  aproxima o comportamento de blocos espalhados do `TABLESAMPLE SYSTEM` do
-  Postgres, sem exigir `LIMIT 1` repetido `n` vezes (inviável: um
-  round-trip por linha amostrada). `Aviso` de viés distinto do Postgres —
-  explica o trade-off de origem (custo de amostra verdadeiramente
-  aleatória por PK), não só o efeito. Gaps densos na PK (linhas deletadas)
-  podem fazer a amostra sair bem menor que o pedido — `Aviso` condicional
-  adicional quando `tamanho_amostra < 0.5 * n_pedido`.
+  `WHERE pk >= {cutoff} ORDER BY pk LIMIT n/K`, com `max_pk` lido uma vez
+  por tabela (`SELECT MAX(pk)`, 1 round-trip extra), unidas via `UNION
+  ALL`. O corte (`cutoff`) de cada faixa é sorteado em **Python**
+  (`random.Random(seed_usado)`, um valor fixo por faixa) e embutido como
+  parâmetro literal — não como `RAND()` dentro do `WHERE`: `RAND(seed)`
+  numa cláusula `WHERE` do MariaDB é reavaliado a cada linha varrida pelo
+  motor, não uma vez só (achado bloqueante da banca de revisão pós-#114,
+  validado via `EXPLAIN` contra MariaDB real — `type=index`, nem sequer
+  faz seek de índice), o que faria o corte colapsar sistematicamente para
+  os PKs mais baixos da tabela, independente do seed. Aproxima o
+  comportamento de blocos espalhados do `TABLESAMPLE SYSTEM` do Postgres,
+  sem exigir `LIMIT 1` repetido `n` vezes (inviável: um round-trip por
+  linha amostrada). `Aviso` de viés distinto do Postgres — explica o
+  trade-off de origem (custo de amostra verdadeiramente aleatória por PK),
+  não só o efeito. Gaps densos na PK (linhas deletadas) podem fazer a
+  amostra sair bem menor que o pedido — `Aviso` condicional adicional
+  quando `tamanho_amostra < 0.5 * n_pedido`.
 - **PK não elegível** (composta, ausente, ou não numérica): fallback pra
   `WHERE RAND(seed) <= percentual/100` — o mesmo SQL de
   `AmostragemProbabilistica`. `requisicao_efetiva` vira
@@ -1025,6 +1032,12 @@ decide o caminho:
   o fallback é exatamente esse SQL). O Extrator soma um segundo `Aviso`
   explicando por que caiu no fallback, sem duplicar a mensagem de viés de
   cluster errada (esse caminho não tem mais viés de cluster nenhum).
+  `MetadadosDeAmostra.estrategia` também segue o mecanismo efetivo, não a
+  `Estrategia` escolhida no wizard: um `match requisicao_efetiva` decide
+  `"amostragem_por_faixa"`/`"percentual_de_linhas"`/`"tabela_inteira"` —
+  sem isso, um consumidor que só lê o artefato final (`contexto_de_ia.json`,
+  markdown), sem os `Aviso`s da extração, veria uma tabela lida via
+  `RAND() <= p` marcada como "amostragem_por_faixa".
 
 **`restricoes_unicas` no MariaDB (issue #89):** sem query nova — a mesma
 `_COLUNAS_UNICAS_SQL` (que já agrupa por `constraint_name` desde a #44 para
@@ -1280,30 +1293,82 @@ def ler_amostra_em_lotes(cursor: _CursorComFetchmany, tamanho_lote: int) -> pl.D
 **Limiar de ativação — dois critérios, não um só:** `total_linhas >
 _LIMIAR_LINHAS_STREAMING` OU `total_linhas * largura_media_bytes >
 _LIMIAR_BYTES_STREAMING` (candidatos: 100.000 linhas / 100MB — **não
-valores finais**, calibrados pelo `test_extrator_postgres_benchmark_
-streaming.py`, rodado manualmente). Um limiar de bytes sozinho depende da
+valores finais**, calibração formal ainda pendente, ver "Fora de escopo"
+no registry-plan da issue). Um limiar de bytes sozinho depende da
 estimativa de largura média (`largura_media_por_tabela`, populada via
 `pg_stats.avg_width` no Postgres — query nova, agregada por schema — e
 `information_schema.tables.avg_row_length` no MariaDB — zero query nova,
 já lido junto de `table_rows`), que cai num fallback conservador
-(`LARGURA_MEDIA_PADRAO_BYTES = 200`) quando a tabela nunca foi
-analisada — nesse caso subestimaria o risco. Um limiar de linhas sozinho
-não distingue 1M linhas estreitas (`INTEGER`) de 1M linhas largas
-(`JSON`). Cada critério cobre o ponto cego do outro.
+(`LARGURA_MEDIA_PADRAO_BYTES = 200`, hoje em `ler_amostra_em_lotes.py`,
+compartilhado pelos dois motores) quando a tabela nunca foi analisada —
+nesse caso subestimaria o risco. Um limiar de linhas sozinho não
+distingue 1M linhas estreitas (`INTEGER`) de 1M linhas largas (`JSON`).
+Cada critério cobre o ponto cego do outro.
+
+**`avg_width` mede tamanho comprimido, não o tamanho real transferido —
+sonda física para colunas comprimíveis:** `pg_stats.avg_width` reflete o
+tamanho armazenado **após compressão TOAST**, não o tamanho que o driver
+recebe ao ler a linha — uma coluna `TEXT` de 50.000 bytes reais por linha
+(compressível) reporta `avg_width ≈ 585`, subestimativa de ~85x, o que
+geraria lotes de streaming superestimados exatamente nas tabelas mais
+largas que o streaming existe para proteger. `_COLUNAS_COMPRIMIVEIS_
+SCHEMA_SQL` (`postgres/_queries.py`) identifica, direto no catálogo real
+(`pg_attribute.attstorage <> 'p'`, populando `_MetadadosDoSchema.
+tabelas_com_coluna_comprimivel`), quais tabelas têm alguma coluna sujeita
+a armazenamento fora de linha ou compressão — não uma lista fixa de
+nomes de tipo (`text`/`json`/...), que deixaria escapar arrays
+(`udt_name` prefixado com `_`), domains sobre `text`, extensões
+(`citext`/`hstore`/`tsvector`) e colunas com `STORAGE EXTERNAL` explícito
+(fora de linha sem compressão — `avg_width` reflete só o ponteiro TOAST,
+subestimativa pior que `EXTENDED`/`MAIN`). Só `'p'` (PLAIN, tipos de
+largura fixa) nunca sai de linha, então fica de fora com segurança. Só
+para as tabelas com coluna comprimível,
+`ExtratorPostgres._largura_media_real` mede a largura via
+`AVG(octet_length(coluna::text) + ...)` sobre uma amostra `TABLESAMPLE
+SYSTEM` (mesmo mecanismo de `AmostragemPorFaixa`, custo O(amostra) não
+O(tabela)) — `octet_length` força a descompressão real do valor.
+Tabelas sem coluna comprimível continuam usando o `avg_width` de
+catálogo, sem round-trip extra; tabela vazia ou sonda sem linhas cai no
+mesmo `LARGURA_MEDIA_PADRAO_BYTES`.
 
 **`ler_amostra_em_lotes`:** lê nomes de coluna de `cursor.description`
 **depois** de cada `fetchmany`, nunca antes, nunca como parâmetro — achado
 real contra Postgres (não reproduzível com cursor mockado): cursor
 nomeado do psycopg2 só popula `description` depois do 1º fetch
 (documentado no driver); ler antes disso devolve nomes vazios
-silenciosamente, sem erro. `pl.concat(lotes, how="vertical_relaxed")`,
-não o modo estrito — achado real contra produção (não reproduzível com
-tabela sintética pequena): cada lote infere seu próprio dtype por coluna,
-isolado dos outros; uma coluna nulável cujo 1º lote sai inteiro `NULL`
-infere dtype `Null`, e um lote seguinte com valor real (`Int64` etc.)
-quebraria `pl.concat` estrito por divergência de schema entre lotes —
-`vertical_relaxed` funde pra um supertipo comum (`Null` sempre funde com
-qualquer tipo).
+silenciosamente, sem erro. `pl.concat` funde lotes com `how=
+"vertical_relaxed"` **só quando a única divergência de schema entre
+lotes é `Null` vs. um tipo real** (`_diverge_alem_de_null`) — achado real
+contra produção (não reproduzível com tabela sintética pequena): cada
+lote infere seu próprio dtype por coluna, isolado dos outros; uma coluna
+nulável cujo 1º lote sai inteiro `NULL` infere dtype `Null`, e um lote
+seguinte com valor real (`Int64` etc.) quebraria `pl.concat` estrito por
+divergência de schema entre lotes — `vertical_relaxed` funde pra um
+supertipo comum (`Null` sempre funde com qualquer tipo). Qualquer outra
+divergência (ex. `Int64` num lote, `Utf8` noutro — a mesma coluna da
+mesma query não deveria mudar de tipo entre lotes) usa `how="vertical"`
+(estrito) e deixa o erro propagar, em vez de coagir silenciosamente entre
+tipos incompatíveis — achado da banca de revisão: `vertical_relaxed`
+irrestrito seria um martelo mais amplo que o bug que corrigia.
+
+**Caminho não-streaming — `ler_amostra_fetchall`:** função irmã de
+`ler_amostra_em_lotes` no mesmo módulo, reusada pelos dois Extratores
+quando a tabela fica abaixo do limiar — lê `cursor.description` e
+`cursor.fetchall()` de uma vez. Reuso real (2 call sites), não indireção
+decorativa: os dois Extratores tinham o mesmo bloco duplicado antes desta
+extração.
+
+**Log de ativação:** quando `usa_streaming=True` é decidido para uma
+tabela, os dois Extratores emitem um log estruturado (`logging`, nível
+INFO — tabela, linhas e bytes/linha estimados) — dá visibilidade ao
+operador de que uma transação mais longa está sendo aberta, sem misturar
+mecanismo de leitura (performance) com `MetadadosDeAmostra` (que descreve
+só a política de amostragem). `cli/wizard.py._configurar_logging`
+registra um handler pro logger `"ddf"` no início de `executar()` — sem
+isso, o nível padrão do logger raiz do Python (`WARNING`) descartaria
+qualquer `logger.info(...)` antes de chegar a algum lugar visível; com o
+handler configurado, a mensagem aparece no terminal por padrão, sem
+configuração adicional do operador.
 
 **`ExtratorPostgres`:** `_conexao(autocommit: bool = True)` — `False`
 sustenta a transação que um cursor nomeado (`conexao.cursor(name=...)`)
