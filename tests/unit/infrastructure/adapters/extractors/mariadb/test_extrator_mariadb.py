@@ -13,6 +13,9 @@ from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado
 from ddf.domain.ports.extrator import Extrator
 from ddf.domain.shared.resultado import Falha, Sucesso
+from ddf.infrastructure.adapters.extractors.mariadb._queries import (
+    LARGURA_MEDIA_PADRAO_BYTES,
+)
 from ddf.infrastructure.adapters.extractors.mariadb.extrator_mariadb import (
     ExtratorMariaDB,
 )
@@ -210,7 +213,7 @@ class TestFeliz:
             [],  # FK
             [],  # UNIQUE
             [],  # JSON
-            [("pedidos", 10), ("clientes", 5)],  # total_linhas
+            [("pedidos", 10, 200), ("clientes", 5, 200)],  # total_linhas
             [],  # amostra de "pedidos"
             [],  # amostra de "clientes"
         ]
@@ -336,7 +339,7 @@ class TestFeliz:
                 ("fornecedores", "email", "email"),
             ],  # UNIQUE — mesmo constraint_name ("email"), tabelas diferentes
             [],  # JSON
-            [("clientes", 0), ("fornecedores", 0)],  # total_linhas
+            [("clientes", 0, 200), ("fornecedores", 0, 200)],  # total_linhas
             [],  # amostra de "clientes"
             [],  # amostra de "fornecedores"
         ]
@@ -389,7 +392,7 @@ class TestFeliz:
                 ("produtos", "json_valid(`atributos`)"),
                 ("pedidos", "`quantidade` >= 0"),
             ],  # JSON — mesmo constraint_name ("chk_json") em tabelas diferentes
-            [("produtos", 0), ("pedidos", 0)],  # total_linhas
+            [("produtos", 0, 200), ("pedidos", 0, 200)],  # total_linhas
             [],  # amostra de "produtos"
             [],  # amostra de "pedidos"
         ]
@@ -632,6 +635,60 @@ class TestBorda:
         assert isinstance(resultado, Sucesso)
         assert resultado.valor.total_linhas == 0
         assert resultado.valor.metadados_amostra.tamanho_amostra == 0
+
+    def test_avg_row_length_nulo_usa_largura_media_padrao(
+        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+    ) -> None:
+        """AVG_ROW_LENGTH NULL (tabela nunca analisada) cai no fallback."""
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            *montar_metadados_side_effect(
+                tabela="tabela_nova",
+                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                pks=["id"],
+                total_linhas=10,
+                largura_media=None,
+            ),
+            [],  # amostra
+        ]
+        pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+        extrator = ExtratorMariaDB(
+            host="fake", user="root", password="senha", configuracao=configuracao
+        )
+        resultado = extrator._obter_metadados_schema("vendas")
+
+        assert isinstance(resultado, Sucesso)
+        assert resultado.valor.largura_media_por_tabela == {
+            "tabela_nova": LARGURA_MEDIA_PADRAO_BYTES
+        }
+
+    def test_avg_row_length_real_e_usado_diretamente(
+        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+    ) -> None:
+        """AVG_ROW_LENGTH real do catálogo é usado sem transformação."""
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            *montar_metadados_side_effect(
+                tabela="tabela",
+                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                pks=["id"],
+                total_linhas=10,
+                largura_media=84,
+            ),
+            [],  # amostra
+        ]
+        pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+        extrator = ExtratorMariaDB(
+            host="fake", user="root", password="senha", configuracao=configuracao
+        )
+        resultado = extrator._obter_metadados_schema("vendas")
+
+        assert isinstance(resultado, Sucesso)
+        assert resultado.valor.largura_media_por_tabela == {"tabela": 84}
 
     def test_amostra_maior_que_total_linhas_emite_aviso(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
@@ -1076,7 +1133,7 @@ class TestBorda:
                 [],  # FK
                 [],  # UNIQUE
                 [],  # JSON
-                [("pedidos", 10)],  # total_linhas
+                [("pedidos", 10, 200)],  # total_linhas
             ]
         )
 

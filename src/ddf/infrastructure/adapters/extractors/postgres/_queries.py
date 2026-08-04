@@ -127,3 +127,23 @@ _RESTRICOES_UNICAS_SCHEMA_SQL = """
         AND n.nspname = %s
     ORDER BY t.relname, i.indexrelid, k.ord
 """
+
+# avg_width é preenchido pelo ANALYZE (estatística por coluna, em bytes) —
+# tabela nunca analisada simplesmente não aparece aqui (sem linha, não
+# NULL); quem lê trata a ausência com um fallback conservador
+# (LARGURA_MEDIA_PADRAO_BYTES), não uma exceção. Soma por tabela: estimativa
+# de largura de linha completa, não só de uma coluna.
+_LARGURA_MEDIA_LINHA_SCHEMA_SQL = """
+    SELECT tablename, SUM(avg_width)
+    FROM pg_stats
+    WHERE schemaname = %s
+    GROUP BY tablename
+"""
+
+LARGURA_MEDIA_PADRAO_BYTES = 200
+"""Fallback conservador (bytes/linha) para tabela ausente de `pg_stats`.
+
+Tabela nunca analisada (`ANALYZE`) não aparece em `pg_stats` — ausência de
+estatística não impede o cálculo de tamanho de lote do streaming, só faz a
+estimativa cair nesse valor conservador.
+"""

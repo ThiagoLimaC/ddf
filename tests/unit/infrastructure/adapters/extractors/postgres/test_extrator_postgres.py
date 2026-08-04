@@ -145,6 +145,7 @@ class TestFeliz:
             ],  # FK, schema cross-referenciado (schema inteiro)
             [("pedidos", 5001, "nome")],  # UNIQUE, single-column (schema inteiro)
             [("pedidos", 1000.0)],  # total_linhas (schema inteiro)
+            [("pedidos", 200)],  # largura_media (schema inteiro)
             [(1, "ana", 10), (2, "bia", 20)],  # amostra (só desta tabela)
         ]
         cursor_fake.description = [
@@ -206,6 +207,7 @@ class TestFeliz:
             [],  # FK
             [],  # UNIQUE
             [("pedidos", 10.0), ("clientes", 5.0)],  # total_linhas
+            [("pedidos", 200), ("clientes", 200)],  # largura_media (schema inteiro)
             [],  # amostra de "pedidos"
             [],  # amostra de "clientes"
         ]
@@ -220,8 +222,8 @@ class TestFeliz:
         assert isinstance(segunda, Sucesso)
         assert primeira.valor.total_linhas == 10
         assert segunda.valor.total_linhas == 5
-        # 5 queries de metadado (rodadas 1x só) + 1 amostra por tabela = 7.
-        assert cursor_fake.fetchall.call_count == 7
+        # 6 queries de metadado (rodadas 1x só) + 1 amostra por tabela = 8.
+        assert cursor_fake.fetchall.call_count == 8
         # 1 conexão pro cache de metadado (só na 1ª chamada) + 1 amostra por
         # tabela (2) = 3 — não 4, que seria o caso sem o cache reaproveitado.
         assert pool_classe_fake.return_value.putconn.call_count == 3
@@ -395,6 +397,7 @@ class TestBorda:
             ],  # FK duplicada na mesma coluna (2 constraints distintas)
             [],  # UNIQUE
             [("movimentos", 0.0)],  # total_linhas
+            [("movimentos", 200)],  # largura_media (schema inteiro)
             [],  # amostra
         ]
         cursor_fake.description = [SimpleNamespace(name="entidade_id")]
@@ -443,6 +446,7 @@ class TestBorda:
                 ("enderecos", 5002, "apelido"),
             ],  # UNIQUE — índice composto (5001) + índice single-column (5002)
             [("enderecos", 0.0)],  # total_linhas
+            [("enderecos", 200)],  # largura_media (schema inteiro)
             [],  # amostra
         ]
         cursor_fake.description = [
@@ -490,6 +494,7 @@ class TestBorda:
             ],  # FK — constraint composta (fk_estado) + single-column (fk_cliente)
             [],  # UNIQUE
             [("pedidos", 0.0)],  # total_linhas
+            [("pedidos", 200)],  # largura_media (schema inteiro)
             [],  # amostra
         ]
         cursor_fake.description = [
@@ -583,7 +588,7 @@ class TestBorda:
         """2 chamadas concorrentes ao mesmo schema populam o cache 1x.
 
         Sem lock em _obter_metadados_schema, duas threads poderiam ver o cache
-        do schema vazio ao mesmo tempo e rodar as 5 queries de metadado duas
+        do schema vazio ao mesmo tempo e rodar as 6 queries de metadado duas
         vezes cada — o ganho da consolidação (issue #66) dependeria de sorte de
         timing, não de garantia. Mesmo padrão de
         test_primeiro_uso_concorrente_cria_pool_uma_unica_vez, aplicado ao cache
@@ -598,6 +603,7 @@ class TestBorda:
                 [],  # FK
                 [],  # UNIQUE
                 [("pedidos", 10.0)],  # total_linhas
+                [("pedidos", 200)],  # largura_media (schema inteiro)
             ]
         )
 
@@ -626,7 +632,7 @@ class TestBorda:
         pode_prosseguir.set()
         thread_lenta.join(timeout=1)
 
-        assert cursor_fake.fetchall.call_count == 5
+        assert cursor_fake.fetchall.call_count == 6
         assert isinstance(resultado_concorrente, Sucesso)
         assert extrator._cache_schemas["public"] is resultado_concorrente.valor
 
@@ -656,6 +662,7 @@ class TestBorda:
             [],  # FK
             [],  # UNIQUE
             [("tabela_nova", -1.0)],  # total_linhas
+            [("tabela_nova", 200)],  # largura_media (schema inteiro)
             [],  # amostra
         ]
         cursor_fake.description = [SimpleNamespace(name="id")]
@@ -667,6 +674,50 @@ class TestBorda:
         assert isinstance(resultado, Sucesso)
         assert resultado.valor.total_linhas == 0
         assert resultado.valor.metadados_amostra.tamanho_amostra == 0
+
+    def test_tabela_ausente_de_pg_stats_usa_largura_media_padrao(
+        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+    ) -> None:
+        """Tabela nunca analisada não aparece em pg_stats — cai no fallback."""
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            [("tabela", "id", "int4", None, None, None, "NO")],  # colunas
+            [("tabela", "id")],  # PK
+            [],  # FK
+            [],  # UNIQUE
+            [("tabela", 10.0)],  # total_linhas
+            [],  # largura_media — sem linha nenhuma pra "tabela"
+        ]
+        pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+        extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
+        resultado = extrator._obter_metadados_schema("public")
+
+        assert isinstance(resultado, Sucesso)
+        assert resultado.valor.largura_media_por_tabela == {}
+
+    def test_tabela_com_estatistica_real_usa_soma_de_avg_width(
+        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+    ) -> None:
+        """Largura média vem da soma de avg_width de todas as colunas da tabela."""
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            [("tabela", "id", "int4", None, None, None, "NO")],  # colunas
+            [("tabela", "id")],  # PK
+            [],  # FK
+            [],  # UNIQUE
+            [("tabela", 10.0)],  # total_linhas
+            [("tabela", 57)],  # largura_media — soma real de avg_width
+        ]
+        pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+        extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
+        resultado = extrator._obter_metadados_schema("public")
+
+        assert isinstance(resultado, Sucesso)
+        assert resultado.valor.largura_media_por_tabela == {"tabela": 57}
 
     def test_amostra_maior_que_total_linhas_emite_aviso(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
@@ -686,6 +737,7 @@ class TestBorda:
             [],  # FK
             [],  # UNIQUE
             [("tabela_recem_carregada", 1.0)],  # total_linhas desatualizado
+            [("tabela_recem_carregada", 200)],  # largura_media (schema inteiro)
             [(1,), (2,)],  # amostra — 2 linhas
         ]
         cursor_fake.description = [SimpleNamespace(name="id")]
@@ -719,6 +771,7 @@ class TestBorda:
             [],  # FK
             [],  # UNIQUE
             [("tabela", 3.0)],  # total_linhas de catálogo, desatualizado de propósito
+            [("tabela", 200)],  # largura_media (schema inteiro)
             [(1,), (2,), (3,), (4,), (5,)],  # amostra — 5 linhas, a tabela inteira
         ]
         cursor_fake.description = [SimpleNamespace(name="id")]
@@ -755,6 +808,7 @@ class TestBorda:
             [],  # FK
             [],  # UNIQUE
             [("tabela", 100.0)],  # total_linhas
+            [("tabela", 200)],  # largura_media (schema inteiro)
             [(1,)],  # amostra
         ]
         cursor_fake.description = [SimpleNamespace(name="id")]
@@ -786,6 +840,7 @@ class TestBorda:
             [],  # FK
             [],  # UNIQUE
             [("tabela", 100.0)],  # total_linhas
+            [("tabela", 200)],  # largura_media (schema inteiro)
             [(1,)],  # amostra
         ]
         cursor_fake.description = [SimpleNamespace(name="id")]

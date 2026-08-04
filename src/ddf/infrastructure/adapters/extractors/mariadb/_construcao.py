@@ -54,6 +54,7 @@ class _MetadadosDoSchema(NamedTuple):
     restricoes_fk_compostas_por_tabela: dict[str, list[RestricaoDeFkComposta]]
     colunas_json_por_tabela: dict[str, set[str]]
     total_linhas_por_tabela: dict[str, int]
+    largura_media_por_tabela: dict[str, int]
 
 
 def _quotar_identificador(nome: str) -> str:

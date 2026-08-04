@@ -42,10 +42,12 @@ from ddf.infrastructure.adapters.extractors.postgres._queries import (
     _CHAVES_ESTRANGEIRAS_SCHEMA_SQL,
     _CHAVES_PRIMARIAS_SCHEMA_SQL,
     _COLUNAS_SCHEMA_SQL,
+    _LARGURA_MEDIA_LINHA_SCHEMA_SQL,
     _LISTAR_ESCOPOS_SQL,
     _LISTAR_TABELAS_SQL,
     _RESTRICOES_UNICAS_SCHEMA_SQL,
     _TOTAL_LINHAS_SCHEMA_SQL,
+    LARGURA_MEDIA_PADRAO_BYTES,
 )
 
 
@@ -243,6 +245,15 @@ class ExtratorPostgres:
                             0, round(linhas_estimadas)
                         )
 
+                    cursor.execute(_LARGURA_MEDIA_LINHA_SCHEMA_SQL, (schema,))
+                    largura_media_por_tabela: dict[str, int] = {}
+                    for nome_tabela, soma_avg_width in cursor.fetchall():
+                        largura_media_por_tabela[nome_tabela] = (
+                            int(soma_avg_width)
+                            if soma_avg_width
+                            else LARGURA_MEDIA_PADRAO_BYTES
+                        )
+
             metadados = _MetadadosDoSchema(
                 colunas_por_tabela=dict(colunas_por_tabela),
                 pks_por_tabela=dict(pks_por_tabela),
@@ -251,6 +262,7 @@ class ExtratorPostgres:
                 restricoes_unicas_por_tabela=dict(restricoes_unicas_por_tabela),
                 restricoes_fk_compostas_por_tabela=restricoes_fk_compostas_por_tabela,
                 total_linhas_por_tabela=total_linhas_por_tabela,
+                largura_media_por_tabela=largura_media_por_tabela,
             )
             self._cache_schemas[schema] = metadados
             return Sucesso(metadados)

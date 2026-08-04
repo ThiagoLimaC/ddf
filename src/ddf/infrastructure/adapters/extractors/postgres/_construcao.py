@@ -51,6 +51,7 @@ class _MetadadosDoSchema(NamedTuple):
     restricoes_unicas_por_tabela: dict[str, list[RestricaoUnica]]
     restricoes_fk_compostas_por_tabela: dict[str, list[RestricaoDeFkComposta]]
     total_linhas_por_tabela: dict[str, int]
+    largura_media_por_tabela: dict[str, int]
 
 
 def _construir_coluna(

@@ -53,6 +53,7 @@ from ddf.infrastructure.adapters.extractors.mariadb._queries import (
     _LISTAR_ESCOPOS_SQL,
     _LISTAR_TABELAS_SQL,
     _TOTAL_LINHAS_SQL,
+    LARGURA_MEDIA_PADRAO_BYTES,
 )
 
 # Nº de faixas contíguas sorteadas independentemente em RequisicaoPorFaixa —
@@ -272,11 +273,19 @@ class ExtratorMariaDB:
 
                     cursor.execute(_TOTAL_LINHAS_SQL, (escopo,))
                     total_linhas_por_tabela: dict[str, int] = {}
-                    for nome_tabela, linhas_estimadas in cursor.fetchall():
+                    largura_media_por_tabela: dict[str, int] = {}
+                    for nome_tabela, linhas_estimadas, largura_media in (
+                        cursor.fetchall()
+                    ):
                         total_linhas_por_tabela[nome_tabela] = (
                             max(0, round(linhas_estimadas))
                             if linhas_estimadas is not None
                             else 0
+                        )
+                        largura_media_por_tabela[nome_tabela] = (
+                            int(largura_media)
+                            if largura_media
+                            else LARGURA_MEDIA_PADRAO_BYTES
                         )
 
             metadados = _MetadadosDoSchema(
@@ -288,6 +297,7 @@ class ExtratorMariaDB:
                 restricoes_fk_compostas_por_tabela=restricoes_fk_compostas_por_tabela,
                 colunas_json_por_tabela=colunas_json_por_tabela,
                 total_linhas_por_tabela=total_linhas_por_tabela,
+                largura_media_por_tabela=largura_media_por_tabela,
             )
             self._cache_schemas[escopo] = metadados
             return Sucesso(metadados)

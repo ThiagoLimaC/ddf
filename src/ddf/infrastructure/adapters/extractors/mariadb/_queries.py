@@ -44,8 +44,12 @@ _CHAVES_ESTRANGEIRAS_SQL = """
     ORDER BY table_name, constraint_name, ordinal_position
 """
 
+# avg_row_length já vem de graça na mesma linha de catálogo de table_rows —
+# zero query nova pra estimar largura média de linha. NULL/0 (tabela nunca
+# analisada) é tratado por quem lê, com um fallback conservador
+# (LARGURA_MEDIA_PADRAO_BYTES), não uma exceção.
 _TOTAL_LINHAS_SQL = """
-    SELECT table_name, table_rows
+    SELECT table_name, table_rows, avg_row_length
     FROM information_schema.tables
     WHERE table_schema = %s AND table_type = 'BASE TABLE'
 """
@@ -85,4 +89,12 @@ _COLUNAS_JSON_SQL = """
     SELECT table_name, check_clause
     FROM information_schema.check_constraints
     WHERE constraint_schema = %s
+"""
+
+LARGURA_MEDIA_PADRAO_BYTES = 200
+"""Fallback conservador (bytes/linha) para `avg_row_length` NULL/0.
+
+Tabela nunca analisada não tem essa estatística populada — ausência não
+impede o cálculo de tamanho de lote do streaming, só faz a estimativa cair
+nesse valor conservador.
 """
