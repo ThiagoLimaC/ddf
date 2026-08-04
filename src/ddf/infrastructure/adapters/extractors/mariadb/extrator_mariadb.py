@@ -63,12 +63,26 @@ from ddf.infrastructure.adapters.extractors.mariadb._queries import (
     _TOTAL_LINHAS_SQL,
 )
 
-# Nº de faixas contíguas sorteadas independentemente em RequisicaoPorFaixa —
-# aproxima o comportamento de blocos espalhados do TABLESAMPLE SYSTEM do
-# Postgres sem exigir uma consulta por linha amostrada (inviável em lote).
-# Candidato inicial, calibrado pelo benchmark da issue #114 — não um valor
-# definitivo.
-_K_FAIXAS = 10
+_K_FAIXAS_MINIMO = 10
+_K_FAIXAS_MAXIMO = 50
+_LINHAS_POR_FAIXA_ADICIONAL = 100_000
+
+
+def _k_faixas_para(total_linhas: int) -> int:
+    """Nº de faixas contíguas sorteadas independentemente em RequisicaoPorFaixa.
+
+    Aproxima o comportamento de blocos espalhados do TABLESAMPLE SYSTEM do
+    Postgres sem exigir uma consulta por linha amostrada (inviável em lote).
+    Fixo em `_K_FAIXAS_MINIMO` até 1M linhas, cresce depois disso: K
+    constante em tabelas muito grandes concentra a amostra em poucos blocos
+    de PK, sujeito a viés de correlação PK↔atributo (ex.: autoincrement
+    correlacionado a data de inserção) mesmo com faixas espalhadas.
+    """
+    return min(
+        _K_FAIXAS_MAXIMO,
+        max(_K_FAIXAS_MINIMO, total_linhas // _LINHAS_POR_FAIXA_ADICIONAL),
+    )
+
 
 _logger = logging.getLogger(__name__)
 
@@ -398,6 +412,7 @@ class ExtratorMariaDB:
                     f"{_quotar_identificador(escopo)}.{_quotar_identificador(tabela)}"
                 )
                 n_pedido_por_faixa: int | None = None
+                k_faixas = _k_faixas_para(total_linhas)
                 match requisicao:
                     case AmostragemProbabilistica(percentual=percentual, seed=seed):
                         seed_usado = seed_efetivo(seed)
@@ -432,7 +447,7 @@ class ExtratorMariaDB:
                                     1, round(total_linhas * percentual / 100)
                                 )
                                 linhas_por_faixa = max(
-                                    1, n_pedido_por_faixa // _K_FAIXAS
+                                    1, n_pedido_por_faixa // k_faixas
                                 )
                                 # Corte sorteado em Python, não via RAND()
                                 # no SQL: dentro de um WHERE, RAND(seed) do
@@ -443,7 +458,7 @@ class ExtratorMariaDB:
                                 rng_faixas = random.Random(seed_usado)
                                 subconsultas: list[str] = []
                                 parametros: list[object] = []
-                                for _ in range(_K_FAIXAS):
+                                for _ in range(k_faixas):
                                     cutoff = (
                                         rng_faixas.randint(0, max_pk)
                                         if max_pk is not None
@@ -540,7 +555,7 @@ class ExtratorMariaDB:
                 causa_provavel="sem ANALYZE TABLE recente",
                 identificador_tabela=f"{escopo}.{tabela}",
                 descricao_vies_por_faixa=(
-                    f"amostragem por {_K_FAIXAS} faixas contíguas de chave "
+                    f"amostragem por {k_faixas} faixas contíguas de chave "
                     "primária, não por bloco físico de disco — pode "
                     "distorcer percentual_nulo/percentual_unico/"
                     "valores_frequentes em tabelas com padrão de inserção "

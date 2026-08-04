@@ -19,6 +19,7 @@ from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
 )
 from ddf.infrastructure.adapters.extractors.mariadb.extrator_mariadb import (
     ExtratorMariaDB,
+    _k_faixas_para,
 )
 
 from .conftest import montar_metadados_side_effect
@@ -446,6 +447,11 @@ class TestFeliz:
         assert produtos.valor.colunas[0].tipo_dado.categoria == CategoriaDeDado.JSON
         assert pedidos.valor.colunas[0].tipo_dado.categoria == CategoriaDeDado.INTEGER
 
+    def test_k_faixas_para_tabela_pequena_usa_o_minimo(self) -> None:
+        """Tabelas até 1M linhas mantêm o K=10 já validado pelos testes existentes."""
+        assert _k_faixas_para(500) == 10
+        assert _k_faixas_para(1_000_000) == 10
+
 
 class TestErro:
     """Erro esperado."""
@@ -584,6 +590,12 @@ class TestErro:
 
 class TestBorda:
     """Bordas."""
+
+    def test_k_faixas_para_cresce_proporcional_e_satura_no_teto(self) -> None:
+        """Acima de 1M linhas, K cresce e satura em 50 faixas."""
+        assert _k_faixas_para(3_000_000) == 30
+        assert _k_faixas_para(10_000_000) == 50
+        assert _k_faixas_para(50_000_000) == 50
 
     def test_tabela_exatamente_no_limiar_de_linhas_nao_ativa_streaming(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
