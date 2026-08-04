@@ -1,6 +1,9 @@
 """Testes de calcular_tamanho_lote e ler_amostra_em_lotes."""
 
 
+import polars as pl
+import pytest
+
 from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
     calcular_tamanho_lote,
     ler_amostra_em_lotes,
@@ -155,3 +158,22 @@ class TestBorda:
         amostra = ler_amostra_em_lotes(cursor, tamanho_lote=2)
 
         assert amostra["empresa_id"].to_list() == [None, None, 42]
+
+
+class TestErro:
+    """Divergência de schema entre lotes que não envolve `Null`."""
+
+    def test_dtypes_incompativeis_entre_lotes_propaga_erro(self) -> None:
+        """Int64 num lote e Utf8 noutro, nenhum dos dois Null, não deve fundir.
+
+        A fusão relaxada só é segura pro caso `Null` vs. tipo real (mesma
+        coluna, lote inteiro vazio). Qualquer outra divergência é uma
+        anomalia — a mesma coluna da mesma query mudando de tipo entre
+        lotes não deveria ser coagida silenciosamente, deve propagar erro.
+        """
+        cursor = _CursorFake(
+            [[(1, 42)], [(2, "texto")]], nomes_colunas=["id", "valor"]
+        )
+
+        with pytest.raises(pl.exceptions.SchemaError):
+            ler_amostra_em_lotes(cursor, tamanho_lote=1)

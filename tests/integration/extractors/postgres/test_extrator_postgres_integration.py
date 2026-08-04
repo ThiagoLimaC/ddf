@@ -712,3 +712,40 @@ def test_largura_media_real_mede_tamanho_apos_descompressao_toast(
     largura_real = resultado_largura_real.valor
     assert largura_real > largura_catalogo * 10
     assert largura_real > 40_000
+
+
+def test_deteccao_de_coluna_comprimivel_cobre_array(
+    dsn: str, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Coluna ARRAY entra em tabelas_com_coluna_comprimivel, mesmo sem udt_name escalar.
+
+    'tags' é TEXT[] — udt_name real é '_text', não bate com nenhum nome de
+    tipo escalar (text/varchar/json/...). A detecção via
+    pg_attribute.attstorage cobre isso porque olha o armazenamento real da
+    coluna no catálogo, não uma lista fixa de nomes.
+    """
+    extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+
+    resultado_metadados = extrator._obter_metadados_schema("largura_real")
+
+    assert isinstance(resultado_metadados, Sucesso)
+    tabelas_comprimiveis = resultado_metadados.valor.tabelas_com_coluna_comprimivel
+    assert "tabela_com_array" in tabelas_comprimiveis
+
+
+def test_deteccao_de_coluna_comprimivel_cobre_storage_external(
+    dsn: str, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Coluna com STORAGE EXTERNAL entra em tabelas_com_coluna_comprimivel.
+
+    EXTERNAL fica fora de linha sem compressão — avg_width reflete só o
+    ponteiro TOAST, subestimativa maior que EXTENDED/MAIN. Só `attstorage
+    = 'p'` (largura fixa, nunca sai de linha) fica fora da detecção.
+    """
+    extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+
+    resultado_metadados = extrator._obter_metadados_schema("largura_real")
+
+    assert isinstance(resultado_metadados, Sucesso)
+    tabelas_comprimiveis = resultado_metadados.valor.tabelas_com_coluna_comprimivel
+    assert "tabela_com_external" in tabelas_comprimiveis

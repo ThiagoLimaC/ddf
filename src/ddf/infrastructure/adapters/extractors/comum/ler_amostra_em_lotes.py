@@ -1,5 +1,6 @@
 """Lê um cursor de streaming em lotes, sem materializar o resultset inteiro."""
 
+from collections import defaultdict
 from collections.abc import Sequence
 from typing import Protocol
 
@@ -23,6 +24,11 @@ _MAXIMO_PADRAO = 100_000
 # ponto cego do outro.
 _LIMIAR_LINHAS_STREAMING = 100_000
 _LIMIAR_BYTES_STREAMING = 100_000_000
+
+LARGURA_MEDIA_PADRAO_BYTES = 200
+"""Fallback conservador (bytes/linha) quando o catálogo não tem estatística
+de largura pra uma tabela — mesmo valor usado pelos dois Extratores, não
+calibrado por motor específico."""
 
 
 def deve_usar_streaming(total_linhas: int, largura_media_bytes: int) -> bool:
@@ -80,6 +86,22 @@ class _CursorComFetchmany(Protocol):
     def fetchmany(self, size: int) -> list[tuple[object, ...]]: ...
 
 
+def _diverge_alem_de_null(lotes: list[pl.DataFrame]) -> bool:
+    """Indica se alguma coluna tem dtypes não-`Null` diferentes entre lotes.
+
+    `Null` funde com qualquer tipo real sem risco — sintoma normal de um
+    lote inteiro vindo de uma coluna nulável vazia. Qualquer outra
+    divergência (ex.: `Int64` num lote, `Utf8` noutro) é uma anomalia: a
+    mesma coluna da mesma query não deveria mudar de tipo entre lotes.
+    """
+    dtypes_por_coluna: dict[str, set[pl.DataType]] = defaultdict(set)
+    for lote in lotes:
+        for nome, dtype in lote.schema.items():
+            if dtype != pl.Null:
+                dtypes_por_coluna[nome].add(dtype)
+    return any(len(dtypes) > 1 for dtypes in dtypes_por_coluna.values())
+
+
 def ler_amostra_em_lotes(
     cursor: _CursorComFetchmany,
     tamanho_lote: int,
@@ -97,11 +119,11 @@ def ler_amostra_em_lotes(
     outros (`infer_schema_length=None` só olha as linhas daquele lote) —
     uma coluna nulável cujo 1º lote vem todo `NULL` infere `Null`, não o
     tipo real; um lote seguinte com valor real (`Int64` etc.) quebraria
-    `pl.concat` estrito por divergência de schema entre lotes. `how=
-    "vertical_relaxed"` funde pra um supertipo comum entre lotes (`Null`
-    sempre funde com qualquer tipo) — achado só contra dado de produção
-    real (coluna nulável grande o bastante pra um lote inteiro sair
-    vazio), não reproduzível com tabela sintética pequena de teste.
+    `pl.concat` estrito por divergência de schema entre lotes. A fusão só
+    relaxa (`how="vertical_relaxed"`) quando a única divergência entre
+    lotes é `Null` contra um tipo real — qualquer outra divergência
+    (ex.: `Int64` vs `Utf8`) propaga como erro explícito em vez de
+    coagir silenciosamente entre tipos incompatíveis.
 
     Args:
         cursor: cursor já com a query de amostra executada.
@@ -124,4 +146,33 @@ def ler_amostra_em_lotes(
     if not lotes:
         nomes_colunas = [str(coluna[0]) for coluna in cursor.description or ()]
         return pl.DataFrame(schema=nomes_colunas)
+    if _diverge_alem_de_null(lotes):
+        return pl.concat(lotes, how="vertical")
     return pl.concat(lotes, how="vertical_relaxed")
+
+
+class _CursorComFetchall(Protocol):
+    """Cursor comum dos dois drivers — usado no caminho não-streaming."""
+
+    @property
+    def description(self) -> Sequence[_ColunaDescricao] | None: ...
+
+    def fetchall(self) -> list[tuple[object, ...]]: ...
+
+
+def ler_amostra_fetchall(cursor: _CursorComFetchall) -> pl.DataFrame:
+    """Lê um cursor já posicionado (query executada) de uma vez, via `fetchall`.
+
+    Caminho não-streaming: tabela pequena o bastante para materializar o
+    resultset inteiro sem risco relevante de pico de memória.
+
+    Args:
+        cursor: cursor já com a query de amostra executada.
+    """
+    nomes_colunas = [str(coluna[0]) for coluna in cursor.description or ()]
+    linhas = cursor.fetchall()
+    if not linhas:
+        return pl.DataFrame(schema=nomes_colunas)
+    return pl.DataFrame(
+        linhas, schema=nomes_colunas, orient="row", infer_schema_length=None
+    )

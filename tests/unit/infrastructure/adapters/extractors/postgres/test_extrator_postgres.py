@@ -1,7 +1,7 @@
 """Testes de ExtratorPostgres."""
 
+import logging
 import threading
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -146,6 +146,7 @@ class TestFeliz:
             [("pedidos", 5001, "nome")],  # UNIQUE, single-column (schema inteiro)
             [("pedidos", 1000.0)],  # total_linhas (schema inteiro)
             [("pedidos", 200)],  # largura_media (schema inteiro)
+            [("pedidos",)],  # colunas comprimíveis (schema inteiro) — "nome"
             [(1, "ana", 10), (2, "bia", 20)],  # amostra (só desta tabela)
         ]
         # "nome" é varchar (TOAST-ável) — extrair_tabela sonda a largura real
@@ -153,9 +154,9 @@ class TestFeliz:
         # avg_width de catálogo.
         cursor_fake.fetchone.return_value = (123.0,)
         cursor_fake.description = [
-            SimpleNamespace(name="id"),
-            SimpleNamespace(name="nome"),
-            SimpleNamespace(name="cliente_id"),
+            ("id",),
+            ("nome",),
+            ("cliente_id",),
         ]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
@@ -213,10 +214,11 @@ class TestFeliz:
             [],  # UNIQUE
             [("pedidos", 10.0), ("clientes", 5.0)],  # total_linhas
             [("pedidos", 200), ("clientes", 200)],  # largura_media (schema inteiro)
+            [],  # colunas comprimíveis (schema inteiro) — nenhuma
             [],  # amostra de "pedidos"
             [],  # amostra de "clientes"
         ]
-        cursor_fake.description = [SimpleNamespace(name="id")]
+        cursor_fake.description = [("id",)]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
         extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
@@ -227,14 +229,17 @@ class TestFeliz:
         assert isinstance(segunda, Sucesso)
         assert primeira.valor.total_linhas == 10
         assert segunda.valor.total_linhas == 5
-        # 6 queries de metadado (rodadas 1x só) + 1 amostra por tabela = 8.
-        assert cursor_fake.fetchall.call_count == 8
+        # 7 queries de metadado (rodadas 1x só) + 1 amostra por tabela = 9.
+        assert cursor_fake.fetchall.call_count == 9
         # 1 conexão pro cache de metadado (só na 1ª chamada) + 1 amostra por
         # tabela (2) = 3 — não 4, que seria o caso sem o cache reaproveitado.
         assert pool_classe_fake.return_value.putconn.call_count == 3
 
     def test_tabela_acima_do_limiar_de_linhas_usa_cursor_nomeado_em_lotes(
-        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+        self,
+        pool_classe_fake: MagicMock,
+        configuracao: ConfiguracaoDeExtracao,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """total_linhas > limiar ativa streaming: cursor nomeado, itersize, commit."""
         conexao_fake = MagicMock()
@@ -246,21 +251,25 @@ class TestFeliz:
             [],  # UNIQUE
             [("grande", 200_000.0)],  # total_linhas — acima de 100_000
             [("grande", 200)],  # largura_media
+            [],  # colunas comprimíveis — nenhuma ("id" é int4)
         ]
         cursor_fake.description = [("id",)]
         cursor_fake.fetchmany.side_effect = [[(1,), (2,)], []]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
         extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
-        resultado = extrator.extrair_tabela("public", "grande")
+        with caplog.at_level(logging.INFO):
+            resultado = extrator.extrair_tabela("public", "grande")
 
         assert isinstance(resultado, Sucesso)
         assert resultado.valor.metadados_amostra.tamanho_amostra == 2
         conexao_fake.cursor.assert_called_with(name="amostra_public_grande")
         assert cursor_fake.itersize == 50_000  # calcular_tamanho_lote(200)
         conexao_fake.commit.assert_called_once()
-        # 6 queries de metadado (fetchall) + amostra via fetchmany, não fetchall.
-        assert cursor_fake.fetchall.call_count == 6
+        # 7 queries de metadado (fetchall) + amostra via fetchmany, não fetchall.
+        assert cursor_fake.fetchall.call_count == 7
+        assert "streaming ativado" in caplog.text
+        assert "public.grande" in caplog.text
 
 
 class TestErro:
@@ -287,8 +296,9 @@ class TestErro:
             [],  # UNIQUE
             [("grande", 200_000.0)],  # total_linhas — acima do limiar
             [("grande", 200)],  # largura_media
+            [],  # colunas comprimíveis — nenhuma ("id" é int4)
         ]
-        cursor_fake.description = [SimpleNamespace(name="id")]
+        cursor_fake.description = [("id",)]
         cursor_fake.fetchmany.side_effect = OperationalError("conexão perdida")
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
@@ -430,9 +440,10 @@ class TestBorda:
             [],  # UNIQUE
             [("tabela", 100_000.0)],  # total_linhas — exatamente no limiar
             [("tabela", 200)],  # largura_media
+            [],  # colunas comprimíveis — nenhuma ("id" é int4)
             [(1,)],  # amostra
         ]
-        cursor_fake.description = [SimpleNamespace(name="id")]
+        cursor_fake.description = [("id",)]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
         extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
@@ -496,9 +507,10 @@ class TestBorda:
             [],  # UNIQUE
             [("movimentos", 0.0)],  # total_linhas
             [("movimentos", 200)],  # largura_media (schema inteiro)
+            [],  # colunas comprimíveis — nenhuma ("entidade_id" é int4)
             [],  # amostra
         ]
-        cursor_fake.description = [SimpleNamespace(name="entidade_id")]
+        cursor_fake.description = [("entidade_id",)]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
         extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
@@ -545,12 +557,13 @@ class TestBorda:
             ],  # UNIQUE — índice composto (5001) + índice single-column (5002)
             [("enderecos", 0.0)],  # total_linhas
             [("enderecos", 200)],  # largura_media (schema inteiro)
+            [("enderecos",)],  # colunas comprimíveis — as 3 são varchar
             [],  # amostra
         ]
         cursor_fake.description = [
-            SimpleNamespace(name="codigo_pais"),
-            SimpleNamespace(name="codigo_local"),
-            SimpleNamespace(name="apelido"),
+            ("codigo_pais",),
+            ("codigo_local",),
+            ("apelido",),
         ]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
@@ -593,12 +606,13 @@ class TestBorda:
             [],  # UNIQUE
             [("pedidos", 0.0)],  # total_linhas
             [("pedidos", 200)],  # largura_media (schema inteiro)
+            [],  # colunas comprimíveis — nenhuma (todas int4)
             [],  # amostra
         ]
         cursor_fake.description = [
-            SimpleNamespace(name="pais_id"),
-            SimpleNamespace(name="estado_id"),
-            SimpleNamespace(name="cliente_id"),
+            ("pais_id",),
+            ("estado_id",),
+            ("cliente_id",),
         ]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
@@ -702,6 +716,7 @@ class TestBorda:
                 [],  # UNIQUE
                 [("pedidos", 10.0)],  # total_linhas
                 [("pedidos", 200)],  # largura_media (schema inteiro)
+                [],  # colunas comprimíveis — nenhuma ("id" é int4)
             ]
         )
 
@@ -730,7 +745,7 @@ class TestBorda:
         pode_prosseguir.set()
         thread_lenta.join(timeout=1)
 
-        assert cursor_fake.fetchall.call_count == 6
+        assert cursor_fake.fetchall.call_count == 7
         assert isinstance(resultado_concorrente, Sucesso)
         assert extrator._cache_schemas["public"] is resultado_concorrente.valor
 
@@ -761,9 +776,10 @@ class TestBorda:
             [],  # UNIQUE
             [("tabela_nova", -1.0)],  # total_linhas
             [("tabela_nova", 200)],  # largura_media (schema inteiro)
+            [],  # colunas comprimíveis — nenhuma ("id" é int4)
             [],  # amostra
         ]
-        cursor_fake.description = [SimpleNamespace(name="id")]
+        cursor_fake.description = [("id",)]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
         extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
@@ -786,6 +802,7 @@ class TestBorda:
             [],  # UNIQUE
             [("tabela", 10.0)],  # total_linhas
             [],  # largura_media — sem linha nenhuma pra "tabela"
+            [],  # colunas comprimíveis — nenhuma ("id" é int4)
         ]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
@@ -808,6 +825,7 @@ class TestBorda:
             [],  # UNIQUE
             [("tabela", 10.0)],  # total_linhas
             [("tabela", 57)],  # largura_media — soma real de avg_width
+            [],  # colunas comprimíveis — nenhuma ("id" é int4)
         ]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
@@ -836,9 +854,10 @@ class TestBorda:
             [],  # UNIQUE
             [("tabela_recem_carregada", 1.0)],  # total_linhas desatualizado
             [("tabela_recem_carregada", 200)],  # largura_media (schema inteiro)
+            [],  # colunas comprimíveis — nenhuma ("id" é int4)
             [(1,), (2,)],  # amostra — 2 linhas
         ]
-        cursor_fake.description = [SimpleNamespace(name="id")]
+        cursor_fake.description = [("id",)]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
         extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
@@ -870,9 +889,10 @@ class TestBorda:
             [],  # UNIQUE
             [("tabela", 3.0)],  # total_linhas de catálogo, desatualizado de propósito
             [("tabela", 200)],  # largura_media (schema inteiro)
+            [],  # colunas comprimíveis — nenhuma ("id" é int4)
             [(1,), (2,), (3,), (4,), (5,)],  # amostra — 5 linhas, a tabela inteira
         ]
-        cursor_fake.description = [SimpleNamespace(name="id")]
+        cursor_fake.description = [("id",)]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
         extrator = ExtratorPostgres(
@@ -907,9 +927,10 @@ class TestBorda:
             [],  # UNIQUE
             [("tabela", 100.0)],  # total_linhas
             [("tabela", 200)],  # largura_media (schema inteiro)
+            [],  # colunas comprimíveis — nenhuma ("id" é int4)
             [(1,)],  # amostra
         ]
-        cursor_fake.description = [SimpleNamespace(name="id")]
+        cursor_fake.description = [("id",)]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
         extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
@@ -939,9 +960,10 @@ class TestBorda:
             [],  # UNIQUE
             [("tabela", 100.0)],  # total_linhas
             [("tabela", 200)],  # largura_media (schema inteiro)
+            [],  # colunas comprimíveis — nenhuma ("id" é int4)
             [(1,)],  # amostra
         ]
-        cursor_fake.description = [SimpleNamespace(name="id")]
+        cursor_fake.description = [("id",)]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
         extrator = ExtratorPostgres(

@@ -29,23 +29,6 @@ class _LinhaColuna(NamedTuple):
     is_nullable: str
 
 
-_TIPOS_TOAST_AVEIS = frozenset(
-    {"text", "varchar", "bpchar", "json", "jsonb", "bytea", "xml"}
-)
-
-
-def _tabela_tem_coluna_toast_avel(linhas_colunas: list[_LinhaColuna]) -> bool:
-    """Indica se a tabela tem alguma coluna de tipo sujeito a compressão TOAST.
-
-    Colunas desses tipos (`text`/`varchar`/`bpchar`/`json`/`jsonb`/`bytea`/
-    `xml`) podem ser armazenadas comprimidas — `pg_stats.avg_width` reflete
-    o tamanho armazenado, não o tamanho real que o driver recebe ao ler a
-    linha. Tipos de largura fixa (numéricos, datas, booleanos) não sofrem
-    TOAST, então a estimativa de catálogo já é confiável para eles.
-    """
-    return any(linha.udt_name in _TIPOS_TOAST_AVEIS for linha in linhas_colunas)
-
-
 class _MetadadosDoSchema(NamedTuple):
     """Metadados de catálogo de todas as tabelas de um schema, lidos de uma vez.
 
@@ -58,7 +41,11 @@ class _MetadadosDoSchema(NamedTuple):
     colisão) continua acontecendo por tabela, em extrair_tabela, não aqui.
     restricoes_fk_compostas_por_tabela já vem agrupado por constraint
     (construir_restricoes_fk_compostas), mesmo padrão de
-    restricoes_unicas_por_tabela.
+    restricoes_unicas_por_tabela. tabelas_com_coluna_comprimivel vem de
+    `pg_attribute.attstorage` (catálogo real, não uma lista fixa de nomes
+    de tipo) — cobre qualquer tipo sujeito a compressão TOAST, incluindo
+    arrays, domains sobre `text` e extensões (`citext`/`hstore`/
+    `tsvector`), que uma lista de `udt_name` hardcoded deixaria escapar.
     """
 
     colunas_por_tabela: dict[str, list[_LinhaColuna]]
@@ -69,6 +56,7 @@ class _MetadadosDoSchema(NamedTuple):
     restricoes_fk_compostas_por_tabela: dict[str, list[RestricaoDeFkComposta]]
     total_linhas_por_tabela: dict[str, int]
     largura_media_por_tabela: dict[str, int]
+    tabelas_com_coluna_comprimivel: frozenset[str]
 
 
 def _construir_coluna(

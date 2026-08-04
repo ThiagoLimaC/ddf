@@ -1,15 +1,14 @@
 """Extrator concreto para bancos Postgres."""
 
+import logging
 import threading
 from collections import defaultdict
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import assert_never
 
-import polars as pl
 from psycopg2 import OperationalError, sql
 from psycopg2.extensions import connection as conexao_postgres
-from psycopg2.extensions import cursor as cursor_postgres
 from psycopg2.pool import ThreadedConnectionPool
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
@@ -34,33 +33,31 @@ from ddf.infrastructure.adapters.extractors.comum.construir_restricoes_fk_compos
     construir_restricoes_fk_compostas,
 )
 from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
+    LARGURA_MEDIA_PADRAO_BYTES,
     calcular_tamanho_lote,
     deve_usar_streaming,
     ler_amostra_em_lotes,
+    ler_amostra_fetchall,
 )
 from ddf.infrastructure.adapters.extractors.comum.seed_efetivo import seed_efetivo
 from ddf.infrastructure.adapters.extractors.postgres._construcao import (
     _construir_coluna,
     _LinhaColuna,
     _MetadadosDoSchema,
-    _tabela_tem_coluna_toast_avel,
 )
 from ddf.infrastructure.adapters.extractors.postgres._queries import (
     _CHAVES_ESTRANGEIRAS_SCHEMA_SQL,
     _CHAVES_PRIMARIAS_SCHEMA_SQL,
+    _COLUNAS_COMPRIMIVEIS_SCHEMA_SQL,
     _COLUNAS_SCHEMA_SQL,
     _LARGURA_MEDIA_LINHA_SCHEMA_SQL,
     _LISTAR_ESCOPOS_SQL,
     _LISTAR_TABELAS_SQL,
     _RESTRICOES_UNICAS_SCHEMA_SQL,
     _TOTAL_LINHAS_SCHEMA_SQL,
-    LARGURA_MEDIA_PADRAO_BYTES,
 )
 
-
-def _nomes_colunas(cursor: cursor_postgres) -> list[str]:
-    """Extrai os nomes de coluna de `cursor.description`, na ordem do SELECT."""
-    return [coluna.name for coluna in cursor.description or ()]
+_logger = logging.getLogger(__name__)
 
 
 # Linhas-alvo da sonda de largura real (TABLESAMPLE) — bounded pelo LIMIT,
@@ -284,6 +281,11 @@ class ExtratorPostgres:
                             else LARGURA_MEDIA_PADRAO_BYTES
                         )
 
+                    cursor.execute(_COLUNAS_COMPRIMIVEIS_SCHEMA_SQL, (schema,))
+                    tabelas_com_coluna_comprimivel = frozenset(
+                        nome_tabela for (nome_tabela,) in cursor.fetchall()
+                    )
+
             metadados = _MetadadosDoSchema(
                 colunas_por_tabela=dict(colunas_por_tabela),
                 pks_por_tabela=dict(pks_por_tabela),
@@ -293,6 +295,7 @@ class ExtratorPostgres:
                 restricoes_fk_compostas_por_tabela=restricoes_fk_compostas_por_tabela,
                 total_linhas_por_tabela=total_linhas_por_tabela,
                 largura_media_por_tabela=largura_media_por_tabela,
+                tabelas_com_coluna_comprimivel=tabelas_com_coluna_comprimivel,
             )
             self._cache_schemas[schema] = metadados
             return Sucesso(metadados)
@@ -395,7 +398,7 @@ class ExtratorPostgres:
         largura_media_bytes = metadados.largura_media_por_tabela.get(
             tabela, LARGURA_MEDIA_PADRAO_BYTES
         )
-        if total_linhas > 0 and _tabela_tem_coluna_toast_avel(linhas_colunas):
+        if total_linhas > 0 and tabela in metadados.tabelas_com_coluna_comprimivel:
             resultado_largura = self._largura_media_real(
                 schema, tabela, linhas_colunas, total_linhas
             )
@@ -403,6 +406,15 @@ class ExtratorPostgres:
                 return resultado_largura
             largura_media_bytes = resultado_largura.valor
         usa_streaming = deve_usar_streaming(total_linhas, largura_media_bytes)
+        if usa_streaming:
+            _logger.info(
+                "'%s.%s': streaming ativado (~%d linhas, ~%d bytes/linha) — "
+                "cursor nomeado mantém transação aberta pela duração da leitura.",
+                schema,
+                tabela,
+                total_linhas,
+                largura_media_bytes,
+            )
         with self._conexao(autocommit=not usa_streaming) as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
@@ -455,18 +467,7 @@ class ExtratorPostgres:
             else:
                 with conexao.cursor() as cursor:
                     cursor.execute(consulta_amostra)
-                    nomes_colunas = _nomes_colunas(cursor)
-                    linhas_amostra = cursor.fetchall()
-                    amostra = (
-                        pl.DataFrame(
-                            linhas_amostra,
-                            schema=nomes_colunas,
-                            orient="row",
-                            infer_schema_length=None,
-                        )
-                        if linhas_amostra
-                        else pl.DataFrame(schema=nomes_colunas)
-                    )
+                    amostra = ler_amostra_fetchall(cursor)
 
             match requisicao_efetiva:
                 case AmostragemIntegral():
