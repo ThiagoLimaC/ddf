@@ -6,6 +6,9 @@ import pytest
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.ports.estrategia_de_amostragem import EstrategiaDeAmostragem
+from ddf.infrastructure.adapters.extractors.estrategias.amostragem_por_faixa import (
+    AmostragemPorFaixa,
+)
 from ddf.infrastructure.adapters.extractors.estrategias.percentual_de_linhas import (
     PercentualDeLinhas,
 )
@@ -15,6 +18,12 @@ from ddf.infrastructure.adapters.extractors.estrategias.percentual_de_linhas imp
 def configuracao() -> ConfiguracaoDeExtracao:
     """Retorna uma ConfiguracaoDeExtracao com PercentualDeLinhas(10%)."""
     return ConfiguracaoDeExtracao(estrategia=PercentualDeLinhas(percentual=10.0))
+
+
+@pytest.fixture
+def configuracao_por_faixa() -> ConfiguracaoDeExtracao:
+    """Retorna uma ConfiguracaoDeExtracao com AmostragemPorFaixa(10%)."""
+    return ConfiguracaoDeExtracao(estrategia=AmostragemPorFaixa(percentual=10.0))
 
 
 @pytest.fixture
@@ -44,6 +53,7 @@ def montar_metadados_side_effect(
     unicas: list[tuple[str, str]] | None = None,
     check_clauses: list[str] | None = None,
     total_linhas: int | None = 0,
+    largura_media: int | None = 200,
 ) -> list[list[tuple[object, ...]]]:
     """Monta os 6 `fetchall` de `_obter_metadados_schema` pra uma única tabela.
 
@@ -55,8 +65,9 @@ def montar_metadados_side_effect(
 
     Returns:
         As 6 listas, na ordem que `_obter_metadados_schema` executa as
-        queries (colunas, PK, FK, UNIQUE, JSON, total_linhas) — quem chama
-        ainda precisa acrescentar a linha da amostra por conta própria.
+        queries (colunas, PK, FK, UNIQUE, JSON, total_linhas+largura_media) —
+        quem chama ainda precisa acrescentar a linha da amostra por conta
+        própria.
     """
     return [
         [(tabela, *coluna) for coluna in colunas],
@@ -64,5 +75,5 @@ def montar_metadados_side_effect(
         [(tabela, *fk) for fk in (fks or [])],
         [(tabela, *unica) for unica in (unicas or [])],
         [(tabela, clause) for clause in (check_clauses or [])],
-        [(tabela, total_linhas)],
+        [(tabela, total_linhas, largura_media)],
     ]

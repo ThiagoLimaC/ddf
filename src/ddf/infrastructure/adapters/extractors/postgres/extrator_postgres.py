@@ -1,12 +1,12 @@
 """Extrator concreto para bancos Postgres."""
 
+import logging
 import threading
 from collections import defaultdict
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import assert_never
 
-import polars as pl
 from psycopg2 import OperationalError, sql
 from psycopg2.extensions import connection as conexao_postgres
 from psycopg2.pool import ThreadedConnectionPool
@@ -16,6 +16,7 @@ from ddf.domain.model.common.requisicao_de_amostragem import (
     AmostragemIntegral,
     AmostragemProbabilistica,
     RequisicaoDeAmostragem,
+    RequisicaoPorFaixa,
 )
 from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
@@ -31,6 +32,13 @@ from ddf.infrastructure.adapters.extractors.comum.construir_metadados_de_amostra
 from ddf.infrastructure.adapters.extractors.comum.construir_restricoes_fk_compostas import (  # noqa: E501
     construir_restricoes_fk_compostas,
 )
+from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
+    LARGURA_MEDIA_PADRAO_BYTES,
+    calcular_tamanho_lote,
+    deve_usar_streaming,
+    ler_amostra_em_lotes,
+    ler_amostra_fetchall,
+)
 from ddf.infrastructure.adapters.extractors.comum.seed_efetivo import seed_efetivo
 from ddf.infrastructure.adapters.extractors.postgres._construcao import (
     _construir_coluna,
@@ -40,12 +48,21 @@ from ddf.infrastructure.adapters.extractors.postgres._construcao import (
 from ddf.infrastructure.adapters.extractors.postgres._queries import (
     _CHAVES_ESTRANGEIRAS_SCHEMA_SQL,
     _CHAVES_PRIMARIAS_SCHEMA_SQL,
+    _COLUNAS_COMPRIMIVEIS_SCHEMA_SQL,
     _COLUNAS_SCHEMA_SQL,
+    _LARGURA_MEDIA_LINHA_SCHEMA_SQL,
     _LISTAR_ESCOPOS_SQL,
     _LISTAR_TABELAS_SQL,
     _RESTRICOES_UNICAS_SCHEMA_SQL,
     _TOTAL_LINHAS_SCHEMA_SQL,
 )
+
+_logger = logging.getLogger(__name__)
+
+
+# Linhas-alvo da sonda de largura real (TABLESAMPLE) — bounded pelo LIMIT,
+# não pelo tamanho da tabela.
+_LINHAS_AMOSTRA_LARGURA_REAL = 500
 
 
 class ExtratorPostgres:
@@ -104,7 +121,9 @@ class ExtratorPostgres:
         return Sucesso(self._pool)
 
     @contextmanager
-    def _conexao(self) -> Generator[Resultado[conexao_postgres], None, None]:
+    def _conexao(
+        self, autocommit: bool = True
+    ) -> Generator[Resultado[conexao_postgres], None, None]:
         """Empresta uma conexão do pool, sob o semáforo, com release garantido.
 
         `yield`a um `Falha` cedo, sem entrar no bloco `try`/`finally` de
@@ -113,6 +132,17 @@ class ExtratorPostgres:
         semáforo a devolver. Quando a conexão é obtida com sucesso, o
         `finally` garante `putconn` + liberação do semáforo mesmo se o
         corpo do `with` levantar uma exceção não tratada.
+
+        Args:
+            autocommit: `False` sustenta uma transação aberta na conexão
+                emprestada — obrigatório para cursor nomeado (streaming).
+                Quem pede `autocommit=False` é responsável por chamar
+                `conexao.commit()` no caminho de sucesso, antes do `with`
+                terminar; no caminho de erro, o `rollback()` automático do
+                `ThreadedConnectionPool.putconn` cobre a limpeza — sem
+                vazamento de estado entre quem pegar a conexão emprestada
+                depois, só a duração da transação fica maior enquanto
+                durar o streaming.
         """
         resultado_pool = self._obter_pool()
         if isinstance(resultado_pool, Falha):
@@ -127,7 +157,7 @@ class ExtratorPostgres:
             yield Falha(f"Não foi possível conectar: {erro}")
             return
         try:
-            conexao.autocommit = True
+            conexao.autocommit = autocommit
             yield Sucesso(conexao)
         finally:
             pool.putconn(conexao)
@@ -242,6 +272,20 @@ class ExtratorPostgres:
                             0, round(linhas_estimadas)
                         )
 
+                    cursor.execute(_LARGURA_MEDIA_LINHA_SCHEMA_SQL, (schema,))
+                    largura_media_por_tabela: dict[str, int] = {}
+                    for nome_tabela, soma_avg_width in cursor.fetchall():
+                        largura_media_por_tabela[nome_tabela] = (
+                            int(soma_avg_width)
+                            if soma_avg_width
+                            else LARGURA_MEDIA_PADRAO_BYTES
+                        )
+
+                    cursor.execute(_COLUNAS_COMPRIMIVEIS_SCHEMA_SQL, (schema,))
+                    tabelas_com_coluna_comprimivel = frozenset(
+                        nome_tabela for (nome_tabela,) in cursor.fetchall()
+                    )
+
             metadados = _MetadadosDoSchema(
                 colunas_por_tabela=dict(colunas_por_tabela),
                 pks_por_tabela=dict(pks_por_tabela),
@@ -250,9 +294,62 @@ class ExtratorPostgres:
                 restricoes_unicas_por_tabela=dict(restricoes_unicas_por_tabela),
                 restricoes_fk_compostas_por_tabela=restricoes_fk_compostas_por_tabela,
                 total_linhas_por_tabela=total_linhas_por_tabela,
+                largura_media_por_tabela=largura_media_por_tabela,
+                tabelas_com_coluna_comprimivel=tabelas_com_coluna_comprimivel,
             )
             self._cache_schemas[schema] = metadados
             return Sucesso(metadados)
+
+    def _largura_media_real(
+        self,
+        schema: str,
+        tabela: str,
+        linhas_colunas: list[_LinhaColuna],
+        total_linhas: int,
+    ) -> Resultado[int]:
+        """Mede a largura média real de linha lendo uma amostra física pequena.
+
+        `pg_stats.avg_width` reflete o tamanho armazenado após compressão
+        TOAST, não o tamanho que o driver recebe ao ler a linha — para
+        colunas comprimíveis, isso pode subestimar bastante a largura real.
+        `octet_length(coluna::text)` força a descompressão; `TABLESAMPLE
+        SYSTEM` limita o custo da leitura ao tamanho da amostra (mesmo
+        mecanismo de `AmostragemPorFaixa`), não ao tamanho da tabela.
+        """
+        percentual_amostra = min(
+            100.0,
+            max(0.01, (_LINHAS_AMOSTRA_LARGURA_REAL / total_linhas) * 100),
+        )
+        with self._conexao() as resultado_conexao:
+            if isinstance(resultado_conexao, Falha):
+                return resultado_conexao
+            conexao = resultado_conexao.valor
+            expressoes_coluna = [
+                sql.SQL("COALESCE(octet_length({}::text), 0)").format(
+                    sql.Identifier(linha.nome)
+                )
+                for linha in linhas_colunas
+            ]
+            soma_colunas = sql.SQL(" + ").join(expressoes_coluna)
+            consulta = sql.SQL(
+                "SELECT AVG(largura) FROM ("
+                "SELECT ({}) AS largura FROM {}.{} "
+                "TABLESAMPLE SYSTEM ({}) LIMIT {}"
+                ") amostra_largura"
+            ).format(
+                soma_colunas,
+                sql.Identifier(schema),
+                sql.Identifier(tabela),
+                sql.Literal(percentual_amostra),
+                sql.Literal(_LINHAS_AMOSTRA_LARGURA_REAL),
+            )
+            with conexao.cursor() as cursor:
+                cursor.execute(consulta)
+                linha_resultado = cursor.fetchone()
+                largura_media = linha_resultado[0] if linha_resultado else None
+        if largura_media is None:
+            return Sucesso(LARGURA_MEDIA_PADRAO_BYTES)
+        return Sucesso(max(1, int(largura_media)))
 
     def extrair_tabela(self, schema: str, tabela: str) -> Resultado[TabelaExtraida]:
         """Extrai estrutura, amostra e metadados de uma tabela específica."""
@@ -298,55 +395,84 @@ class ExtratorPostgres:
             )
 
         requisicao = estrategia.requisicao
-        with self._conexao() as resultado_conexao:
+        largura_media_bytes = metadados.largura_media_por_tabela.get(
+            tabela, LARGURA_MEDIA_PADRAO_BYTES
+        )
+        if total_linhas > 0 and tabela in metadados.tabelas_com_coluna_comprimivel:
+            resultado_largura = self._largura_media_real(
+                schema, tabela, linhas_colunas, total_linhas
+            )
+            if isinstance(resultado_largura, Falha):
+                return resultado_largura
+            largura_media_bytes = resultado_largura.valor
+        usa_streaming = deve_usar_streaming(total_linhas, largura_media_bytes)
+        if usa_streaming:
+            _logger.info(
+                "'%s.%s': streaming ativado (~%d linhas, ~%d bytes/linha) — "
+                "cursor nomeado mantém transação aberta pela duração da leitura.",
+                schema,
+                tabela,
+                total_linhas,
+                largura_media_bytes,
+            )
+        with self._conexao(autocommit=not usa_streaming) as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
             conexao = resultado_conexao.valor
-            with conexao.cursor() as cursor:
-                requisicao_efetiva: RequisicaoDeAmostragem
-                match requisicao:
-                    case AmostragemProbabilistica(percentual=percentual, seed=seed):
-                        seed_usado = seed_efetivo(seed)
-                        requisicao_efetiva = AmostragemProbabilistica(
-                            percentual=percentual, seed=seed_usado
-                        )
-                        consulta_amostra = sql.SQL(
-                            "SELECT * FROM {}.{} TABLESAMPLE BERNOULLI ({}) "
-                            "REPEATABLE ({})"
-                        ).format(
-                            sql.Identifier(schema),
-                            sql.Identifier(tabela),
-                            sql.Literal(percentual),
-                            sql.Literal(seed_usado),
-                        )
-                    case AmostragemIntegral():
-                        requisicao_efetiva = requisicao
-                        consulta_amostra = sql.SQL("SELECT * FROM {}.{}").format(
-                            sql.Identifier(schema), sql.Identifier(tabela)
-                        )
-                    case _ as nunca:
-                        assert_never(nunca)
-
-                cursor.execute(consulta_amostra)
-                nomes_colunas: list[str] = []
-                for coluna_amostra in cursor.description or ():
-                    nomes_colunas.append(coluna_amostra.name)
-                linhas_amostra = cursor.fetchall()
-                amostra = (
-                    pl.DataFrame(
-                        linhas_amostra,
-                        schema=nomes_colunas,
-                        orient="row",
-                        infer_schema_length=None,
+            requisicao_efetiva: RequisicaoDeAmostragem
+            match requisicao:
+                case AmostragemProbabilistica(percentual=percentual, seed=seed):
+                    seed_usado = seed_efetivo(seed)
+                    requisicao_efetiva = AmostragemProbabilistica(
+                        percentual=percentual, seed=seed_usado
                     )
-                    if linhas_amostra
-                    else pl.DataFrame(schema=nomes_colunas)
-                )
+                    consulta_amostra = sql.SQL(
+                        "SELECT * FROM {}.{} TABLESAMPLE BERNOULLI ({}) "
+                        "REPEATABLE ({})"
+                    ).format(
+                        sql.Identifier(schema),
+                        sql.Identifier(tabela),
+                        sql.Literal(percentual),
+                        sql.Literal(seed_usado),
+                    )
+                case AmostragemIntegral():
+                    requisicao_efetiva = requisicao
+                    consulta_amostra = sql.SQL("SELECT * FROM {}.{}").format(
+                        sql.Identifier(schema), sql.Identifier(tabela)
+                    )
+                case RequisicaoPorFaixa(percentual=percentual, seed=seed):
+                    seed_usado = seed_efetivo(seed)
+                    requisicao_efetiva = RequisicaoPorFaixa(
+                        percentual=percentual, seed=seed_usado
+                    )
+                    consulta_amostra = sql.SQL(
+                        "SELECT * FROM {}.{} TABLESAMPLE SYSTEM ({}) "
+                        "REPEATABLE ({})"
+                    ).format(
+                        sql.Identifier(schema),
+                        sql.Identifier(tabela),
+                        sql.Literal(percentual),
+                        sql.Literal(seed_usado),
+                    )
+                case _ as nunca:
+                    assert_never(nunca)
+
+            if usa_streaming:
+                tamanho_lote = calcular_tamanho_lote(largura_media_bytes)
+                with conexao.cursor(name=f"amostra_{schema}_{tabela}") as cursor:
+                    cursor.itersize = tamanho_lote
+                    cursor.execute(consulta_amostra)
+                    amostra = ler_amostra_em_lotes(cursor, tamanho_lote)
+                conexao.commit()
+            else:
+                with conexao.cursor() as cursor:
+                    cursor.execute(consulta_amostra)
+                    amostra = ler_amostra_fetchall(cursor)
 
             match requisicao_efetiva:
                 case AmostragemIntegral():
                     total_linhas_final = len(amostra)
-                case AmostragemProbabilistica():
+                case AmostragemProbabilistica() | RequisicaoPorFaixa():
                     total_linhas_final = total_linhas
                 case _ as nunca:
                     assert_never(nunca)
@@ -359,6 +485,13 @@ class ExtratorPostgres:
                 origem="ExtratorPostgres",
                 causa_provavel="sem ANALYZE recente",
                 identificador_tabela=f"{schema}.{tabela}",
+                descricao_vies_por_faixa=(
+                    "amostragem por página física de disco (TABLESAMPLE "
+                    "SYSTEM), não por linha — pode distorcer percentual_nulo/"
+                    "percentual_unico/valores_frequentes em tabelas com "
+                    "padrão de inserção em lote (staging, eventos, colunas "
+                    "populadas via ALTER TABLE ... DEFAULT recente)."
+                ),
             )
             avisos.extend(avisos_amostra)
             return Sucesso(

@@ -15,6 +15,9 @@ from ddf.domain.shared.resultado import Falha, Sucesso
 from ddf.infrastructure.adapters.analyzers.analisador_de_metricas_de_coluna import (
     AnalisadorDeMetricasDeColuna,
 )
+from ddf.infrastructure.adapters.extractors.estrategias.amostragem_por_faixa import (
+    AmostragemPorFaixa,
+)
 from ddf.infrastructure.adapters.extractors.estrategias.percentual_de_linhas import (
     PercentualDeLinhas,
 )
@@ -127,6 +130,7 @@ def test_listar_escopos_retorna_escopos_semeados(
             "arrays",
             "colisao_fk",
             "geografia",
+            "largura_real",
             "pessoa",
             "polimorfismo",
             "public",
@@ -600,3 +604,148 @@ def test_tabela_inteira_le_a_tabela_toda_sem_tablesample(dsn: str) -> None:
     assert resultado.valor.metadados_amostra.percentual is None
     assert resultado.valor.metadados_amostra.seed is None
     assert resultado.avisos == []
+
+
+def test_amostragem_por_faixa_le_a_tabela_via_tablesample_system(dsn: str) -> None:
+    """Caminho feliz: AmostragemPorFaixa (issue #114) usa TABLESAMPLE SYSTEM real.
+
+    percentual=100 torna a amostra determinística (TABLESAMPLE SYSTEM(100)
+    lê todas as páginas) — prova que o dispatch chega ao Postgres real e
+    emite o Aviso de viés por página física, sem depender da variância de
+    quantas linhas cabem em cada página amostrada.
+    """
+    configuracao = ConfiguracaoDeExtracao(estrategia=AmostragemPorFaixa(percentual=100))
+    extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+
+    resultado = extrator.extrair_tabela("reprodutibilidade", "itens")
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor.total_linhas == 500
+    assert resultado.valor.metadados_amostra.tamanho_amostra == 500
+    assert resultado.valor.metadados_amostra.estrategia == "amostragem_por_faixa"
+    assert len(resultado.avisos) == 1
+    assert "página física" in resultado.avisos[0].mensagem
+
+
+def test_amostragem_por_faixa_mesma_seed_produz_a_mesma_amostra(dsn: str) -> None:
+    """Borda: TABLESAMPLE SYSTEM ... REPEATABLE é reproduzível contra Postgres real.
+
+    Mesma prova que test_mesma_seed_produz_a_mesma_amostra, mas pro
+    dispatch de AmostragemPorFaixa — garante que REPEATABLE funciona pro
+    2º membro da união que usa TABLESAMPLE, não só BERNOULLI.
+    """
+    configuracao = ConfiguracaoDeExtracao(
+        estrategia=AmostragemPorFaixa(percentual=20, seed=12345)
+    )
+    extrator_a = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+    extrator_b = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+
+    resultado_a = extrator_a.extrair_tabela("reprodutibilidade", "itens")
+    resultado_b = extrator_b.extrair_tabela("reprodutibilidade", "itens")
+
+    assert isinstance(resultado_a, Sucesso)
+    assert isinstance(resultado_b, Sucesso)
+    ids_a = sorted(resultado_a.valor.amostra["id"].to_list())
+    ids_b = sorted(resultado_b.valor.amostra["id"].to_list())
+    assert ids_a == ids_b
+
+
+def test_streaming_produz_o_mesmo_resultado_que_sem_streaming(
+    dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Borda: cursor nomeado em lotes lê exatamente as mesmas linhas que fetchall.
+
+    Derruba o limiar de linhas pra 0 (qualquer tabela não vazia ativa
+    streaming) e compara contra o comportamento padrão (limiar real, sem
+    streaming) na mesma tabela — mesmas 500 linhas, mesmos ids, mesmo
+    total_linhas, provando que o `fetchmany` em lotes não perde nem
+    duplica linha nenhuma contra um Postgres real.
+    """
+    configuracao = ConfiguracaoDeExtracao(estrategia=TabelaInteira())
+
+    extrator_sem_streaming = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+    resultado_sem_streaming = extrator_sem_streaming.extrair_tabela(
+        "reprodutibilidade", "itens"
+    )
+
+    monkeypatch.setattr(
+        "ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes."
+        "_LIMIAR_LINHAS_STREAMING",
+        0,
+    )
+    extrator_com_streaming = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+    resultado_com_streaming = extrator_com_streaming.extrair_tabela(
+        "reprodutibilidade", "itens"
+    )
+
+    assert isinstance(resultado_sem_streaming, Sucesso)
+    assert isinstance(resultado_com_streaming, Sucesso)
+    assert resultado_com_streaming.valor.total_linhas == 500
+    ids_sem_streaming = sorted(resultado_sem_streaming.valor.amostra["id"].to_list())
+    ids_com_streaming = sorted(resultado_com_streaming.valor.amostra["id"].to_list())
+    assert ids_com_streaming == ids_sem_streaming
+
+
+def test_largura_media_real_mede_tamanho_apos_descompressao_toast(
+    dsn: str, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Sonda física mede o tamanho real da coluna TEXT, não o comprimido por TOAST.
+
+    'conteudo' é repeat('a', 50000) por linha — altamente compressível, então
+    pg_stats.avg_width subestima bastante o tamanho real recebido pelo
+    driver. A sonda usa octet_length sobre uma amostra física (TABLESAMPLE),
+    então deve refletir o tamanho real, não o comprimido.
+    """
+    extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+    resultado_metadados = extrator._obter_metadados_schema("largura_real")
+    assert isinstance(resultado_metadados, Sucesso)
+    metadados = resultado_metadados.valor
+    linhas_colunas = metadados.colunas_por_tabela["tabela_larga"]
+    total_linhas = metadados.total_linhas_por_tabela["tabela_larga"]
+    largura_catalogo = metadados.largura_media_por_tabela["tabela_larga"]
+
+    resultado_largura_real = extrator._largura_media_real(
+        "largura_real", "tabela_larga", linhas_colunas, total_linhas
+    )
+
+    assert isinstance(resultado_largura_real, Sucesso)
+    largura_real = resultado_largura_real.valor
+    assert largura_real > largura_catalogo * 10
+    assert largura_real > 40_000
+
+
+def test_deteccao_de_coluna_comprimivel_cobre_array(
+    dsn: str, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Coluna ARRAY entra em tabelas_com_coluna_comprimivel, mesmo sem udt_name escalar.
+
+    'tags' é TEXT[] — udt_name real é '_text', não bate com nenhum nome de
+    tipo escalar (text/varchar/json/...). A detecção via
+    pg_attribute.attstorage cobre isso porque olha o armazenamento real da
+    coluna no catálogo, não uma lista fixa de nomes.
+    """
+    extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+
+    resultado_metadados = extrator._obter_metadados_schema("largura_real")
+
+    assert isinstance(resultado_metadados, Sucesso)
+    tabelas_comprimiveis = resultado_metadados.valor.tabelas_com_coluna_comprimivel
+    assert "tabela_com_array" in tabelas_comprimiveis
+
+
+def test_deteccao_de_coluna_comprimivel_cobre_storage_external(
+    dsn: str, configuracao: ConfiguracaoDeExtracao
+) -> None:
+    """Coluna com STORAGE EXTERNAL entra em tabelas_com_coluna_comprimivel.
+
+    EXTERNAL fica fora de linha sem compressão — avg_width reflete só o
+    ponteiro TOAST, subestimativa maior que EXTENDED/MAIN. Só `attstorage
+    = 'p'` (largura fixa, nunca sai de linha) fica fora da detecção.
+    """
+    extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+
+    resultado_metadados = extrator._obter_metadados_schema("largura_real")
+
+    assert isinstance(resultado_metadados, Sucesso)
+    tabelas_comprimiveis = resultado_metadados.valor.tabelas_com_coluna_comprimivel
+    assert "tabela_com_external" in tabelas_comprimiveis

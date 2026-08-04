@@ -1,11 +1,17 @@
 """Testes de integração de ExtratorMariaDB contra MariaDB real (testcontainers)."""
 
+import pymysql
+import pytest
+
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
 from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado
 from ddf.domain.shared.resultado import Falha, Sucesso
+from ddf.infrastructure.adapters.extractors.estrategias.amostragem_por_faixa import (
+    AmostragemPorFaixa,
+)
 from ddf.infrastructure.adapters.extractors.estrategias.percentual_de_linhas import (
     PercentualDeLinhas,
 )
@@ -18,6 +24,20 @@ from ddf.infrastructure.adapters.extractors.mariadb.extrator_mariadb import (
 from ddf.infrastructure.adapters.orchestrator.orquestrador_paralelo import (
     OrquestradorParalelo,
 )
+
+
+def _executar_ddl(conexao: tuple[str, int, str, str], comandos: list[str]) -> None:
+    """Roda comandos DDL/DML avulsos direto no MariaDB do teste (fora do Extrator)."""
+    host, port, user, password = conexao
+    conexao_raiz = pymysql.connect(
+        host=host, port=port, user=user, password=password, autocommit=True
+    )
+    try:
+        with conexao_raiz.cursor() as cursor:
+            for comando in comandos:
+                cursor.execute(comando)
+    finally:
+        conexao_raiz.close()
 
 # Caminho feliz
 
@@ -555,3 +575,171 @@ def test_tabela_inteira_le_a_tabela_toda_sem_rand(
     assert resultado.valor.metadados_amostra.percentual is None
     assert resultado.valor.metadados_amostra.seed is None
     assert resultado.avisos == []
+
+
+def test_amostragem_por_faixa_com_pk_integra_usa_uniao_de_faixas(
+    conexao: tuple[str, int, str, str],
+) -> None:
+    """Caminho feliz: AmostragemPorFaixa com PK inteira íntegra usa K faixas.
+
+    reprodutibilidade.itens tem PK AUTO_INCREMENT sem gaps (id 1..500) —
+    elegível pro caminho principal, não o fallback. K faixas não garantem
+    cobertura exata (podem se sobrepor), então não afirma tamanho exato —
+    mas precisa cobrir mais de um quarto do intervalo de PK, não só o
+    início: cada faixa tem seu próprio corte, sorteado independentemente,
+    então a amostra deve aparecer espalhada pelo intervalo de PK, não
+    concentrada nos valores mais baixos.
+    """
+    host, port, user, password = conexao
+    configuracao = ConfiguracaoDeExtracao(estrategia=AmostragemPorFaixa(percentual=50))
+    extrator = ExtratorMariaDB(
+        host=host, port=port, user=user, password=password, configuracao=configuracao
+    )
+
+    resultado = extrator.extrair_tabela("reprodutibilidade", "itens")
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor.total_linhas == 500
+    assert resultado.valor.metadados_amostra.estrategia == "amostragem_por_faixa"
+    assert resultado.valor.metadados_amostra.tamanho_amostra > 0
+    assert len(resultado.avisos) == 1
+    assert "faixas contíguas de chave primária" in resultado.avisos[0].mensagem
+
+    ids_amostrados = resultado.valor.amostra["id"].to_list()
+    quartis_presentes = {min(3, (id_ - 1) // 125) for id_ in ids_amostrados}
+    assert len(quartis_presentes) > 1
+
+
+def test_amostragem_por_faixa_sem_pk_cai_no_fallback_probabilistico(
+    conexao: tuple[str, int, str, str],
+) -> None:
+    """Borda: tabela sem PK cai no fallback RAND() <= p, com Aviso explicando o motivo.
+
+    Tabela própria deste teste (sem PRIMARY KEY nenhuma) — elegibilidade
+    de PK real, não simulada, contra MariaDB de verdade.
+    """
+    _executar_ddl(
+        conexao,
+        [
+            "CREATE DATABASE IF NOT EXISTS sem_pk",
+            """
+            CREATE TABLE sem_pk.tabela_sem_pk (
+                id INT NOT NULL,
+                valor VARCHAR(50) NOT NULL
+            ) ENGINE=InnoDB
+            """,
+            """
+            INSERT INTO sem_pk.tabela_sem_pk (id, valor)
+                SELECT seq, CONCAT('valor_', seq) FROM sem_pk.seq_1_to_20
+            """,
+            "ANALYZE TABLE sem_pk.tabela_sem_pk",
+        ],
+    )
+    host, port, user, password = conexao
+    configuracao = ConfiguracaoDeExtracao(estrategia=AmostragemPorFaixa(percentual=50))
+    extrator = ExtratorMariaDB(
+        host=host, port=port, user=user, password=password, configuracao=configuracao
+    )
+
+    resultado = extrator.extrair_tabela("sem_pk", "tabela_sem_pk")
+
+    assert isinstance(resultado, Sucesso)
+    # Mecanismo real usado foi o probabilístico (fallback), não a faixa
+    # pedida no wizard — reflete o que foi lido de fato.
+    assert resultado.valor.metadados_amostra.estrategia == "percentual_de_linhas"
+    mensagens = [aviso.mensagem for aviso in resultado.avisos]
+    assert any("caiu para o mecanismo probabilístico padrão" in m for m in mensagens)
+
+
+def test_amostragem_por_faixa_com_pk_gap_heavy_avisa_gaps_densos(
+    conexao: tuple[str, int, str, str],
+) -> None:
+    """Borda: 1 outlier de PK distante da massa real dispara o Aviso de gaps densos.
+
+    999 linhas com PK 1..999 (massa real, densa) + 1 linha outlier isolada
+    em id=10_000_000 — MAX(pk) fica dominado pelo outlier, então o sorteio
+    uniforme de cada uma das 10 faixas (`FLOOR(RAND(seed) * MAX(pk))`) quase
+    sempre cai entre 1000 e 10_000_000, um intervalo sem nenhuma linha real
+    exceto o próprio outlier no topo — cada faixa aí só encontra 1 linha
+    (o outlier), bem abaixo de `linhas_por_faixa` (50, com percentual=50%
+    sobre ~1000 linhas). Como `WHERE pk >= limiar ORDER BY pk LIMIT n`
+    nunca devolve 0 linhas enquanto `limiar <= MAX(pk)` (sempre existe pelo
+    menos o próprio outlier), o mínimo garantido por faixa é 1 — por isso
+    a massa precisa ser grande o bastante (~1000, não ~20) pra que
+    `K faixas x 1 linha` (10) fique bem abaixo de `0.5 * n_pedido` (250),
+    não só ligeiramente abaixo. Probabilidade de todas as 10 faixas
+    caírem por acidente dentro da massa real (999 de 10_000_000 valores
+    possíveis) é desprezível, não zero — mesmo espírito estatístico de
+    test_seeds_diferentes_produzem_amostras_diferentes.
+    """
+    _executar_ddl(
+        conexao,
+        [
+            "CREATE DATABASE IF NOT EXISTS gaps",
+            """
+            CREATE TABLE gaps.tabela_gaps (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                valor VARCHAR(50) NOT NULL
+            ) ENGINE=InnoDB
+            """,
+            """
+            INSERT INTO gaps.tabela_gaps (valor)
+                SELECT CONCAT('valor_', seq) FROM gaps.seq_1_to_999
+            """,
+            "ALTER TABLE gaps.tabela_gaps AUTO_INCREMENT = 10000000",
+            "INSERT INTO gaps.tabela_gaps (valor) VALUES ('outlier')",
+            "ANALYZE TABLE gaps.tabela_gaps",
+        ],
+    )
+    host, port, user, password = conexao
+    configuracao = ConfiguracaoDeExtracao(
+        estrategia=AmostragemPorFaixa(percentual=50, seed=1)
+    )
+    extrator = ExtratorMariaDB(
+        host=host, port=port, user=user, password=password, configuracao=configuracao
+    )
+
+    resultado = extrator.extrair_tabela("gaps", "tabela_gaps")
+
+    assert isinstance(resultado, Sucesso)
+    mensagens = [aviso.mensagem for aviso in resultado.avisos]
+    assert any("gaps densos" in m for m in mensagens)
+
+
+def test_streaming_produz_o_mesmo_resultado_que_sem_streaming(
+    conexao: tuple[str, int, str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Borda: SSCursor em lotes lê exatamente as mesmas linhas que fetchall.
+
+    Mesma prova da versão Postgres: derruba o limiar de linhas pra 0 e
+    compara contra o comportamento padrão na mesma tabela — mesmas 500
+    linhas, mesmos ids, mesmo total_linhas.
+    """
+    host, port, user, password = conexao
+    configuracao = ConfiguracaoDeExtracao(estrategia=TabelaInteira())
+
+    extrator_sem_streaming = ExtratorMariaDB(
+        host=host, port=port, user=user, password=password, configuracao=configuracao
+    )
+    resultado_sem_streaming = extrator_sem_streaming.extrair_tabela(
+        "reprodutibilidade", "itens"
+    )
+
+    monkeypatch.setattr(
+        "ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes."
+        "_LIMIAR_LINHAS_STREAMING",
+        0,
+    )
+    extrator_com_streaming = ExtratorMariaDB(
+        host=host, port=port, user=user, password=password, configuracao=configuracao
+    )
+    resultado_com_streaming = extrator_com_streaming.extrair_tabela(
+        "reprodutibilidade", "itens"
+    )
+
+    assert isinstance(resultado_sem_streaming, Sucesso)
+    assert isinstance(resultado_com_streaming, Sucesso)
+    assert resultado_com_streaming.valor.total_linhas == 500
+    ids_sem_streaming = sorted(resultado_sem_streaming.valor.amostra["id"].to_list())
+    ids_com_streaming = sorted(resultado_com_streaming.valor.amostra["id"].to_list())
+    assert ids_com_streaming == ids_sem_streaming

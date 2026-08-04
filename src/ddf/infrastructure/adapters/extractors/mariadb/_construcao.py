@@ -54,6 +54,7 @@ class _MetadadosDoSchema(NamedTuple):
     restricoes_fk_compostas_por_tabela: dict[str, list[RestricaoDeFkComposta]]
     colunas_json_por_tabela: dict[str, set[str]]
     total_linhas_por_tabela: dict[str, int]
+    largura_media_por_tabela: dict[str, int]
 
 
 def _quotar_identificador(nome: str) -> str:
@@ -215,6 +216,55 @@ def _agrupar_colunas_json_por_tabela(
     for nome_tabela, check_clause in linhas:
         check_clauses_por_tabela[nome_tabela].append(check_clause)
     return dict(check_clauses_por_tabela)
+
+
+_TIPOS_INTEIROS_ELEGIVEIS_PARA_FAIXA = frozenset(
+    {"tinyint", "smallint", "mediumint", "int", "bigint"}
+)
+
+
+class _PkElegivel(NamedTuple):
+    """PK de coluna única e tipo inteiro — elegível para amostragem por faixa."""
+
+    nome_coluna: str
+
+
+class _PkNaoElegivel(NamedTuple):
+    """PK não elegível para amostragem por faixa — motivo do fallback."""
+
+    motivo: str
+
+
+def _elegibilidade_de_pk_para_faixa(
+    colunas_pk: set[str],
+    linhas_colunas: list[_LinhaColuna],
+) -> _PkElegivel | _PkNaoElegivel:
+    """Decide se a PK da tabela serve para amostragem por faixa (RequisicaoPorFaixa).
+
+    Elegível só com PK de coluna única e tipo inteiro (tinyint/smallint/
+    mediumint/int/bigint, antes de qualquer promoção INTEGER→BOOLEAN pela
+    amostra — essa promoção nunca se aplica à PK na prática, mas a checagem
+    aqui usa o `data_type` cru do catálogo, não a categoria final) — os
+    únicos tipos onde `MAX(pk)` e um corte `pk >= valor` fazem sentido
+    aritmético. PK composta, ausente, ou de outro tipo (UUID, VARCHAR,
+    DATE...) não serve — quem chama cai para o mecanismo probabilístico
+    padrão, com `Aviso` explicando o motivo.
+    """
+    if len(colunas_pk) == 0:
+        return _PkNaoElegivel(motivo="tabela sem chave primária")
+    if len(colunas_pk) > 1:
+        return _PkNaoElegivel(motivo="chave primária composta")
+    (nome_pk,) = colunas_pk
+    linha_pk = next((linha for linha in linhas_colunas if linha.nome == nome_pk), None)
+    tipo_e_elegivel = (
+        linha_pk is not None
+        and linha_pk.data_type in _TIPOS_INTEIROS_ELEGIVEIS_PARA_FAIXA
+    )
+    if not tipo_e_elegivel:
+        return _PkNaoElegivel(
+            motivo=f"chave primária '{nome_pk}' não é de tipo inteiro"
+        )
+    return _PkElegivel(nome_coluna=nome_pk)
 
 
 def _promover_booleanos_pela_amostra(

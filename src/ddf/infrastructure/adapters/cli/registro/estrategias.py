@@ -9,6 +9,9 @@ from pydantic import ValidationError
 from ddf.domain.ports.estrategia_de_amostragem import EstrategiaDeAmostragem
 from ddf.infrastructure.adapters.cli import prompts
 from ddf.infrastructure.adapters.cli.registro.comum import registrar_ou_falhar
+from ddf.infrastructure.adapters.extractors.estrategias.amostragem_por_faixa import (
+    AmostragemPorFaixa,
+)
 from ddf.infrastructure.adapters.extractors.estrategias.percentual_de_linhas import (
     PercentualDeLinhas,
 )
@@ -93,5 +96,38 @@ def _construir_tabela_inteira() -> EstrategiaDeAmostragem:
     return TabelaInteira()
 
 
+def _construir_amostragem_por_faixa() -> EstrategiaDeAmostragem:
+    """Confirma o trade-off de viés e monta AmostragemPorFaixa.
+
+    Mais barata que `PercentualDeLinhas` (custo ~proporcional ao
+    percentual, não ao total de linhas), mas amostra por faixa/bloco em
+    vez de linha — pode distorcer métricas em tabelas com padrão de
+    inserção em lote. A confirmação existe pra essa troca nunca ser
+    silenciosa, mesmo padrão de `_construir_tabela_inteira`.
+    """
+    prosseguir = prompts.confirmar(
+        "Amostragem por faixa é mais rápida em tabelas grandes, mas "
+        "amostra por faixa/bloco, não por linha — pode distorcer métricas "
+        "em tabelas alimentadas em lote ou particionadas por tempo. "
+        "Continuar?",
+        default=True,
+    )
+    if not prosseguir:
+        sys.exit(0)
+    percentual = prompts.numero(
+        "Percentual de amostragem (0-100]:", float, default="10"
+    )
+    seed = prompts.numero_opcional(
+        "Seed para reprodutibilidade (opcional, deixe em branco para aleatório):",
+        int,
+    )
+    try:
+        return AmostragemPorFaixa(percentual=percentual, seed=seed)
+    except ValidationError:
+        print(f"Erro: percentual deve estar em (0, 100] ({percentual}).")
+        sys.exit(1)
+
+
 registrar_estrategia("Percentual de linhas", _construir_percentual_de_linhas)
 registrar_estrategia("Tabela inteira", _construir_tabela_inteira)
+registrar_estrategia("Amostragem por faixa", _construir_amostragem_por_faixa)

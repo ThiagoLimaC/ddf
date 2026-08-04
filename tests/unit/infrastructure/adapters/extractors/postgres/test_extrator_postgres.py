@@ -1,7 +1,7 @@
 """Testes de ExtratorPostgres."""
 
+import logging
 import threading
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -145,12 +145,18 @@ class TestFeliz:
             ],  # FK, schema cross-referenciado (schema inteiro)
             [("pedidos", 5001, "nome")],  # UNIQUE, single-column (schema inteiro)
             [("pedidos", 1000.0)],  # total_linhas (schema inteiro)
+            [("pedidos", 200)],  # largura_media (schema inteiro)
+            [("pedidos",)],  # colunas comprimíveis (schema inteiro) — "nome"
             [(1, "ana", 10), (2, "bia", 20)],  # amostra (só desta tabela)
         ]
+        # "nome" é varchar (TOAST-ável) — extrair_tabela sonda a largura real
+        # via TABLESAMPLE antes de decidir streaming, em vez de usar só o
+        # avg_width de catálogo.
+        cursor_fake.fetchone.return_value = (123.0,)
         cursor_fake.description = [
-            SimpleNamespace(name="id"),
-            SimpleNamespace(name="nome"),
-            SimpleNamespace(name="cliente_id"),
+            ("id",),
+            ("nome",),
+            ("cliente_id",),
         ]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
@@ -182,8 +188,9 @@ class TestFeliz:
         ]
         assert tabela.metadados_amostra.estrategia == "percentual_de_linhas"
         assert tabela.metadados_amostra.tamanho_amostra == 2
-        # 2 conexões: 1 pra popular o cache de metadados do schema, 1 pra amostra.
-        assert pool_classe_fake.return_value.putconn.call_count == 2
+        # 3 conexões: 1 pra popular o cache de metadados do schema, 1 pra
+        # sondar a largura real (coluna "nome" é TOAST-ável), 1 pra amostra.
+        assert pool_classe_fake.return_value.putconn.call_count == 3
         pool_classe_fake.return_value.putconn.assert_called_with(conexao_fake)
 
     def test_segunda_extracao_no_mesmo_schema_reaproveita_cache_de_metadados(
@@ -206,10 +213,12 @@ class TestFeliz:
             [],  # FK
             [],  # UNIQUE
             [("pedidos", 10.0), ("clientes", 5.0)],  # total_linhas
+            [("pedidos", 200), ("clientes", 200)],  # largura_media (schema inteiro)
+            [],  # colunas comprimíveis (schema inteiro) — nenhuma
             [],  # amostra de "pedidos"
             [],  # amostra de "clientes"
         ]
-        cursor_fake.description = [SimpleNamespace(name="id")]
+        cursor_fake.description = [("id",)]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
         extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
@@ -220,15 +229,90 @@ class TestFeliz:
         assert isinstance(segunda, Sucesso)
         assert primeira.valor.total_linhas == 10
         assert segunda.valor.total_linhas == 5
-        # 5 queries de metadado (rodadas 1x só) + 1 amostra por tabela = 7.
-        assert cursor_fake.fetchall.call_count == 7
+        # 7 queries de metadado (rodadas 1x só) + 1 amostra por tabela = 9.
+        assert cursor_fake.fetchall.call_count == 9
         # 1 conexão pro cache de metadado (só na 1ª chamada) + 1 amostra por
         # tabela (2) = 3 — não 4, que seria o caso sem o cache reaproveitado.
         assert pool_classe_fake.return_value.putconn.call_count == 3
 
+    def test_tabela_acima_do_limiar_de_linhas_usa_cursor_nomeado_em_lotes(
+        self,
+        pool_classe_fake: MagicMock,
+        configuracao: ConfiguracaoDeExtracao,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """total_linhas > limiar ativa streaming: cursor nomeado, itersize, commit."""
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            [("grande", "id", "int4", None, None, None, "NO")],  # colunas
+            [("grande", "id")],  # PK
+            [],  # FK
+            [],  # UNIQUE
+            [("grande", 200_000.0)],  # total_linhas — acima de 100_000
+            [("grande", 200)],  # largura_media
+            [],  # colunas comprimíveis — nenhuma ("id" é int4)
+        ]
+        cursor_fake.description = [("id",)]
+        cursor_fake.fetchmany.side_effect = [[(1,), (2,)], []]
+        pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+        extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
+        with caplog.at_level(logging.INFO):
+            resultado = extrator.extrair_tabela("public", "grande")
+
+        assert isinstance(resultado, Sucesso)
+        assert resultado.valor.metadados_amostra.tamanho_amostra == 2
+        conexao_fake.cursor.assert_called_with(name="amostra_public_grande")
+        assert cursor_fake.itersize == 50_000  # calcular_tamanho_lote(200)
+        conexao_fake.commit.assert_called_once()
+        # 7 queries de metadado (fetchall) + amostra via fetchmany, não fetchall.
+        assert cursor_fake.fetchall.call_count == 7
+        assert "streaming ativado" in caplog.text
+        assert "public.grande" in caplog.text
+
 
 class TestErro:
     """Erro esperado."""
+
+    def test_excecao_durante_streaming_fecha_cursor_e_conexao_antes_de_propagar(
+        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+    ) -> None:
+        """Erro no meio do fetchmany fecha cursor/conexão antes de propagar.
+
+        Sem isso, um cursor nomeado não drenado ficaria pendente até o GC
+        derrubar a conexão — a mesma classe de problema descrita para o
+        SSCursor do MariaDB, só que aqui é o `with` do cursor (não um
+        try/except manual) quem garante o fechamento determinístico.
+        """
+        conexao_fake = MagicMock()
+        cursor_context = conexao_fake.cursor.return_value
+        cursor_context.__exit__.return_value = False  # não suprime a exceção
+        cursor_fake = cursor_context.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            [("grande", "id", "int4", None, None, None, "NO")],  # colunas
+            [("grande", "id")],  # PK
+            [],  # FK
+            [],  # UNIQUE
+            [("grande", 200_000.0)],  # total_linhas — acima do limiar
+            [("grande", 200)],  # largura_media
+            [],  # colunas comprimíveis — nenhuma ("id" é int4)
+        ]
+        cursor_fake.description = [("id",)]
+        cursor_fake.fetchmany.side_effect = OperationalError("conexão perdida")
+        pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+        extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
+
+        with pytest.raises(OperationalError):
+            extrator.extrair_tabela("public", "grande")
+
+        # 1ª chamada (metadados) sai normal; 2ª (amostra streaming) carrega
+        # a exceção — prova que o __exit__ do cursor de streaming rodou
+        # antes dela propagar, não só o da 1ª conexão.
+        ultima_saida = cursor_context.__exit__.call_args_list[-1]
+        assert ultima_saida.args[0] is OperationalError
+        pool_classe_fake.return_value.putconn.assert_called_with(conexao_fake)
 
     def test_max_conexoes_zero_levanta_value_error(
         self,
@@ -343,6 +427,33 @@ class TestErro:
 class TestBorda:
     """Bordas."""
 
+    def test_tabela_exatamente_no_limiar_de_linhas_nao_ativa_streaming(
+        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+    ) -> None:
+        """total_linhas == limiar (não >) segue com fetchall direto."""
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            [("tabela", "id", "int4", None, None, None, "NO")],  # colunas
+            [("tabela", "id")],  # PK
+            [],  # FK
+            [],  # UNIQUE
+            [("tabela", 100_000.0)],  # total_linhas — exatamente no limiar
+            [("tabela", 200)],  # largura_media
+            [],  # colunas comprimíveis — nenhuma ("id" é int4)
+            [(1,)],  # amostra
+        ]
+        cursor_fake.description = [("id",)]
+        pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+        extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
+        resultado = extrator.extrair_tabela("public", "tabela")
+
+        assert isinstance(resultado, Sucesso)
+        conexao_fake.cursor.assert_called_with()
+        cursor_fake.fetchmany.assert_not_called()
+        conexao_fake.commit.assert_not_called()
+
     def test_connect_timeout_customizado_e_repassado_ao_pool(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
     ) -> None:
@@ -395,9 +506,11 @@ class TestBorda:
             ],  # FK duplicada na mesma coluna (2 constraints distintas)
             [],  # UNIQUE
             [("movimentos", 0.0)],  # total_linhas
+            [("movimentos", 200)],  # largura_media (schema inteiro)
+            [],  # colunas comprimíveis — nenhuma ("entidade_id" é int4)
             [],  # amostra
         ]
-        cursor_fake.description = [SimpleNamespace(name="entidade_id")]
+        cursor_fake.description = [("entidade_id",)]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
         extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
@@ -443,12 +556,14 @@ class TestBorda:
                 ("enderecos", 5002, "apelido"),
             ],  # UNIQUE — índice composto (5001) + índice single-column (5002)
             [("enderecos", 0.0)],  # total_linhas
+            [("enderecos", 200)],  # largura_media (schema inteiro)
+            [("enderecos",)],  # colunas comprimíveis — as 3 são varchar
             [],  # amostra
         ]
         cursor_fake.description = [
-            SimpleNamespace(name="codigo_pais"),
-            SimpleNamespace(name="codigo_local"),
-            SimpleNamespace(name="apelido"),
+            ("codigo_pais",),
+            ("codigo_local",),
+            ("apelido",),
         ]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
@@ -490,12 +605,14 @@ class TestBorda:
             ],  # FK — constraint composta (fk_estado) + single-column (fk_cliente)
             [],  # UNIQUE
             [("pedidos", 0.0)],  # total_linhas
+            [("pedidos", 200)],  # largura_media (schema inteiro)
+            [],  # colunas comprimíveis — nenhuma (todas int4)
             [],  # amostra
         ]
         cursor_fake.description = [
-            SimpleNamespace(name="pais_id"),
-            SimpleNamespace(name="estado_id"),
-            SimpleNamespace(name="cliente_id"),
+            ("pais_id",),
+            ("estado_id",),
+            ("cliente_id",),
         ]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
@@ -583,7 +700,7 @@ class TestBorda:
         """2 chamadas concorrentes ao mesmo schema populam o cache 1x.
 
         Sem lock em _obter_metadados_schema, duas threads poderiam ver o cache
-        do schema vazio ao mesmo tempo e rodar as 5 queries de metadado duas
+        do schema vazio ao mesmo tempo e rodar as 6 queries de metadado duas
         vezes cada — o ganho da consolidação (issue #66) dependeria de sorte de
         timing, não de garantia. Mesmo padrão de
         test_primeiro_uso_concorrente_cria_pool_uma_unica_vez, aplicado ao cache
@@ -598,6 +715,8 @@ class TestBorda:
                 [],  # FK
                 [],  # UNIQUE
                 [("pedidos", 10.0)],  # total_linhas
+                [("pedidos", 200)],  # largura_media (schema inteiro)
+                [],  # colunas comprimíveis — nenhuma ("id" é int4)
             ]
         )
 
@@ -626,7 +745,7 @@ class TestBorda:
         pode_prosseguir.set()
         thread_lenta.join(timeout=1)
 
-        assert cursor_fake.fetchall.call_count == 5
+        assert cursor_fake.fetchall.call_count == 7
         assert isinstance(resultado_concorrente, Sucesso)
         assert extrator._cache_schemas["public"] is resultado_concorrente.valor
 
@@ -656,9 +775,11 @@ class TestBorda:
             [],  # FK
             [],  # UNIQUE
             [("tabela_nova", -1.0)],  # total_linhas
+            [("tabela_nova", 200)],  # largura_media (schema inteiro)
+            [],  # colunas comprimíveis — nenhuma ("id" é int4)
             [],  # amostra
         ]
-        cursor_fake.description = [SimpleNamespace(name="id")]
+        cursor_fake.description = [("id",)]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
         extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
@@ -667,6 +788,52 @@ class TestBorda:
         assert isinstance(resultado, Sucesso)
         assert resultado.valor.total_linhas == 0
         assert resultado.valor.metadados_amostra.tamanho_amostra == 0
+
+    def test_tabela_ausente_de_pg_stats_usa_largura_media_padrao(
+        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+    ) -> None:
+        """Tabela nunca analisada não aparece em pg_stats — cai no fallback."""
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            [("tabela", "id", "int4", None, None, None, "NO")],  # colunas
+            [("tabela", "id")],  # PK
+            [],  # FK
+            [],  # UNIQUE
+            [("tabela", 10.0)],  # total_linhas
+            [],  # largura_media — sem linha nenhuma pra "tabela"
+            [],  # colunas comprimíveis — nenhuma ("id" é int4)
+        ]
+        pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+        extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
+        resultado = extrator._obter_metadados_schema("public")
+
+        assert isinstance(resultado, Sucesso)
+        assert resultado.valor.largura_media_por_tabela == {}
+
+    def test_tabela_com_estatistica_real_usa_soma_de_avg_width(
+        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+    ) -> None:
+        """Largura média vem da soma de avg_width de todas as colunas da tabela."""
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            [("tabela", "id", "int4", None, None, None, "NO")],  # colunas
+            [("tabela", "id")],  # PK
+            [],  # FK
+            [],  # UNIQUE
+            [("tabela", 10.0)],  # total_linhas
+            [("tabela", 57)],  # largura_media — soma real de avg_width
+            [],  # colunas comprimíveis — nenhuma ("id" é int4)
+        ]
+        pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+        extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
+        resultado = extrator._obter_metadados_schema("public")
+
+        assert isinstance(resultado, Sucesso)
+        assert resultado.valor.largura_media_por_tabela == {"tabela": 57}
 
     def test_amostra_maior_que_total_linhas_emite_aviso(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
@@ -686,9 +853,11 @@ class TestBorda:
             [],  # FK
             [],  # UNIQUE
             [("tabela_recem_carregada", 1.0)],  # total_linhas desatualizado
+            [("tabela_recem_carregada", 200)],  # largura_media (schema inteiro)
+            [],  # colunas comprimíveis — nenhuma ("id" é int4)
             [(1,), (2,)],  # amostra — 2 linhas
         ]
-        cursor_fake.description = [SimpleNamespace(name="id")]
+        cursor_fake.description = [("id",)]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
         extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
@@ -719,9 +888,11 @@ class TestBorda:
             [],  # FK
             [],  # UNIQUE
             [("tabela", 3.0)],  # total_linhas de catálogo, desatualizado de propósito
+            [("tabela", 200)],  # largura_media (schema inteiro)
+            [],  # colunas comprimíveis — nenhuma ("id" é int4)
             [(1,), (2,), (3,), (4,), (5,)],  # amostra — 5 linhas, a tabela inteira
         ]
-        cursor_fake.description = [SimpleNamespace(name="id")]
+        cursor_fake.description = [("id",)]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
         extrator = ExtratorPostgres(
@@ -755,9 +926,11 @@ class TestBorda:
             [],  # FK
             [],  # UNIQUE
             [("tabela", 100.0)],  # total_linhas
+            [("tabela", 200)],  # largura_media (schema inteiro)
+            [],  # colunas comprimíveis — nenhuma ("id" é int4)
             [(1,)],  # amostra
         ]
-        cursor_fake.description = [SimpleNamespace(name="id")]
+        cursor_fake.description = [("id",)]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
         extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
@@ -766,6 +939,45 @@ class TestBorda:
         assert isinstance(resultado, Sucesso)
         assert resultado.valor.metadados_amostra.seed is not None
         assert isinstance(resultado.valor.metadados_amostra.seed, int)
+
+    def test_amostragem_por_faixa_usa_tablesample_system_e_avisa_vies(
+        self,
+        pool_classe_fake: MagicMock,
+        configuracao_por_faixa: ConfiguracaoDeExtracao,
+    ) -> None:
+        """RequisicaoPorFaixa gera TABLESAMPLE SYSTEM e emite Aviso de viés.
+
+        Diferente de PercentualDeLinhas (BERNOULLI), o Aviso aqui não é sobre
+        varredura sequencial completa — é sobre viés de cluster, incondicional
+        toda vez que a estratégia é usada.
+        """
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            [("tabela", "id", "int4", None, None, None, "NO")],  # colunas
+            [("tabela", "id")],  # PK
+            [],  # FK
+            [],  # UNIQUE
+            [("tabela", 100.0)],  # total_linhas
+            [("tabela", 200)],  # largura_media (schema inteiro)
+            [],  # colunas comprimíveis — nenhuma ("id" é int4)
+            [(1,)],  # amostra
+        ]
+        cursor_fake.description = [("id",)]
+        pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+        extrator = ExtratorPostgres(
+            dsn="postgresql://fake", configuracao=configuracao_por_faixa
+        )
+        resultado = extrator.extrair_tabela("public", "tabela")
+
+        assert isinstance(resultado, Sucesso)
+        assert resultado.valor.metadados_amostra.estrategia == "amostragem_por_faixa"
+        assert resultado.valor.total_linhas == 100
+        assert len(resultado.avisos) == 1
+        assert "página física de disco" in resultado.avisos[0].mensagem
+        consulta_amostra = cursor_fake.execute.call_args_list[-1].args[0]
+        assert "TABLESAMPLE SYSTEM" in str(consulta_amostra)
 
     def test_max_conexoes_um_faz_segunda_chamada_concorrente_esperar(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao

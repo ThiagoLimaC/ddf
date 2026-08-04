@@ -1,5 +1,6 @@
 """Testes de ExtratorMariaDB."""
 
+import logging
 import threading
 from unittest.mock import MagicMock
 
@@ -13,8 +14,12 @@ from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado
 from ddf.domain.ports.extrator import Extrator
 from ddf.domain.shared.resultado import Falha, Sucesso
+from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
+    LARGURA_MEDIA_PADRAO_BYTES,
+)
 from ddf.infrastructure.adapters.extractors.mariadb.extrator_mariadb import (
     ExtratorMariaDB,
+    _k_faixas_para,
 )
 
 from .conftest import montar_metadados_side_effect
@@ -190,6 +195,41 @@ class TestFeliz:
         # 2 conexões: 1 pra popular o cache de metadados do escopo, 1 pra amostra.
         assert conexao_fake.close.call_count == 2
 
+    def test_tabela_acima_do_limiar_de_linhas_usa_sscursor_em_lotes(
+        self,
+        pool_classe_fake: MagicMock,
+        configuracao: ConfiguracaoDeExtracao,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """total_linhas > limiar ativa streaming: SSCursor lido via fetchmany."""
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            *montar_metadados_side_effect(
+                tabela="grande",
+                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                pks=["id"],
+                total_linhas=200_000,  # acima de 100_000
+            ),
+        ]
+        cursor_fake.description = [("id",)]
+        cursor_fake.fetchmany.side_effect = [[(1,), (2,)], []]
+        pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+        extrator = ExtratorMariaDB(
+            host="fake", user="root", password="senha", configuracao=configuracao
+        )
+        with caplog.at_level(logging.INFO):
+            resultado = extrator.extrair_tabela("vendas", "grande")
+
+        assert isinstance(resultado, Sucesso)
+        assert resultado.valor.metadados_amostra.tamanho_amostra == 2
+        conexao_fake.cursor.assert_called_with(pymysql.cursors.SSCursor)
+        # 6 queries de metadado (fetchall) + amostra via fetchmany, não fetchall.
+        assert cursor_fake.fetchall.call_count == 6
+        assert "streaming ativado" in caplog.text
+        assert "vendas.grande" in caplog.text
+
     def test_segunda_extracao_no_mesmo_schema_reaproveita_cache_de_metadados(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
     ) -> None:
@@ -210,7 +250,7 @@ class TestFeliz:
             [],  # FK
             [],  # UNIQUE
             [],  # JSON
-            [("pedidos", 10), ("clientes", 5)],  # total_linhas
+            [("pedidos", 10, 200), ("clientes", 5, 200)],  # total_linhas
             [],  # amostra de "pedidos"
             [],  # amostra de "clientes"
         ]
@@ -336,7 +376,7 @@ class TestFeliz:
                 ("fornecedores", "email", "email"),
             ],  # UNIQUE — mesmo constraint_name ("email"), tabelas diferentes
             [],  # JSON
-            [("clientes", 0), ("fornecedores", 0)],  # total_linhas
+            [("clientes", 0, 200), ("fornecedores", 0, 200)],  # total_linhas
             [],  # amostra de "clientes"
             [],  # amostra de "fornecedores"
         ]
@@ -389,7 +429,7 @@ class TestFeliz:
                 ("produtos", "json_valid(`atributos`)"),
                 ("pedidos", "`quantidade` >= 0"),
             ],  # JSON — mesmo constraint_name ("chk_json") em tabelas diferentes
-            [("produtos", 0), ("pedidos", 0)],  # total_linhas
+            [("produtos", 0, 200), ("pedidos", 0, 200)],  # total_linhas
             [],  # amostra de "produtos"
             [],  # amostra de "pedidos"
         ]
@@ -407,9 +447,56 @@ class TestFeliz:
         assert produtos.valor.colunas[0].tipo_dado.categoria == CategoriaDeDado.JSON
         assert pedidos.valor.colunas[0].tipo_dado.categoria == CategoriaDeDado.INTEGER
 
+    def test_k_faixas_para_tabela_pequena_usa_o_minimo(self) -> None:
+        """Tabelas até 1M linhas mantêm o K=10 já validado pelos testes existentes."""
+        assert _k_faixas_para(500) == 10
+        assert _k_faixas_para(1_000_000) == 10
+
 
 class TestErro:
     """Erro esperado."""
+
+    def test_excecao_durante_streaming_fecha_cursor_e_conexao_antes_de_propagar(
+        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+    ) -> None:
+        """Erro no meio do fetchmany fecha o SSCursor antes de propagar.
+
+        Sem isso, um SSCursor não drenado ficaria pra ser fechado só pelo
+        GC (via `__del__`), gerando o AttributeError silenciosamente
+        engolido apontado pelo engenheiro de dados.
+        """
+        conexao_fake = MagicMock()
+        cursor_context = conexao_fake.cursor.return_value
+        cursor_context.__exit__.return_value = False  # não suprime a exceção
+        cursor_fake = cursor_context.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            *montar_metadados_side_effect(
+                tabela="grande",
+                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                pks=["id"],
+                total_linhas=200_000,  # acima do limiar
+            ),
+        ]
+        cursor_fake.description = [("id",)]
+        cursor_fake.fetchmany.side_effect = pymysql.err.OperationalError(
+            "conexão perdida"
+        )
+        pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+        extrator = ExtratorMariaDB(
+            host="fake", user="root", password="senha", configuracao=configuracao
+        )
+
+        with pytest.raises(pymysql.err.OperationalError):
+            extrator.extrair_tabela("vendas", "grande")
+
+        # 1ª chamada (metadados) sai normal; 2ª (amostra streaming) carrega
+        # a exceção — prova que o __exit__ do SSCursor rodou antes dela
+        # propagar, não só o da 1ª conexão (metadados).
+        ultima_saida = cursor_context.__exit__.call_args_list[-1]
+        assert ultima_saida.args[0] is pymysql.err.OperationalError
+        # 2 conexões (metadados + amostra) — a 2ª fecha mesmo com exceção.
+        assert conexao_fake.close.call_count == 2
 
     def test_max_conexoes_zero_levanta_value_error(
         self,
@@ -503,6 +590,39 @@ class TestErro:
 
 class TestBorda:
     """Bordas."""
+
+    def test_k_faixas_para_cresce_proporcional_e_satura_no_teto(self) -> None:
+        """Acima de 1M linhas, K cresce e satura em 50 faixas."""
+        assert _k_faixas_para(3_000_000) == 30
+        assert _k_faixas_para(10_000_000) == 50
+        assert _k_faixas_para(50_000_000) == 50
+
+    def test_tabela_exatamente_no_limiar_de_linhas_nao_ativa_streaming(
+        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+    ) -> None:
+        """total_linhas == limiar (não >) segue com fetchall direto."""
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            *montar_metadados_side_effect(
+                tabela="tabela",
+                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                pks=["id"],
+                total_linhas=100_000,  # exatamente no limiar
+            ),
+            [(1,)],  # amostra
+        ]
+        cursor_fake.description = [("id",)]
+        pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+        extrator = ExtratorMariaDB(
+            host="fake", user="root", password="senha", configuracao=configuracao
+        )
+        resultado = extrator.extrair_tabela("vendas", "tabela")
+
+        assert isinstance(resultado, Sucesso)
+        conexao_fake.cursor.assert_called_with()
+        cursor_fake.fetchmany.assert_not_called()
 
     def test_connect_timeout_customizado_e_repassado_ao_pool(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
@@ -633,6 +753,60 @@ class TestBorda:
         assert resultado.valor.total_linhas == 0
         assert resultado.valor.metadados_amostra.tamanho_amostra == 0
 
+    def test_avg_row_length_nulo_usa_largura_media_padrao(
+        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+    ) -> None:
+        """AVG_ROW_LENGTH NULL (tabela nunca analisada) cai no fallback."""
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            *montar_metadados_side_effect(
+                tabela="tabela_nova",
+                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                pks=["id"],
+                total_linhas=10,
+                largura_media=None,
+            ),
+            [],  # amostra
+        ]
+        pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+        extrator = ExtratorMariaDB(
+            host="fake", user="root", password="senha", configuracao=configuracao
+        )
+        resultado = extrator._obter_metadados_schema("vendas")
+
+        assert isinstance(resultado, Sucesso)
+        assert resultado.valor.largura_media_por_tabela == {
+            "tabela_nova": LARGURA_MEDIA_PADRAO_BYTES
+        }
+
+    def test_avg_row_length_real_e_usado_diretamente(
+        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+    ) -> None:
+        """AVG_ROW_LENGTH real do catálogo é usado sem transformação."""
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            *montar_metadados_side_effect(
+                tabela="tabela",
+                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                pks=["id"],
+                total_linhas=10,
+                largura_media=84,
+            ),
+            [],  # amostra
+        ]
+        pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+        extrator = ExtratorMariaDB(
+            host="fake", user="root", password="senha", configuracao=configuracao
+        )
+        resultado = extrator._obter_metadados_schema("vendas")
+
+        assert isinstance(resultado, Sucesso)
+        assert resultado.valor.largura_media_por_tabela == {"tabela": 84}
+
     def test_amostra_maior_que_total_linhas_emite_aviso(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
     ) -> None:
@@ -739,6 +913,135 @@ class TestBorda:
         assert isinstance(resultado, Sucesso)
         assert resultado.valor.metadados_amostra.seed is not None
         assert isinstance(resultado.valor.metadados_amostra.seed, int)
+
+    def test_amostragem_por_faixa_com_pk_elegivel_usa_uniao_de_faixas(
+        self,
+        pool_classe_fake: MagicMock,
+        configuracao_por_faixa: ConfiguracaoDeExtracao,
+    ) -> None:
+        """PK bigint de coluna única: consulta vira UNIÃO de faixas com corte fixo.
+
+        O corte de cada faixa é sorteado em Python (não `RAND()` no SQL —
+        reavaliado por linha pelo motor, colapsaria a amostra pro início do
+        intervalo de PK) e embutido como parâmetro literal. Aviso de viés
+        cita o mecanismo real (faixas contíguas de chave primária), distinto
+        do texto do ExtratorPostgres (página física).
+        """
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            *montar_metadados_side_effect(
+                tabela="tabela",
+                colunas=[("id", "bigint", "bigint(20)", None, None, None, "NO")],
+                pks=["id"],
+                total_linhas=20,  # n_pedido pequeno (2), 3 linhas não é "gap denso"
+            ),
+            [(1,), (2,), (3,)],  # amostra
+        ]
+        cursor_fake.fetchone.return_value = (999,)
+        cursor_fake.description = [("id",)]
+        pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+        extrator = ExtratorMariaDB(
+            host="fake",
+            user="root",
+            password="senha",
+            configuracao=configuracao_por_faixa,
+        )
+        resultado = extrator.extrair_tabela("vendas", "tabela")
+
+        assert isinstance(resultado, Sucesso)
+        assert resultado.valor.metadados_amostra.estrategia == "amostragem_por_faixa"
+        assert len(resultado.avisos) == 1
+        assert "faixas contíguas de chave primária" in resultado.avisos[0].mensagem
+        chamada_amostra = cursor_fake.execute.call_args_list[-1]
+        consulta_amostra, parametros_amostra = chamada_amostra.args
+        assert consulta_amostra.count("UNION ALL") == 9  # 10 faixas, 9 uniões
+        assert "RAND" not in consulta_amostra  # corte é sorteado em Python, não SQL
+        # 2 parâmetros por faixa (cutoff, limit) x 10 faixas
+        assert len(parametros_amostra) == 20
+        cortes = parametros_amostra[0::2]
+        assert all(0 <= corte <= 999 for corte in cortes)  # MAX(id) mockado = 999
+        assert len(set(cortes)) > 1  # seeds distintas por faixa -> cortes distintos
+
+    def test_amostragem_por_faixa_sem_pk_cai_no_fallback_probabilistico(
+        self,
+        pool_classe_fake: MagicMock,
+        configuracao_por_faixa: ConfiguracaoDeExtracao,
+    ) -> None:
+        """Tabela sem PK: cai para WHERE RAND(seed) <= p, com Aviso de fallback.
+
+        O fallback reusa exatamente o mecanismo de PercentualDeLinhas — soma
+        os dois Avisos: o de fallback (explica o motivo) e o de varredura
+        sequencial completa (automático, mesmo caminho de AmostragemProbabilistica).
+        """
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            *montar_metadados_side_effect(
+                tabela="tabela_sem_pk",
+                colunas=[("valor", "int", "int(11)", None, None, None, "NO")],
+                total_linhas=1_000,
+            ),
+            [(1,), (2,)],  # amostra
+        ]
+        cursor_fake.description = [("valor",)]
+        pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+        extrator = ExtratorMariaDB(
+            host="fake",
+            user="root",
+            password="senha",
+            configuracao=configuracao_por_faixa,
+        )
+        resultado = extrator.extrair_tabela("vendas", "tabela_sem_pk")
+
+        assert isinstance(resultado, Sucesso)
+        # Mecanismo real usado foi o probabilístico (fallback), não a faixa
+        # que o usuário pediu no wizard — o campo precisa refletir o que foi
+        # lido de fato, não a escolha original da Estrategia.
+        assert resultado.valor.metadados_amostra.estrategia == "percentual_de_linhas"
+        assert len(resultado.avisos) == 2
+        assert "caiu para o mecanismo probabilístico padrão" in (
+            resultado.avisos[0].mensagem
+        )
+        assert "tabela sem chave primária" in resultado.avisos[0].mensagem
+        assert "varredura sequencial completa" in resultado.avisos[1].mensagem
+        consulta_amostra = cursor_fake.execute.call_args_list[-1].args[0]
+        assert "RAND(%s) <= %s" in consulta_amostra
+
+    def test_amostragem_por_faixa_com_poucos_resultados_avisa_gaps_densos(
+        self,
+        pool_classe_fake: MagicMock,
+        configuracao_por_faixa: ConfiguracaoDeExtracao,
+    ) -> None:
+        """Amostra bem menor que o n pedido soma um Aviso de gaps densos na PK."""
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            *montar_metadados_side_effect(
+                tabela="tabela",
+                colunas=[("id", "bigint", "bigint(20)", None, None, None, "NO")],
+                pks=["id"],
+                total_linhas=1_000,
+            ),
+            [(1,)],  # amostra — bem menos que os 100 linhas pedidas (10% de 1000)
+        ]
+        cursor_fake.fetchone.return_value = (999,)
+        cursor_fake.description = [("id",)]
+        pool_classe_fake.return_value.connection.return_value = conexao_fake
+
+        extrator = ExtratorMariaDB(
+            host="fake",
+            user="root",
+            password="senha",
+            configuracao=configuracao_por_faixa,
+        )
+        resultado = extrator.extrair_tabela("vendas", "tabela")
+
+        assert isinstance(resultado, Sucesso)
+        assert len(resultado.avisos) == 2
+        assert "gaps densos" in resultado.avisos[0].mensagem
 
     def test_tinyint_um_com_valor_atipico_na_amostra_mantem_integer(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
@@ -960,7 +1263,7 @@ class TestBorda:
                 [],  # FK
                 [],  # UNIQUE
                 [],  # JSON
-                [("pedidos", 10)],  # total_linhas
+                [("pedidos", 10, 200)],  # total_linhas
             ]
         )
 
