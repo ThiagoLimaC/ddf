@@ -138,3 +138,20 @@ class TestBorda:
         amostra = ler_amostra_em_lotes(cursor, tamanho_lote=2)
 
         assert len(amostra) == 3
+
+    def test_coluna_nula_no_1o_lote_e_preenchida_no_2o_nao_quebra_concat(self) -> None:
+        """Lote com coluna 100% NULL seguido de lote com valor real não crasha.
+
+        Achado real contra produção (issue #114): cada lote infere seu
+        próprio dtype por coluna, isolado dos outros — uma coluna nulável
+        cujo 1º lote sai inteiro `NULL` infere dtype `Null`; sem `how=
+        "vertical_relaxed"`, `pl.concat` levanta `SchemaError` assim que
+        um lote seguinte traz um valor `Int64` real pra essa mesma coluna.
+        """
+        cursor = _CursorFake(
+            [[(1, None), (2, None)], [(3, 42)]], nomes_colunas=["id", "empresa_id"]
+        )
+
+        amostra = ler_amostra_em_lotes(cursor, tamanho_lote=2)
+
+        assert amostra["empresa_id"].to_list() == [None, None, 42]

@@ -93,6 +93,16 @@ def ler_amostra_em_lotes(
     achado só contra Postgres real (testcontainers), não reproduzível com
     cursor mockado.
 
+    Cada lote infere seu próprio dtype por coluna, independente dos
+    outros (`infer_schema_length=None` só olha as linhas daquele lote) —
+    uma coluna nulável cujo 1º lote vem todo `NULL` infere `Null`, não o
+    tipo real; um lote seguinte com valor real (`Int64` etc.) quebraria
+    `pl.concat` estrito por divergência de schema entre lotes. `how=
+    "vertical_relaxed"` funde pra um supertipo comum entre lotes (`Null`
+    sempre funde com qualquer tipo) — achado só contra dado de produção
+    real (coluna nulável grande o bastante pra um lote inteiro sair
+    vazio), não reproduzível com tabela sintética pequena de teste.
+
     Args:
         cursor: cursor já com a query de amostra executada.
         tamanho_lote: nº de linhas lidas por chamada de `fetchmany`
@@ -114,4 +124,4 @@ def ler_amostra_em_lotes(
     if not lotes:
         nomes_colunas = [str(coluna[0]) for coluna in cursor.description or ()]
         return pl.DataFrame(schema=nomes_colunas)
-    return pl.concat(lotes)
+    return pl.concat(lotes, how="vertical_relaxed")
