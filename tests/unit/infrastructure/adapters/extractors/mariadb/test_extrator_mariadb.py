@@ -900,10 +900,13 @@ class TestBorda:
         pool_classe_fake: MagicMock,
         configuracao_por_faixa: ConfiguracaoDeExtracao,
     ) -> None:
-        """PK bigint de coluna única: consulta vira UNIÃO de faixas por RAND(seed_k).
+        """PK bigint de coluna única: consulta vira UNIÃO de faixas com corte fixo.
 
-        Aviso de viés cita o mecanismo real (faixas contíguas de chave
-        primária), distinto do texto do ExtratorPostgres (página física).
+        O corte de cada faixa é sorteado em Python (não `RAND()` no SQL —
+        reavaliado por linha pelo motor, colapsaria a amostra pro início do
+        intervalo de PK) e embutido como parâmetro literal. Aviso de viés
+        cita o mecanismo real (faixas contíguas de chave primária), distinto
+        do texto do ExtratorPostgres (página física).
         """
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
@@ -932,9 +935,15 @@ class TestBorda:
         assert resultado.valor.metadados_amostra.estrategia == "amostragem_por_faixa"
         assert len(resultado.avisos) == 1
         assert "faixas contíguas de chave primária" in resultado.avisos[0].mensagem
-        consulta_amostra = cursor_fake.execute.call_args_list[-1].args[0]
+        chamada_amostra = cursor_fake.execute.call_args_list[-1]
+        consulta_amostra, parametros_amostra = chamada_amostra.args
         assert consulta_amostra.count("UNION ALL") == 9  # 10 faixas, 9 uniões
-        assert "FLOOR(RAND(%s) * %s)" in consulta_amostra
+        assert "RAND" not in consulta_amostra  # corte é sorteado em Python, não SQL
+        # 2 parâmetros por faixa (cutoff, limit) x 10 faixas
+        assert len(parametros_amostra) == 20
+        cortes = parametros_amostra[0::2]
+        assert all(0 <= corte <= 999 for corte in cortes)  # MAX(id) mockado = 999
+        assert len(set(cortes)) > 1  # seeds distintas por faixa -> cortes distintos
 
     def test_amostragem_por_faixa_sem_pk_cai_no_fallback_probabilistico(
         self,

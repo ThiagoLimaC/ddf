@@ -1,5 +1,6 @@
 """Extrator concreto para bancos MariaDB."""
 
+import random
 import threading
 from collections import defaultdict
 from collections.abc import Generator
@@ -421,19 +422,27 @@ class ExtratorMariaDB:
                                 linhas_por_faixa = max(
                                     1, n_pedido_por_faixa // _K_FAIXAS
                                 )
+                                # Corte sorteado em Python, não via RAND()
+                                # no SQL: dentro de um WHERE, RAND(seed) do
+                                # MariaDB é reavaliado a cada linha varrida
+                                # pelo motor, não uma vez só — usá-lo ali
+                                # faria o corte derivar para o início do
+                                # intervalo de PK, independente do seed.
+                                rng_faixas = random.Random(seed_usado)
                                 subconsultas: list[str] = []
                                 parametros: list[object] = []
-                                for indice_faixa in range(_K_FAIXAS):
-                                    seed_da_faixa = seed_usado + indice_faixa
+                                for _ in range(_K_FAIXAS):
+                                    cutoff = (
+                                        rng_faixas.randint(0, max_pk)
+                                        if max_pk is not None
+                                        else 0
+                                    )
                                     subconsultas.append(
                                         f"(SELECT * FROM {identificador_tabela} "
-                                        f"WHERE {identificador_pk} >= "
-                                        f"FLOOR(RAND(%s) * %s) "
+                                        f"WHERE {identificador_pk} >= %s "
                                         f"ORDER BY {identificador_pk} LIMIT %s)"
                                     )
-                                    parametros.extend(
-                                        [seed_da_faixa, max_pk, linhas_por_faixa]
-                                    )
+                                    parametros.extend([cutoff, linhas_por_faixa])
                                 consulta_amostra = " UNION ALL ".join(subconsultas)
                                 cursor.execute(consulta_amostra, tuple(parametros))
                             case _PkNaoElegivel(motivo=motivo):

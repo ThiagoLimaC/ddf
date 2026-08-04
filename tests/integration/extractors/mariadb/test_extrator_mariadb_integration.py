@@ -585,7 +585,10 @@ def test_amostragem_por_faixa_com_pk_integra_usa_uniao_de_faixas(
     reprodutibilidade.itens tem PK AUTO_INCREMENT sem gaps (id 1..500) —
     elegível pro caminho principal, não o fallback. K faixas não garantem
     cobertura exata (podem se sobrepor), então não afirma tamanho exato —
-    só que o dispatch real chega ao MariaDB e traz linhas de verdade.
+    mas precisa cobrir mais de um quarto do intervalo de PK, não só o
+    início: cada faixa tem seu próprio corte, sorteado independentemente,
+    então a amostra deve aparecer espalhada pelo intervalo de PK, não
+    concentrada nos valores mais baixos.
     """
     host, port, user, password = conexao
     configuracao = ConfiguracaoDeExtracao(estrategia=AmostragemPorFaixa(percentual=50))
@@ -601,6 +604,10 @@ def test_amostragem_por_faixa_com_pk_integra_usa_uniao_de_faixas(
     assert resultado.valor.metadados_amostra.tamanho_amostra > 0
     assert len(resultado.avisos) == 1
     assert "faixas contíguas de chave primária" in resultado.avisos[0].mensagem
+
+    ids_amostrados = resultado.valor.amostra["id"].to_list()
+    quartis_presentes = {min(3, (id_ - 1) // 125) for id_ in ids_amostrados}
+    assert len(quartis_presentes) > 1
 
 
 def test_amostragem_por_faixa_sem_pk_cai_no_fallback_probabilistico(
