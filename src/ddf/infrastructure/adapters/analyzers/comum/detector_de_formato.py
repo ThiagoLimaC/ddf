@@ -14,6 +14,16 @@ _REGEXES: dict[str, re.Pattern[str]] = {
 _THRESHOLD = 0.8
 _MINIMO_NAO_NULOS = 20
 
+TETO_SUBAMOSTRA = 2000
+"""Acima deste nº de valores não-nulos, formato é decidido sobre uma
+sub-amostra, não a população inteira. Margem de erro do teste de proporção
+em p≈0.8 (o threshold), IC 95%: 1.96 * sqrt(0.8*0.2/2000) ≈ ±1.75% — bem
+abaixo do teto de 3% necessário para não comprometer a decisão do
+threshold. Pressupõe que a amostragem upstream (estratégia de extração) já
+é representativa da população; sub-amostrar uma amostra aleatória não
+enviesada continua sendo uma amostra aleatória válida da população
+original."""
+
 
 def detectar_formato(valores: list[str]) -> str | None:
     """Detecta o formato dominante entre os valores não-nulos de uma coluna.
