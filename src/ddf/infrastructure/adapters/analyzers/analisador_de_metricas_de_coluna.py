@@ -14,12 +14,18 @@ from ddf.domain.model.curation import TabelaCurada
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.analyzers.comum.detector_de_formato import (
+    TETO_SUBAMOSTRA,
     detectar_formato,
 )
 
 _ORIGEM = "AnalisadorDeMetricasDeColuna"
 _TAMANHO_AMOSTRA_MINIMO_AVISO = 100
 _CATEGORIAS_COM_FORMATO = {CategoriaDeDado.VARCHAR, CategoriaDeDado.TEXT}
+_SEED_SUBAMOSTRA_FORMATO = 20260804
+"""Seed fixo da sub-amostragem de `detectar_formato` — não é o seed de
+extração (`MetadadosDeAmostra.seed`, `None` em `TabelaInteira` e sem campo
+pra registrar um valor gerado aqui). Fixo em vez de aleatório: garante
+determinismo total, sempre a mesma sub-amostra pro mesmo dado de entrada."""
 
 
 class AnalisadorDeMetricasDeColuna:
@@ -179,17 +185,24 @@ def _calcular_metricas_coluna(
     minimo_bruto = serie.min()
     maximo_bruto = serie.max()
 
+    formato_detectado = None
+    if tipo_dado.categoria in _CATEGORIAS_COM_FORMATO:
+        amostra_formato = nao_nulos
+        if amostra_formato.len() > TETO_SUBAMOSTRA:
+            amostra_formato = amostra_formato.sample(
+                n=TETO_SUBAMOSTRA, seed=_SEED_SUBAMOSTRA_FORMATO, with_replacement=False
+            )
+        formato_detectado = detectar_formato(
+            [str(valor) for valor in amostra_formato.to_list()]
+        )
+
     return MetricasBaseColuna(
         percentual_nulo=serie.null_count() / tamanho_amostra * 100,
         percentual_unico=nao_nulos.n_unique() / tamanho_amostra * 100,
         valores_frequentes=_top_valores_frequentes(nao_nulos),
         minimo=str(minimo_bruto) if minimo_bruto is not None else None,
         maximo=str(maximo_bruto) if maximo_bruto is not None else None,
-        formato_detectado=(
-            detectar_formato([str(valor) for valor in nao_nulos.to_list()])
-            if tipo_dado.categoria in _CATEGORIAS_COM_FORMATO
-            else None
-        ),
+        formato_detectado=formato_detectado,
     )
 
 

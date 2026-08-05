@@ -1614,6 +1614,18 @@ internacional:
 | `phone` | `r'^(\+55\s?)?\(?\d{2}\)?\s?\d{4,5}-?\d{4}$'` |
 | `cep` | `r'^\d{5}-?\d{3}$'` |
 
+**Sub-amostragem acima de `TETO_SUBAMOSTRA` (2000 valores não-nulos):**
+colunas VARCHAR/TEXT com mais valores não-nulos que o teto têm o formato
+decidido sobre uma sub-amostra determinística de 2000 valores (seed fixo,
+`with_replacement=False`), não a população inteira — evita converter
+centenas de milhares/milhões de valores para lista Python e rodar os
+regex acima sobre todos eles. Abaixo do teto, comportamento inalterado
+(roda sobre a amostra inteira). Margem de erro do teste de proporção em
+p≈0.8 (o threshold): `1.96 * sqrt(0.8*0.2/2000) ≈ ±1.75%`, o que preserva
+a confiabilidade da decisão de threshold. A sub-amostragem afeta só o
+input da detecção de formato — `percentual_unico`/`valores_frequentes`
+continuam calculados sobre todos os valores não-nulos.
+
 **Aviso emitido:** se `tamanho_amostra < 100`, emite `Aviso` por coluna.
 
 ---
