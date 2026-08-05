@@ -21,6 +21,7 @@ from ddf.infrastructure.adapters.analyzers.analisador_de_metricas_de_coluna impo
 )
 from ddf.infrastructure.adapters.analyzers.comum.detector_de_formato import (
     TETO_SUBAMOSTRA,
+    detectar_formato,
 )
 
 
@@ -503,11 +504,14 @@ class TestBorda:
     ) -> None:
         """Proporção de match bem acima/abaixo do threshold não vira flip.
 
-        Não dá pra testar de forma não-flaky exatamente na fronteira do
-        threshold (80% ± ~1.75% de margem de erro com `TETO_SUBAMOSTRA`)
-        com dado sintético determinístico — o teste usa proporções
-        distantes da fronteira (90% e 65%) pra confirmar que a
-        sub-amostragem não muda a decisão binária nos casos não-ambíguos,
+        O seed fixo torna o resultado 100% determinístico mesmo perto da
+        fronteira — não há nada "flaky" em testar ali. O que não dá é
+        prever *analiticamente* o ponto exato de divergência entre a
+        decisão da sub-amostra e a decisão que a população inteira daria
+        (só empiricamente, rodando o código — ver
+        `test_subamostragem_diverge_da_populacao_dentro_da_margem_de_erro`
+        para um caso onde essa divergência acontece de fato). Este teste
+        cobre os casos não-ambíguos, distantes da fronteira (90% e 65%),
         que são a maioria na prática.
         """
         emails_90pct = [f"user{i}@empresa.com" for i in range(9000)] + [
@@ -544,6 +548,41 @@ class TestBorda:
         )
         assert metrica_90pct.formato_detectado == "email"
         assert metrica_65pct.formato_detectado is None
+
+    def test_subamostragem_diverge_da_populacao_dentro_da_margem_de_erro(
+        self,
+        tipo_varchar: TipoDeDado,
+        construir_contexto: Callable[[list[TabelaCurada]], ContextoDeAnalise],
+    ) -> None:
+        """Divergência real entre sub-amostra e população, dentro da margem esperada.
+
+        Com 80.5% de match na população (dentro da margem de ±1.75% ao
+        redor do threshold de 80% que `TETO_SUBAMOSTRA` documenta), a
+        população inteira decidiria "email" (>= 80%), mas a sub-amostra de
+        2000 valores (com o seed fixo do projeto) decide `None`. Essa
+        divergência é esperada e aceita — é exatamente o custo estatístico
+        que a sub-amostragem assume, não uma regressão a evitar. Trava o
+        comportamento atual como referência, em vez de fingir que ele não
+        existe (ver correção de docstring em
+        `test_subamostragem_preserva_decisao_longe_do_limiar`).
+        """
+        emails = [f"user{i}@empresa.com" for i in range(8050)] + [
+            f"texto livre {i}" for i in range(1950)
+        ]
+        assert detectar_formato([str(v) for v in emails]) == "email"
+
+        tabela = _tabela_curada(
+            colunas=[ColunaCurada(nome="email", tipo_dado=tipo_varchar)],
+            amostra=pl.DataFrame({"email": emails}),
+            tamanho_amostra=10000,
+        )
+        contexto = construir_contexto([tabela])
+
+        resultado = AnalisadorDeMetricasDeColuna()(contexto)
+
+        assert isinstance(resultado, Sucesso)
+        metrica = _metrica_de(resultado.valor.analisado.tabelas[0].colunas[0].metricas)
+        assert metrica.formato_detectado is None
 
     def test_coluna_integer_nunca_tenta_detectar_formato(
         self,
