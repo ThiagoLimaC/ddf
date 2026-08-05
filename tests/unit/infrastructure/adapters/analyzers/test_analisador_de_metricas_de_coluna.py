@@ -19,6 +19,9 @@ from ddf.domain.shared.resultado import Falha, Sucesso
 from ddf.infrastructure.adapters.analyzers.analisador_de_metricas_de_coluna import (
     AnalisadorDeMetricasDeColuna,
 )
+from ddf.infrastructure.adapters.analyzers.comum.detector_de_formato import (
+    TETO_SUBAMOSTRA,
+)
 
 
 def _tabela_curada(
@@ -410,6 +413,137 @@ class TestBorda:
         assert resultado.valor is not contexto
         assert contexto.analisado.tabelas[0].colunas[0].metricas == []
         assert contexto.curado.tabelas[0].amostra is not None
+
+    def test_amostra_grande_ativa_subamostragem_mas_ainda_detecta_formato(
+        self,
+        tipo_varchar: TipoDeDado,
+        construir_contexto: Callable[[list[TabelaCurada]], ContextoDeAnalise],
+    ) -> None:
+        """>2000 não-nulos aciona sub-amostragem; formato ainda é detectado.
+
+        Acima de `TETO_SUBAMOSTRA`, a decisão passa a rodar sobre uma
+        sub-amostra determinística — com 100% dos valores sendo e-mail
+        válido, o resultado não pode mudar.
+        """
+        emails = [f"user{i}@empresa.com" for i in range(5000)]
+        tabela = _tabela_curada(
+            colunas=[ColunaCurada(nome="email", tipo_dado=tipo_varchar)],
+            amostra=pl.DataFrame({"email": emails}),
+            tamanho_amostra=5000,
+        )
+        contexto = construir_contexto([tabela])
+
+        resultado = AnalisadorDeMetricasDeColuna()(contexto)
+
+        assert isinstance(resultado, Sucesso)
+        metrica = _metrica_de(resultado.valor.analisado.tabelas[0].colunas[0].metricas)
+        assert metrica.formato_detectado == "email"
+
+    def test_amostra_no_teto_mantem_comportamento_inalterado(
+        self,
+        tipo_varchar: TipoDeDado,
+        construir_contexto: Callable[[list[TabelaCurada]], ContextoDeAnalise],
+    ) -> None:
+        """Exatamente no teto de sub-amostragem, roda sobre a população inteira.
+
+        `TETO_SUBAMOSTRA` só ativa quando o nº de não-nulos EXCEDE o teto —
+        no teto exato, o comportamento é o mesmo de uma amostra pequena.
+        """
+        emails = [f"user{i}@empresa.com" for i in range(TETO_SUBAMOSTRA)]
+        tabela = _tabela_curada(
+            colunas=[ColunaCurada(nome="email", tipo_dado=tipo_varchar)],
+            amostra=pl.DataFrame({"email": emails}),
+            tamanho_amostra=TETO_SUBAMOSTRA,
+        )
+        contexto = construir_contexto([tabela])
+
+        resultado = AnalisadorDeMetricasDeColuna()(contexto)
+
+        assert isinstance(resultado, Sucesso)
+        metrica = _metrica_de(resultado.valor.analisado.tabelas[0].colunas[0].metricas)
+        assert metrica.formato_detectado == "email"
+
+    def test_subamostragem_de_formato_e_deterministica_entre_execucoes(
+        self,
+        tipo_varchar: TipoDeDado,
+        construir_contexto: Callable[[list[TabelaCurada]], ContextoDeAnalise],
+    ) -> None:
+        """Mesma amostra grande produz o mesmo formato_detectado em execuções repetidas.
+
+        Seed fixo (`_SEED_SUBAMOSTRA_FORMATO`) garante reprodutibilidade —
+        sem isso, `formato_detectado` poderia variar entre rodadas na
+        mesma tabela sem nenhuma mudança de dado real.
+        """
+        valores = [f"user{i}@empresa.com" for i in range(4000)] + [
+            f"texto livre numero {i}" for i in range(1000)
+        ]
+        tabela = _tabela_curada(
+            colunas=[ColunaCurada(nome="email", tipo_dado=tipo_varchar)],
+            amostra=pl.DataFrame({"email": valores}),
+            tamanho_amostra=5000,
+        )
+
+        resultado_1 = AnalisadorDeMetricasDeColuna()(construir_contexto([tabela]))
+        resultado_2 = AnalisadorDeMetricasDeColuna()(construir_contexto([tabela]))
+
+        assert isinstance(resultado_1, Sucesso)
+        assert isinstance(resultado_2, Sucesso)
+        metrica_1 = _metrica_de(
+            resultado_1.valor.analisado.tabelas[0].colunas[0].metricas
+        )
+        metrica_2 = _metrica_de(
+            resultado_2.valor.analisado.tabelas[0].colunas[0].metricas
+        )
+        assert metrica_1.formato_detectado == metrica_2.formato_detectado
+
+    def test_subamostragem_preserva_decisao_longe_do_limiar(
+        self,
+        tipo_varchar: TipoDeDado,
+        construir_contexto: Callable[[list[TabelaCurada]], ContextoDeAnalise],
+    ) -> None:
+        """Proporção de match bem acima/abaixo do threshold não vira flip.
+
+        Não dá pra testar de forma não-flaky exatamente na fronteira do
+        threshold (80% ± ~1.75% de margem de erro com `TETO_SUBAMOSTRA`)
+        com dado sintético determinístico — o teste usa proporções
+        distantes da fronteira (90% e 65%) pra confirmar que a
+        sub-amostragem não muda a decisão binária nos casos não-ambíguos,
+        que são a maioria na prática.
+        """
+        emails_90pct = [f"user{i}@empresa.com" for i in range(9000)] + [
+            f"texto livre {i}" for i in range(1000)
+        ]
+        tabela_90pct = _tabela_curada(
+            colunas=[ColunaCurada(nome="email", tipo_dado=tipo_varchar)],
+            amostra=pl.DataFrame({"email": emails_90pct}),
+            tamanho_amostra=10000,
+        )
+        emails_65pct = [f"user{i}@empresa.com" for i in range(6500)] + [
+            f"texto livre {i}" for i in range(3500)
+        ]
+        tabela_65pct = _tabela_curada(
+            colunas=[ColunaCurada(nome="email", tipo_dado=tipo_varchar)],
+            amostra=pl.DataFrame({"email": emails_65pct}),
+            tamanho_amostra=10000,
+        )
+
+        resultado_90pct = AnalisadorDeMetricasDeColuna()(
+            construir_contexto([tabela_90pct])
+        )
+        resultado_65pct = AnalisadorDeMetricasDeColuna()(
+            construir_contexto([tabela_65pct])
+        )
+
+        assert isinstance(resultado_90pct, Sucesso)
+        assert isinstance(resultado_65pct, Sucesso)
+        metrica_90pct = _metrica_de(
+            resultado_90pct.valor.analisado.tabelas[0].colunas[0].metricas
+        )
+        metrica_65pct = _metrica_de(
+            resultado_65pct.valor.analisado.tabelas[0].colunas[0].metricas
+        )
+        assert metrica_90pct.formato_detectado == "email"
+        assert metrica_65pct.formato_detectado is None
 
     def test_coluna_integer_nunca_tenta_detectar_formato(
         self,
