@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -400,6 +401,96 @@ class TestBorda:
         )
 
         assert sorted(chamadas) == ["vendas.clientes", "vendas.pedidos"]
+
+    def test_extrair_chama_inicio_uma_vez_por_tabela_antes_do_progresso(
+        self,
+        construir_extrator_fake: Callable[..., ExtratorFake],
+    ) -> None:
+        """`inicio` dispara por tabela, sempre antes de `progresso` para ela mesma.
+
+        Chamadas de `inicio` vêm de dentro de cada worker (concorrentes entre
+        si) — o lock garante só que a lista de eventos não se corrompa sob
+        concorrência, não uma ordem global entre tabelas diferentes.
+        """
+        extrator = construir_extrator_fake(
+            {"vendas": Sucesso([("vendas", "pedidos"), ("vendas", "clientes")])},
+            {("vendas", "clientes"): "conexão perdida"},
+        )
+        orquestrador = OrquestradorParalelo(max_trabalhadores=4)
+        lock = threading.Lock()
+        eventos: list[tuple[str, str]] = []
+
+        def _inicio(identificador: str) -> None:
+            with lock:
+                eventos.append(("inicio", identificador))
+
+        def _progresso(identificador: str) -> None:
+            with lock:
+                eventos.append(("progresso", identificador))
+
+        orquestrador.extrair(
+            ["vendas"], extrator, progresso=_progresso, inicio=_inicio
+        )
+
+        identificadores_inicio = sorted(
+            identificador for tipo, identificador in eventos if tipo == "inicio"
+        )
+        assert identificadores_inicio == ["vendas.clientes", "vendas.pedidos"]
+        for identificador in identificadores_inicio:
+            indice_inicio = eventos.index(("inicio", identificador))
+            indice_progresso = eventos.index(("progresso", identificador))
+            assert indice_inicio < indice_progresso
+
+    def test_extrair_chama_inicio_mesmo_quando_tabela_falha(
+        self,
+        construir_extrator_fake: Callable[..., ExtratorFake],
+    ) -> None:
+        """Uma tabela que termina em Falha ainda assim disparou `inicio`."""
+        extrator = construir_extrator_fake(
+            {"vendas": Sucesso([("vendas", "clientes")])},
+            {("vendas", "clientes"): "conexão perdida"},
+        )
+        orquestrador = OrquestradorParalelo(max_trabalhadores=4)
+        chamadas_inicio: list[str] = []
+
+        orquestrador.extrair(["vendas"], extrator, inicio=chamadas_inicio.append)
+
+        assert chamadas_inicio == ["vendas.clientes"]
+
+    def test_aplicar_sobrescritas_chama_inicio_uma_vez_por_tabela_antes_do_progresso(
+        self,
+        fabrica_tabela_extraida: Callable[[str, str], TabelaExtraida],
+        construir_sobrescrita_fake: Callable[..., SobrescritaFake],
+    ) -> None:
+        """`inicio` dispara por tabela, sempre antes de `progresso` para ela mesma."""
+        tabelas = [
+            fabrica_tabela_extraida("vendas", "pedidos"),
+            fabrica_tabela_extraida("vendas", "clientes"),
+        ]
+        orquestrador = OrquestradorParalelo(max_trabalhadores=4)
+        lock = threading.Lock()
+        eventos: list[tuple[str, str]] = []
+
+        def _inicio(identificador: str) -> None:
+            with lock:
+                eventos.append(("inicio", identificador))
+
+        def _progresso(identificador: str) -> None:
+            with lock:
+                eventos.append(("progresso", identificador))
+
+        orquestrador.aplicar_sobrescritas(
+            tabelas, construir_sobrescrita_fake(), progresso=_progresso, inicio=_inicio
+        )
+
+        identificadores_inicio = sorted(
+            identificador for tipo, identificador in eventos if tipo == "inicio"
+        )
+        assert identificadores_inicio == ["vendas.clientes", "vendas.pedidos"]
+        for identificador in identificadores_inicio:
+            indice_inicio = eventos.index(("inicio", identificador))
+            indice_progresso = eventos.index(("progresso", identificador))
+            assert indice_inicio < indice_progresso
 
     def test_extrair_fk_composta_sem_chave_candidata_emite_aviso(
         self,
