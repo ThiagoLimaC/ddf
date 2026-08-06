@@ -35,6 +35,7 @@ def conectar() -> tuple[Extrator, ConfiguracaoDeExtracao, list[str]]:
     nome_fonte = prompts.selecionar(
         "Qual fonte?", list(EXTRATORES_REGISTRADOS.keys())
     )
+    prompts.linha_de_decisao("Fonte", nome_fonte)
     configuracao = ConfiguracaoDeExtracao()
     extrator = EXTRATORES_REGISTRADOS[nome_fonte].construir(configuracao)
     escopos = _testar_conexao(extrator)
@@ -54,6 +55,7 @@ def configurar_amostragem(configuracao: ConfiguracaoDeExtracao) -> None:
     nome_estrategia = prompts.selecionar(
         "Qual estratégia de amostragem?", list(ESTRATEGIAS_REGISTRADAS.keys())
     )
+    prompts.linha_de_decisao("Amostragem", nome_estrategia)
     configuracao.estrategia = ESTRATEGIAS_REGISTRADAS[nome_estrategia].construir()
 
 

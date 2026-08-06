@@ -17,6 +17,13 @@ _QUADROS_AMPULHETA = ("⏳", "⌛")
 COR_DESTAQUE = "#00d7ff"
 COR_SUCESSO = "#00d700"
 
+# Cinza fosco/dimmed para texto de contexto (ex.: mensagem de boas-vindas),
+# em segundo plano deliberado perante COR_DESTAQUE/COR_SUCESSO. Mesmo tom
+# usado por `gh` para texto secundário (`Gray()`, ANSI 256 cor 242 ≈ RGB
+# 108,108,108) — legível sobre fundo escuro ou claro, sem competir com as
+# cores vivas reservadas a decisões e resultados.
+COR_SECUNDARIA = "#6c6c6c"
+
 # Largura fixa (não segue o terminal) para o rótulo ficar sempre centralizado
 # de forma previsível — inclusive em teste, sem depender de mock de
 # get_terminal_size.
@@ -147,15 +154,20 @@ def pausar(mensagem: str) -> None:
         sys.exit(0)
 
 
-def imprimir_destacado(texto_a_exibir: str, cor: str) -> None:
-    """Imprime um texto em negrito com a cor indicada (ex.: banner, confirmação).
+def imprimir_destacado(texto_a_exibir: str, cor: str, negrito: bool = True) -> None:
+    """Imprime um texto com a cor indicada (ex.: banner, confirmação).
 
     Args:
         texto_a_exibir: texto a exibir — uma linha ou um bloco ASCII de
             várias linhas.
-        cor: código hex da cor, tipicamente `COR_DESTAQUE` ou `COR_SUCESSO`.
+        cor: código hex da cor, tipicamente `COR_DESTAQUE`, `COR_SUCESSO` ou
+            `COR_SECUNDARIA`.
+        negrito: `False` para texto de contexto/segundo plano (ex.: mensagem
+            de boas-vindas com `COR_SECUNDARIA`) — negrito reforçaria
+            destaque, o oposto do efeito "apagado" buscado ali.
     """
-    questionary.print(texto_a_exibir, style=f"bold fg:{cor}")
+    estilo = f"bold fg:{cor}" if negrito else f"fg:{cor}"
+    questionary.print(texto_a_exibir, style=estilo)
 
 
 def cabecalho_etapa(numero: int, total: int, titulo: str) -> None:
@@ -187,6 +199,37 @@ def cabecalho_etapa(numero: int, total: int, titulo: str) -> None:
     esquerda = "─" * (preenchimento // 2)
     direita = "─" * (preenchimento - preenchimento // 2)
     imprimir_destacado(f"{esquerda}{rotulo}{direita}", COR_DESTAQUE)
+
+
+def linha_de_decisao(rotulo: str, valor: str) -> None:
+    """Imprime uma linha "├─ rótulo valor" resumindo uma decisão do usuário.
+
+    Inspirado no resumo em árvore do shell da Oxide (uma sequência de linhas
+    "├─ Title ..." / "└─ Deploy ...", cada uma ecoando uma pergunta já
+    respondida). Lá o bloco é fechado e contíguo — todas as perguntas são
+    feitas em sequência, sem nada entre elas — por isso faz sentido reservar
+    `└─` para a última linha.
+
+    Aqui não existe esse bloco fechado: as decisões reais do usuário (fonte,
+    escopos, estratégia de amostragem, geradores, destino) estão espalhadas
+    ao longo de 12 etapas do wizard, intercaladas por `cabecalho_etapa` e por
+    blocos de processamento (extração, análise) que não são decisões — são o
+    sistema trabalhando. Marcar uma dessas linhas com `└─` afirmaria "essa
+    foi a última decisão", o que só é verdade por acaso, na hora em que ela
+    é impressa — a próxima decisão real pode vir só depois de duas etapas de
+    processamento. Por isso todo item usa sempre `├─`: um marcador honesto
+    de "isto foi uma escolha sua", sem fingir uma árvore fechada que a
+    interação real não tem.
+
+    Reaproveita `imprimir_destacado`/`COR_DESTAQUE` — a mesma cor do banner
+    e de `cabecalho_etapa` — para não introduzir uma 2ª linguagem visual
+    concorrente só para marcar decisões.
+
+    Args:
+        rotulo: nome curto da decisão, ex. "Fonte".
+        valor: resposta escolhida pelo usuário, ex. "PostgreSQL".
+    """
+    imprimir_destacado(f"├─ {rotulo} {valor}", COR_DESTAQUE)
 
 
 def confirmar(mensagem: str, default: bool = True) -> bool:

@@ -16,6 +16,11 @@ from ddf.infrastructure.adapters.orchestrator.orquestrador_paralelo import (
 
 _TOTAL_ETAPAS = 12
 
+# Acima desse tamanho, listar os escopos por extenso na linha de decisão
+# deixaria a linha mais larga que qualquer outra do wizard, sem ganho real de
+# informação — o usuário acabou de vê-los marcados no checkbox.
+_LIMITE_ESCOPOS_POR_EXTENSO = 5
+
 _BANNER = r"""
 
                                   __...--~~~~~-._   _.-~~~~~--...__
@@ -39,6 +44,21 @@ _BANNER = r"""
                         :: Construído por ThiagoLimaC // [ 6/8/2026 ] ::
                                 [ github.com/ThiagoLimaC/ddf ]
 """
+
+# Reserva a `COR_DESTAQUE` do banner/cabecalho_etapa/linha_de_decisao para o
+# que exige atenção — este texto é só contexto, por isso sai em
+# `COR_SECUNDARIA` (cinza fosco): a mesma hierarquia do shell da Oxide, onde
+# a mensagem de abertura aparece apagada e o prompt interativo abaixo dela
+# recebe a cor viva. Margem esquerda encostada (sem indentação, ao contrário
+# do banner) — as quebras de linha são as naturais de um parágrafo com
+# largura de linha igual à do banner (91 colunas, a mesma linha "> ... <"),
+# não uma indentação visual.
+_BOAS_VINDAS = (
+    "\n"
+    "\n"
+    "Bem-vindo ao ddf. As próximas etapas conectam a uma fonte de dados, extraem e curam a\n"
+    "estrutura das tabelas e geram os artefatos de documentação escolhidos"
+)
 
 
 def _configurar_logging() -> None:
@@ -70,11 +90,23 @@ def _sair_se_vazio(itens: Sequence[object], mensagem: str) -> None:
         sys.exit(1)
 
 
+def _formatar_escopos(escopos: Sequence[str]) -> str:
+    """Formata os escopos escolhidos para a linha de decisão pós-checkbox.
+
+    Lista por extenso até `_LIMITE_ESCOPOS_POR_EXTENSO`; acima disso, mostra
+    só a contagem — ver motivação na constante.
+    """
+    if len(escopos) > _LIMITE_ESCOPOS_POR_EXTENSO:
+        return f"{len(escopos)} escopos selecionados"
+    return ", ".join(escopos)
+
+
 @click.command()
 def executar() -> None:
     """Executa o wizard interativo do ddf, da conexão aos artefatos gerados."""
     _configurar_logging()
     prompts.imprimir_destacado(_BANNER, prompts.COR_DESTAQUE)
+    prompts.imprimir_destacado(_BOAS_VINDAS, prompts.COR_SECUNDARIA, negrito=False)
     avisos.exibir_avisos(
         descoberta.descobrir_extratores() + descoberta.descobrir_geradores()
     )
@@ -85,6 +117,7 @@ def executar() -> None:
     escopos = prompts.escolher_multiplos(
         "Escolha um ou mais escopos:", escopos_disponiveis
     )
+    prompts.linha_de_decisao("Escopos", _formatar_escopos(escopos))
 
     prompts.cabecalho_etapa(3, _TOTAL_ETAPAS, "Escolher estratégia de amostragem")
     extracao.configurar_amostragem(configuracao)
@@ -125,6 +158,7 @@ def executar() -> None:
             dica_limpar=True,
         )
     ).expanduser()
+    prompts.linha_de_decisao("Destino", str(destino))
 
     prompts.cabecalho_etapa(11, _TOTAL_ETAPAS, "Confirmar execução")
     geracao.confirmar_execucao(nomes_geradores, destino)

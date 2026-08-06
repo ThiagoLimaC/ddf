@@ -126,6 +126,25 @@ class TestFeliz:
             {"texto": "✓ Conexão validada.", "style": f"bold fg:{prompts.COR_SUCESSO}"}
         ]
 
+    def test_imprimir_destacado_com_negrito_falso_omite_bold(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """negrito=False produz estilo sem "bold" — texto de segundo plano."""
+        chamadas: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            "questionary.print",
+            lambda texto, style=None: chamadas.append({"texto": texto, "style": style}),
+        )
+
+        prompts.imprimir_destacado(
+            "Bem-vindo.", prompts.COR_SECUNDARIA, negrito=False
+        )
+
+        assert chamadas == [
+            {"texto": "Bem-vindo.", "style": f"fg:{prompts.COR_SECUNDARIA}"}
+        ]
+
     def test_cabecalho_etapa_imprime_numero_total_e_titulo(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -142,6 +161,23 @@ class TestFeliz:
         assert len(chamadas) == 1
         assert chamadas[0]["style"] == f"bold fg:{prompts.COR_DESTAQUE}"
         assert "Etapa 2/12 — Escolher escopos" in chamadas[0]["texto"]
+
+    def test_linha_de_decisao_imprime_rotulo_e_valor_com_conector_de_arvore(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Rótulo e valor aparecem juntos, prefixados por "├─", na cor de destaque."""
+        chamadas: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            "questionary.print",
+            lambda texto, style=None: chamadas.append({"texto": texto, "style": style}),
+        )
+
+        prompts.linha_de_decisao("Fonte", "PostgreSQL")
+
+        assert chamadas == [
+            {"texto": "├─ Fonte PostgreSQL", "style": f"bold fg:{prompts.COR_DESTAQUE}"}
+        ]
 
     def test_progresso_paralelo_com_total_mostra_fracao(
         self,
@@ -294,6 +330,22 @@ class TestBorda:
             prompts.escolher_multiplos("Escolha:", ["Markdown"])
 
         assert excinfo.value.code == 0
+
+    def test_linha_de_decisao_usa_sempre_o_mesmo_conector_mesmo_na_ultima_chamada(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Nunca usa "└─" — as decisões do wizard não formam um bloco fechado."""
+        chamadas: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            "questionary.print",
+            lambda texto, style=None: chamadas.append({"texto": texto, "style": style}),
+        )
+
+        prompts.linha_de_decisao("Fonte", "PostgreSQL")
+        prompts.linha_de_decisao("Destino", "artefatos")
+
+        assert all(chamada["texto"].startswith("├─ ") for chamada in chamadas)
 
     def test_cabecalho_etapa_com_titulo_longo_nao_estoura_preenchimento_negativo(
         self,
