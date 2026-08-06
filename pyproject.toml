@@ -52,6 +52,9 @@ src = ["src"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "D"]
 
+[tool.ruff.lint.per-file-ignores]
+"src/ddf/infrastructure/adapters/cli/wizard.py" = ["E501", "W293"]
+
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
