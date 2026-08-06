@@ -126,19 +126,40 @@ class TestFeliz:
             {"texto": "✓ Conexão validada.", "style": f"bold fg:{prompts.COR_SUCESSO}"}
         ]
 
+    def test_cabecalho_etapa_imprime_numero_total_e_titulo(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Rótulo "Etapa N/total — título" aparece centralizado, na cor de destaque."""
+        chamadas: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            "questionary.print",
+            lambda texto, style=None: chamadas.append({"texto": texto, "style": style}),
+        )
+
+        prompts.cabecalho_etapa(2, 12, "Escolher escopos")
+
+        assert len(chamadas) == 1
+        assert chamadas[0]["style"] == f"bold fg:{prompts.COR_DESTAQUE}"
+        assert "Etapa 2/12 — Escolher escopos" in chamadas[0]["texto"]
+
     def test_progresso_paralelo_com_total_mostra_fracao(
         self,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Com total conhecido, mostra 'concluídas/total'."""
-        callback, _definir_total = prompts.progresso_paralelo("Extraindo...", total=2)
+        callback, _definir_total, inicio = prompts.progresso_paralelo(
+            "Extraindo...", total=2
+        )
 
+        inicio("public.clientes")
         callback("public.clientes")
+        inicio("public.pedidos")
         callback("public.pedidos")
 
         saida = capsys.readouterr().out
-        assert "(1/2) — public.clientes" in saida
-        assert "(2/2) — public.pedidos" in saida
+        assert "(1/2) — finalizando..." in saida
+        assert "(2/2) — finalizando..." in saida
 
 
 class TestErro:
@@ -274,17 +295,42 @@ class TestBorda:
 
         assert excinfo.value.code == 0
 
+    def test_cabecalho_etapa_com_titulo_longo_nao_estoura_preenchimento_negativo(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Título maior que a largura fixa ainda produz separador mínimo, sem erro."""
+        chamadas: list[dict[str, Any]] = []
+        monkeypatch.setattr(
+            "questionary.print",
+            lambda texto, style=None: chamadas.append({"texto": texto, "style": style}),
+        )
+
+        prompts.cabecalho_etapa(
+            5, 12, "Gerar skeletons e pausar para curadoria manual dos overrides"
+        )
+
+        assert len(chamadas) == 1
+        assert "──" in chamadas[0]["texto"]
+        assert (
+            "Etapa 5/12 — Gerar skeletons e pausar para curadoria manual dos overrides"
+            in chamadas[0]["texto"]
+        )
+
     def test_progresso_paralelo_sem_total_mostra_contagem_corrida(
         self,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Sem total (None), mostra só a contagem corrida, sem fração."""
-        callback, _definir_total = prompts.progresso_paralelo("Gerando skeletons...")
+        callback, _definir_total, inicio = prompts.progresso_paralelo(
+            "Gerando skeletons..."
+        )
 
+        inicio("public.clientes")
         callback("public.clientes")
 
         saida = capsys.readouterr().out
-        assert "(1) — public.clientes" in saida
+        assert "(1) — finalizando..." in saida
         assert "/1" not in saida
 
     def test_progresso_paralelo_definir_total_depois_passa_a_mostrar_fracao(
@@ -292,24 +338,60 @@ class TestBorda:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Total definido após a criação passa a valer nas chamadas seguintes."""
-        callback, definir_total = prompts.progresso_paralelo("Extraindo...")
+        callback, definir_total, inicio = prompts.progresso_paralelo("Extraindo...")
 
+        inicio("public.clientes")
         callback("public.clientes")
         definir_total(2)
+        inicio("public.pedidos")
         callback("public.pedidos")
 
         saida = capsys.readouterr().out
-        assert "(1) — public.clientes" in saida
-        assert "(2/2) — public.pedidos" in saida
+        assert "(1) — finalizando..." in saida
+        assert "(2/2) — finalizando..." in saida
+
+    def test_progresso_paralelo_mostra_identificadores_em_andamento(
+        self,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Com duas tabelas em andamento, mostra as duas, não só a última iniciada."""
+        _callback, _definir_total, inicio = prompts.progresso_paralelo(
+            "Extraindo...", total=2
+        )
+
+        inicio("public.pedidos")
+        inicio("public.clientes")
+
+        saida = capsys.readouterr().out
+        assert "em andamento: public.clientes, public.pedidos" in saida
+
+    def test_progresso_paralelo_conclusao_remove_do_conjunto_em_andamento(
+        self,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Tabela concluída sai da lista de "em andamento", com outra ainda rodando."""
+        callback, _definir_total, inicio = prompts.progresso_paralelo(
+            "Extraindo...", total=2
+        )
+        inicio("public.pedidos")
+        inicio("public.clientes")
+
+        callback("public.pedidos")
+
+        saida = capsys.readouterr().out
+        ultima_linha = saida.splitlines()[-1]
+        assert "em andamento: public.clientes" in ultima_linha
+        assert "public.pedidos" not in ultima_linha
 
     def test_progresso_paralelo_devolve_named_tuple_com_campos_nomeados(
         self,
     ) -> None:
-        """Acesso por nome (.callback/.definir_total), não só por posição."""
+        """Acesso por nome (.callback/.definir_total/.inicio), não só por posição."""
         resultado = prompts.progresso_paralelo("Extraindo...")
 
         assert resultado.callback is resultado[0]
         assert resultado.definir_total is resultado[1]
+        assert resultado.inicio is resultado[2]
 
     def test_ampulheta_nao_propaga_excecao_e_encerra_a_thread(
         self,

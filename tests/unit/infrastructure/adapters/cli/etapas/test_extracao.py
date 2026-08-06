@@ -59,11 +59,13 @@ class OrquestradorFake:
         extrator: object,
         progresso: Callable[[str], None] | None = None,
         ao_conhecer_total: Callable[[int], None] | None = None,
+        inicio: Callable[[str], None] | None = None,
     ) -> Resultado[list[TabelaExtraida]]:
-        """Devolve o Resultado configurado, chamando ao_conhecer_total/progresso.
+        """Devolve o Resultado configurado, chamando ao_conhecer_total/inicio/progresso.
 
-        Simula o comportamento real de OrquestradorParalelo: informa o total
-        antes de "processar" cada item da lista de sucesso configurada.
+        Simula o comportamento real de OrquestradorParalelo: informa o total,
+        depois "inicia" e "conclui" cada item da lista de sucesso configurada,
+        nessa ordem.
         """
         tabelas = (
             self._resultado_extrair.valor
@@ -72,13 +74,20 @@ class OrquestradorFake:
         )
         if ao_conhecer_total is not None:
             ao_conhecer_total(len(tabelas))
-        if progresso is not None:
-            for tabela in tabelas:
-                progresso(f"{tabela.nome_escopo}.{tabela.nome_tabela}")
+        for tabela in tabelas:
+            identificador = f"{tabela.nome_escopo}.{tabela.nome_tabela}"
+            if inicio is not None:
+                inicio(identificador)
+            if progresso is not None:
+                progresso(identificador)
         return self._resultado_extrair
 
     def aplicar_sobrescritas(
-        self, tabelas: object, sobrescrita: object, progresso: object = None
+        self,
+        tabelas: object,
+        sobrescrita: object,
+        progresso: object = None,
+        inicio: object = None,
     ) -> Resultado[object]:
         """Não é exercitado por estes testes."""
         raise NotImplementedError

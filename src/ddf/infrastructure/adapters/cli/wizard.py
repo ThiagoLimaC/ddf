@@ -14,6 +14,8 @@ from ddf.infrastructure.adapters.orchestrator.orquestrador_paralelo import (
     OrquestradorParalelo,
 )
 
+_TOTAL_ETAPAS = 12
+
 _BANNER = r"""
 
                                   __...--~~~~~-._   _.-~~~~~--...__
@@ -76,16 +78,25 @@ def executar() -> None:
     avisos.exibir_avisos(
         descoberta.descobrir_extratores() + descoberta.descobrir_geradores()
     )
+    prompts.cabecalho_etapa(1, _TOTAL_ETAPAS, "Escolher fonte e conectar")
     extrator, configuracao, escopos_disponiveis = extracao.conectar()
+
+    prompts.cabecalho_etapa(2, _TOTAL_ETAPAS, "Escolher escopos")
     escopos = prompts.escolher_multiplos(
         "Escolha um ou mais escopos:", escopos_disponiveis
     )
+
+    prompts.cabecalho_etapa(3, _TOTAL_ETAPAS, "Escolher estratégia de amostragem")
     extracao.configurar_amostragem(configuracao)
 
+    prompts.cabecalho_etapa(4, _TOTAL_ETAPAS, "Extrair tabelas")
     orquestrador = OrquestradorParalelo()
     tabelas = extracao.extrair(orquestrador, extrator, escopos)
     _sair_se_vazio(tabelas, "Nenhuma tabela extraída com sucesso.")
 
+    prompts.cabecalho_etapa(
+        5, _TOTAL_ETAPAS, "Gerar skeletons e pausar para curadoria"
+    )
     diretorio_overrides = Path(
         prompts.texto(
             "Diretório de overrides:", default="overrides", dica_limpar=True
@@ -93,13 +104,20 @@ def executar() -> None:
     ).expanduser()
     sobrescrita = curadoria.curar(orquestrador, diretorio_overrides, tabelas)
 
+    prompts.cabecalho_etapa(6, _TOTAL_ETAPAS, "Aplicar sobrescritas")
     banco_curado = curadoria.aplicar_sobrescritas(orquestrador, sobrescrita, tabelas)
     _sair_se_vazio(banco_curado.tabelas, "Nenhuma tabela curada com sucesso.")
 
+    prompts.cabecalho_etapa(7, _TOTAL_ETAPAS, "Escolher geradores")
     nomes_geradores = analise.escolher_geradores()
+
+    prompts.cabecalho_etapa(8, _TOTAL_ETAPAS, "Validar analisadores e geradores")
     analisadores_ordenados = analise.validar_selecao(nomes_geradores)
+
+    prompts.cabecalho_etapa(9, _TOTAL_ETAPAS, "Analisar")
     banco_analisado = analise.analisar(analisadores_ordenados, banco_curado)
 
+    prompts.cabecalho_etapa(10, _TOTAL_ETAPAS, "Escolher destino")
     destino = Path(
         prompts.texto(
             "Diretório de destino dos artefatos:",
@@ -107,7 +125,11 @@ def executar() -> None:
             dica_limpar=True,
         )
     ).expanduser()
+
+    prompts.cabecalho_etapa(11, _TOTAL_ETAPAS, "Confirmar execução")
     geracao.confirmar_execucao(nomes_geradores, destino)
+
+    prompts.cabecalho_etapa(12, _TOTAL_ETAPAS, "Executar geradores")
     geracao.executar_geradores(nomes_geradores, banco_analisado, destino)
 
 

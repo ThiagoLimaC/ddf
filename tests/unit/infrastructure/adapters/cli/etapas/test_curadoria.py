@@ -29,7 +29,11 @@ class OrquestradorFake:
         raise NotImplementedError
 
     def aplicar_sobrescritas(
-        self, tabelas: object, sobrescrita: object, progresso: object = None
+        self,
+        tabelas: object,
+        sobrescrita: object,
+        progresso: object = None,
+        inicio: object = None,
     ) -> Resultado[BancoCurado]:
         """Devolve o Resultado configurado, ignorando os argumentos."""
         return self._resultado

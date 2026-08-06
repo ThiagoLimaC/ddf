@@ -17,6 +17,11 @@ _QUADROS_AMPULHETA = ("⏳", "⌛")
 COR_DESTAQUE = "#00d7ff"
 COR_SUCESSO = "#00d700"
 
+# Largura fixa (não segue o terminal) para o rótulo ficar sempre centralizado
+# de forma previsível — inclusive em teste, sem depender de mock de
+# get_terminal_size.
+_LARGURA_CABECALHO_ETAPA = 70
+
 # Mesmo tom do banner (_BANNER em wizard.py) — resposta do usuário destacada
 # na mesma cor. É um teste de identidade visual; ajustar/reverter é só mudar
 # esta constante.
@@ -153,6 +158,37 @@ def imprimir_destacado(texto_a_exibir: str, cor: str) -> None:
     questionary.print(texto_a_exibir, style=f"bold fg:{cor}")
 
 
+def cabecalho_etapa(numero: int, total: int, titulo: str) -> None:
+    """Imprime um separador "── Etapa N/total — título ──" antes de uma fase do wizard.
+
+    Depois do banner de abertura (`_BANNER` em `wizard.py`), o fluxo do
+    wizard virava prompt puro do `questionary` — sem nenhuma pista visual de
+    onde uma etapa termina e a próxima começa, nem de quanto falta. Inspirado
+    em `rich.rule` (regra horizontal com título centralizado): mesma ideia,
+    sem trazer a dependência — reaproveita `imprimir_destacado`, que já é o
+    único ponto deste módulo que fala com `questionary.print`, e a mesma
+    `COR_DESTAQUE` do banner, para não criar uma segunda linguagem visual.
+
+    `numero`/`total` contam checkpoints visíveis ao usuário, não
+    necessariamente as 14 "etapas" documentadas por módulo em
+    `docs/system_design_doc.md` — duas dessas etapas (escolher fonte +
+    testar conexão; gerar skeletons + pausar para curadoria) acontecem
+    dentro de uma única chamada de `cli/etapas/*.py` sem uma pergunta nova
+    ao usuário entre elas, então compartilham um único cabeçalho.
+
+    Args:
+        numero: posição do checkpoint atual (1-indexado).
+        total: número total de checkpoints do wizard.
+        titulo: nome curto da etapa, ex. "Escolher escopos".
+    """
+    print()
+    rotulo = f" Etapa {numero}/{total} — {titulo} "
+    preenchimento = max(_LARGURA_CABECALHO_ETAPA - len(rotulo), 4)
+    esquerda = "─" * (preenchimento // 2)
+    direita = "─" * (preenchimento - preenchimento // 2)
+    imprimir_destacado(f"{esquerda}{rotulo}{direita}", COR_DESTAQUE)
+
+
 def confirmar(mensagem: str, default: bool = True) -> bool:
     """Pergunta confirmação sim/não, saindo limpo se o usuário cancelar.
 
@@ -229,26 +265,27 @@ def ampulheta(mensagem: str) -> Generator[None, None, None]:
 
 
 class Progresso(NamedTuple):
-    """Par de callbacks devolvido por `progresso_paralelo`.
+    """Trio de callbacks devolvido por `progresso_paralelo`.
 
-    `NamedTuple`, não uma tupla posicional crua — os dois campos têm
-    papéis bem diferentes (um alimenta `progresso=`, o outro
-    `ao_conhecer_total=`); nomear evita que um 3º callback futuro precise
-    de desempacotamento por posição em `tuple[Callable, Callable, Callable]`.
+    `NamedTuple`, não uma tupla posicional crua — os três campos têm
+    papéis bem diferentes (um alimenta `progresso=`, outro
+    `ao_conhecer_total=`, outro `inicio=`); nomear evita desempacotamento
+    por posição num `tuple[Callable, Callable, Callable]` sem pistas do que
+    é cada um.
     """
 
     callback: Callable[[str], None]
     definir_total: Callable[[int], None]
+    inicio: Callable[[str], None]
 
 
 def progresso_paralelo(mensagem_base: str, total: int | None = None) -> Progresso:
-    """Devolve (callback de progresso, callback para definir o total depois).
+    """Devolve os callbacks de progresso, total e início usados sob paralelismo.
 
-    Pensado para `.callback` ser passado como `progresso=` a
-    `OrquestradorDeTabelas.extrair`/`aplicar_sobrescritas` — cada chamada já
-    chega serializada pela thread principal (ver `_executar_em_paralelo`),
-    sem necessidade de lock aqui. Não mostra tempo decorrido por item — a
-    duração é do processo inteiro, exibida uma vez ao final pelo chamador.
+    Pensado para `.callback`/`.inicio` serem passados como `progresso=`/
+    `inicio=` a `OrquestradorDeTabelas.extrair`/`aplicar_sobrescritas`. Não
+    mostra tempo decorrido por item — a duração é do processo inteiro,
+    exibida uma vez ao final pelo chamador.
 
     `.definir_total` existe para os casos em que o total só é conhecido
     depois de iniciada a chamada (ex.: `extrair`, que lista as tabelas de
@@ -257,31 +294,56 @@ def progresso_paralelo(mensagem_base: str, total: int | None = None) -> Progress
     seguinte. Chamadores que já sabem o total (ex.: `aplicar_sobrescritas`,
     com `len(tabelas)` em mãos) simplesmente não usam `.definir_total`.
 
+    `.callback` (conclusão) já chega serializado pela thread principal (ver
+    `_executar_em_paralelo`), mas `.inicio` dispara de dentro de cada
+    worker — pode chegar concorrentemente para itens diferentes. Por isso um
+    `threading.Lock` interno protege tanto o conjunto de identificadores em
+    andamento quanto a própria escrita no terminal, evitando linhas
+    intercaladas quando dois workers chamam `.inicio`/`.callback` ao mesmo
+    tempo.
+
     Args:
         mensagem_base: texto fixo exibido antes da contagem.
         total: número total de itens esperados, exibido como fração
             "N/total". Omitido quando ainda não é conhecido na criação.
     """
     print()
+    lock = threading.Lock()
     concluidas = 0
     total_atual = total
+    em_andamento: set[str] = set()
 
     def _definir_total(novo_total: int) -> None:
         nonlocal total_atual
         total_atual = novo_total
 
-    def _callback(identificador: str) -> None:
-        nonlocal concluidas
-        concluidas += 1
+    def _renderizar() -> None:
         contagem = (
             f"{concluidas}/{total_atual}"
             if total_atual is not None
             else str(concluidas)
         )
+        descricao = (
+            f"em andamento: {', '.join(sorted(em_andamento))}"
+            if em_andamento
+            else "finalizando..."
+        )
         print(
-            f"\r\x1b[K{mensagem_base} ({contagem}) — {identificador}",
+            f"\r\x1b[K{mensagem_base} ({contagem}) — {descricao}",
             end="",
             flush=True,
         )
 
-    return Progresso(callback=_callback, definir_total=_definir_total)
+    def _inicio(identificador: str) -> None:
+        with lock:
+            em_andamento.add(identificador)
+            _renderizar()
+
+    def _callback(identificador: str) -> None:
+        nonlocal concluidas
+        with lock:
+            em_andamento.discard(identificador)
+            concluidas += 1
+            _renderizar()
+
+    return Progresso(callback=_callback, definir_total=_definir_total, inicio=_inicio)
