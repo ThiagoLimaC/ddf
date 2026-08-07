@@ -86,9 +86,7 @@ def _construir_tabela_inteira() -> EstrategiaDeAmostragem:
     nunca ser silenciosa.
     """
     prosseguir = prompts.confirmar(
-        "Tabela inteira carrega tudo em memória de uma vez "
-        "(sem limite de tamanho) — pode causar falta de memória em tabelas "
-        "muito grandes. Continuar?",
+        "Tabela inteira carrega tudo em memória, sem limite. Continuar?",
         default=True,
     )
     if not prosseguir:
