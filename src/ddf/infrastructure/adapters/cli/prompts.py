@@ -375,8 +375,39 @@ class Progresso(NamedTuple):
     definir_total: Callable[[int], None]
 
 
+# Retângulo vertical cheio/vazio (U+25AE/U+25AF, bloco "Geometric Shapes" do
+# Unicode) — não os blocos de textura (`█`/`░`) usados antes. `▯` já É um
+# contorno (só a borda do retângulo é desenhada, o miolo é o glifo "vazio"
+# do próprio terminal), então o segmento não-concluído nunca pinta um fundo
+# sólido cinza por cima do fundo real do terminal — pedido explícito do
+# usuário ao revisar a 1ª versão desta barra. Ambos amplamente suportados em
+# fontes monoespaçadas de terminal (mesmo bloco geométrico de `■`/`□`/`▪`,
+# já cobertos por qualquer fonte com bom suporte a Unicode — DejaVu Sans
+# Mono, Cascadia Code, JetBrains Mono, etc.).
+_BLOCO_CHEIO = "▮"
+_BLOCO_VAZIO = "▯"
+
+_ANSI_RESET = "\x1b[0m"
+
+
+def _cor_ansi_truecolor(cor_hex: str) -> str:
+    r"""Converte `#rrggbb` numa sequência ANSI truecolor de foreground.
+
+    `_barra()` escreve direto via `print`/`\x1b[K`, não via
+    `questionary.print` — não há `Style` do `prompt_toolkit` disponível
+    naquele ponto, então a cor é aplicada manualmente com o mesmo esquema
+    truecolor (`ESC[38;2;r;g;bm`) que os terminais modernos já entendem para
+    os hex de `COR_SUCESSO`/`COR_SECUNDARIA` usados no resto do módulo.
+
+    Args:
+        cor_hex: cor no formato `#rrggbb` (ex.: `COR_SUCESSO`).
+    """
+    r, g, b = (int(cor_hex[i : i + 2], 16) for i in (1, 3, 5))
+    return f"\x1b[38;2;{r};{g};{b}m"
+
+
 def progresso_paralelo(mensagem_base: str, total: int | None = None) -> Progresso:
-    """Devolve (callback de progresso, callback para definir o total depois).
+    r"""Devolve (callback de progresso, callback para definir o total depois).
 
     Pensado para `.callback` ser passado como `progresso=` a
     `OrquestradorDeTabelas.extrair`/`aplicar_sobrescritas` — cada chamada já
@@ -384,12 +415,41 @@ def progresso_paralelo(mensagem_base: str, total: int | None = None) -> Progress
     sem necessidade de lock aqui. Não mostra tempo decorrido por item — a
     duração é do processo inteiro, exibida uma vez ao final pelo chamador.
 
+    Desenha 3 linhas fixas — "mensagem (N/total)", uma linha em branco e uma
+    barra de retângulos (`▮▮▮▯▯▯`, inspirada no shell da Oxide) —
+    reescritas no lugar a cada chamada. Substitui uma tentativa anterior de
+    mostrar o identificador do item "em andamento": sob paralelismo real
+    (~100+ tabelas), a lista de identificadores crescia até quebrar em
+    várias linhas do terminal, e `\\r`/`\\x1b[K` não alcançam linhas acima da
+    atual — gerava um log cascateado (ver
+    `plan/registry-plan/issue-116-ajustes-de-ux-no-wizard.md`). O redesenho
+    (sempre sobe até a 1ª linha, limpa e reescreve as 3) é seguro mesmo com
+    largura variável, porque `\\x1b[K` limpa o resto da linha inteira antes
+    de escrever — não depende de a barra ter sempre o mesmo tamanho.
+
+    A barra tem a mesma largura, em colunas, da linha "mensagem (N/total)"
+    acima dela — termina exatamente sob o `)` de fechamento, não um número
+    fixo de segmentos independente do texto. Como a contagem cresce em
+    dígitos ao longo da execução (`"(1/122)"` → `"(121/122)"`), a barra
+    recalcula a largura a cada redesenho.
+
+    O segmento preenchido usa `COR_DESTAQUE` (o mesmo ciano do banner, de
+    `cabecalho_etapa` e do valor ecoado em `linha_de_decisao` — não
+    `COR_SUCESSO`: a barra mostra progresso em andamento, não um resultado
+    concluído) e o vazio `COR_SECUNDARIA` (o mesmo cinza fosco de texto de
+    segundo plano). Cada retângulo é um segmento discreto, unido direto ao
+    vizinho (sem espaçador) — não há mais um único caractere de transição
+    (`_SEPARADOR_BARRA`): com `▮`/`▯` como glifos individuais já estreitos, a
+    separação visual entre segmentos já nasce da própria
+    textura, sem precisar de um caractere extra dedicado a isso.
+
     `.definir_total` existe para os casos em que o total só é conhecido
     depois de iniciada a chamada (ex.: `extrair`, que lista as tabelas de
     cada escopo internamente) — nesse caso, passe-o como `ao_conhecer_total=`
-    e a fração "N/total" passa a valer a partir da 1ª chamada de progresso
-    seguinte. Chamadores que já sabem o total (ex.: `aplicar_sobrescritas`,
-    com `len(tabelas)` em mãos) simplesmente não usam `.definir_total`.
+    e a barra é desenhada assim que ele for chamado, antes do 1º item
+    concluído. Chamadores que já sabem o total (ex.: `aplicar_sobrescritas`,
+    com `len(tabelas)` em mãos) não usam `.definir_total` — a barra inicial
+    (0/total) já é desenhada aqui.
 
     Args:
         mensagem_base: texto fixo exibido antes da contagem.
@@ -399,23 +459,47 @@ def progresso_paralelo(mensagem_base: str, total: int | None = None) -> Progress
     print()
     concluidas = 0
     total_atual = total
+    ja_desenhou = False
 
-    def _definir_total(novo_total: int) -> None:
-        nonlocal total_atual
-        total_atual = novo_total
+    def _barra(largura: int) -> str:
+        preenchidos = (
+            round(largura * concluidas / total_atual) if total_atual else 0
+        )
+        vazios = largura - preenchidos
+        # Cor embutida em cada segmento (não uma sequência ANSI só na
+        # transição) porque os retângulos são unidos direto, sem espaçador —
+        # um único par de blocos "cor + N repetições" como antes deixaria
+        # sem cor definida qualquer separador entre segmentos.
+        segmentos = [f"{_cor_ansi_truecolor(COR_DESTAQUE)}{_BLOCO_CHEIO}"] * preenchidos
+        segmentos += [f"{_cor_ansi_truecolor(COR_SECUNDARIA)}{_BLOCO_VAZIO}"] * vazios
+        return "".join(segmentos) + _ANSI_RESET
 
-    def _callback(identificador: str) -> None:
-        nonlocal concluidas
-        concluidas += 1
+    def _desenhar() -> None:
+        nonlocal ja_desenhou
         contagem = (
             f"{concluidas}/{total_atual}"
             if total_atual is not None
             else str(concluidas)
         )
-        print(
-            f"\r\x1b[K{mensagem_base} ({contagem}) — {identificador}",
-            end="",
-            flush=True,
-        )
+        linha_contagem = f"{mensagem_base} ({contagem})"
+        if ja_desenhou:
+            print("\x1b[2A", end="")
+        print(f"\r\x1b[K{linha_contagem}")
+        print("\r\x1b[K")
+        print(f"\r\x1b[K{_barra(len(linha_contagem))}", end="", flush=True)
+        ja_desenhou = True
+
+    def _definir_total(novo_total: int) -> None:
+        nonlocal total_atual
+        total_atual = novo_total
+        _desenhar()
+
+    def _callback(identificador: str) -> None:
+        nonlocal concluidas
+        concluidas += 1
+        _desenhar()
+
+    if total_atual is not None:
+        _desenhar()
 
     return Progresso(callback=_callback, definir_total=_definir_total)

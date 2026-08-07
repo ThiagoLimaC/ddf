@@ -234,15 +234,18 @@ class TestFeliz:
         self,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """Com total conhecido, mostra 'concluídas/total'."""
+        """Com total conhecido, mostra 'concluídas/total' e a barra de blocos."""
         callback, _definir_total = prompts.progresso_paralelo("Extraindo...", total=2)
 
         callback("public.clientes")
         callback("public.pedidos")
 
         saida = capsys.readouterr().out
-        assert "(1/2) — public.clientes" in saida
-        assert "(2/2) — public.pedidos" in saida
+        assert "Extraindo... (0/2)" in saida
+        assert "Extraindo... (1/2)" in saida
+        assert "Extraindo... (2/2)" in saida
+        assert prompts._BLOCO_CHEIO in saida
+        assert prompts._BLOCO_VAZIO in saida
 
 
 class TestErro:
@@ -415,7 +418,7 @@ class TestBorda:
         callback("public.clientes")
 
         saida = capsys.readouterr().out
-        assert "(1) — public.clientes" in saida
+        assert "Gerando skeletons... (1)" in saida
         assert "/1" not in saida
 
     def test_progresso_paralelo_definir_total_depois_passa_a_mostrar_fracao(
@@ -430,8 +433,8 @@ class TestBorda:
         callback("public.pedidos")
 
         saida = capsys.readouterr().out
-        assert "(1) — public.clientes" in saida
-        assert "(2/2) — public.pedidos" in saida
+        assert "Extraindo... (1)" in saida
+        assert "Extraindo... (2/2)" in saida
 
     def test_progresso_paralelo_devolve_named_tuple_com_campos_nomeados(
         self,

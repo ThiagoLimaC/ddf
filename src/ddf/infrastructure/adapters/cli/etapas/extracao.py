@@ -93,11 +93,12 @@ def extrair(
     (`ao_conhecer_total`), assim que ele termina de listar as tabelas
     internamente — sem uma 2ª listagem só para saber a contagem.
     """
-    progresso, definir_total = prompts.progresso_paralelo("Extraindo tabelas...")
+    progresso, definir_total = prompts.progresso_paralelo("Tabelas extraídas")
     inicio = time.monotonic()
     resultado = orquestrador.extrair(
         escopos, extrator, progresso=progresso, ao_conhecer_total=definir_total
     )
+    print()
     print()
     print(f"⏱️  duração: {time.monotonic() - inicio:.0f}s")
     return ou_sair(resultado)
