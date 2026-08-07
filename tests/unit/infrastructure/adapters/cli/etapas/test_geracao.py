@@ -58,7 +58,7 @@ class TestFeliz:
 
         geracao.executar_geradores(["Markdown"], banco_analisado, tmp_path)
 
-        assert "'Markdown': artefato(s) escrito(s)" in capsys.readouterr().out
+        assert "'Markdown': artefato escrito" in capsys.readouterr().out
         assert gerador_fake.destino_recebido == tmp_path / "markdown"
 
     def test_executar_geradores_escreve_cada_gerador_em_subpasta_propria(
@@ -147,7 +147,7 @@ class TestBorda:
 
         saida = capsys.readouterr().out
         assert "Falha em 'Dbt'" in saida
-        assert "'Markdown': artefato(s) escrito(s)" in saida
+        assert "'Markdown': artefato escrito" in saida
 
     def test_executar_geradores_converte_nome_camel_case_em_slug_snake_case(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

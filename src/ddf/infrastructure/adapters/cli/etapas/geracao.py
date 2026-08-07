@@ -65,7 +65,7 @@ def executar_geradores(
             print(f"Falha em '{nome}': {resultado.erro}")
             houve_falha = True
             continue
-        print(f"'{nome}': artefato(s) escrito(s) em '{destino_gerador.resolve()}'.")
+        print(f"'{nome}': artefato escrito em '{destino_gerador.resolve()}'.")
 
     if houve_falha:
         sys.exit(1)
