@@ -24,6 +24,13 @@ from ddf.infrastructure.adapters.extractors.postgres.extrator_postgres import (
 
 EXTRATORES_REGISTRADOS: dict[str, ExtratorRegistrado] = {}
 
+# Máscara de largura fixa para a senha na árvore de decisão da etapa de
+# conexão — nunca "*" * len(senha_conexao). O comprimento da senha mascarada
+# ainda seria uma pista sobre ela (ex.: "****" vs "********************"
+# denuncia senha curta vs. longa/gerada), então a árvore sempre mostra o
+# mesmo texto fixo, independente do valor real.
+_MASCARA_SENHA = "****"
+
 
 def registrar_extrator(
     nome: str,
@@ -83,6 +90,11 @@ def _construir_extrator_postgres(configuracao: ConfiguracaoDeExtracao) -> Extrat
     principalmente `sslmode`, comum/exigido por Postgres gerenciado em
     produção (RDS, Azure Database, PgBouncer na frente) — sem voltar a
     pedir a connection string inteira em texto claro.
+
+    A árvore de decisão da etapa de conexão (Fonte/Host/Porta/Banco/
+    Usuário/Senha) só é impressa aqui no final, depois de coletado todo o
+    parâmetro — ver `linha_de_decisao` para o porquê deste ser o único
+    ponto do wizard que fecha o bloco com `└─` em vez de `├─`.
     """
     host = prompts.texto("Host do Postgres:")
     porta = prompts.numero("Porta:", int, default="5432")
@@ -99,15 +111,33 @@ def _construir_extrator_postgres(configuracao: ConfiguracaoDeExtracao) -> Extrat
     )
     if parametros_extra:
         dsn += f"?{parametros_extra}"
+    print()
+    prompts.linha_de_decisao("Fonte", "PostgreSQL")
+    prompts.linha_de_decisao("Host", host)
+    prompts.linha_de_decisao("Porta", str(porta))
+    prompts.linha_de_decisao("Banco", banco)
+    prompts.linha_de_decisao("Usuário", usuario)
+    prompts.linha_de_decisao("Senha", _MASCARA_SENHA, ultimo=True)
     return ExtratorPostgres(dsn=dsn, configuracao=configuracao)
 
 
 def _construir_extrator_mariadb(configuracao: ConfiguracaoDeExtracao) -> Extrator:
-    """Pergunta host/porta/credenciais do MariaDB e monta o ExtratorMariaDB."""
+    """Pergunta host/porta/credenciais do MariaDB e monta o ExtratorMariaDB.
+
+    A árvore de decisão da etapa de conexão (Fonte/Host/Porta/Usuário/Senha)
+    só é impressa aqui no final, depois de coletado todo o parâmetro — ver
+    `_construir_extrator_postgres`/`linha_de_decisao` para o porquê.
+    """
     host = prompts.texto("Host do MariaDB:")
     porta = prompts.numero("Porta:", int, default="3306")
     usuario = prompts.texto("Usuário:")
     senha_conexao = prompts.senha("Senha:")
+    print()
+    prompts.linha_de_decisao("Fonte", "MariaDB")
+    prompts.linha_de_decisao("Host", host)
+    prompts.linha_de_decisao("Porta", str(porta))
+    prompts.linha_de_decisao("Usuário", usuario)
+    prompts.linha_de_decisao("Senha", _MASCARA_SENHA, ultimo=True)
     return ExtratorMariaDB(
         host=host,
         port=porta,

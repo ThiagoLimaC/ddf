@@ -34,6 +34,23 @@ def _substituir(
     return fake
 
 
+def _interceptar_print(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Substitui `questionary.print`, registrando texto/estilo/terminador.
+
+    `imprimir_destacado` agora pode ser chamado mais de uma vez para compor
+    uma única linha com mais de uma cor (ver `linha_de_decisao`) — por isso
+    o fake precisa aceitar `end`, não só `texto`/`style`.
+    """
+    chamadas: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "questionary.print",
+        lambda texto, style=None, end="\n": chamadas.append(
+            {"texto": texto, "style": style, "end": end}
+        ),
+    )
+    return chamadas
+
+
 # texto() — caminho feliz
 
 
@@ -80,6 +97,20 @@ class TestFeliz:
             prompts.selecionar("Qual fonte?", ["PostgreSQL", "MariaDB"]) == "PostgreSQL"
         )
 
+    def test_selecionar_usa_instrucao_em_portugues(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Instrução de navegação em PT-BR, não o texto padrão em inglês da lib."""
+        fake = _substituir(monkeypatch, "select", "PostgreSQL")
+
+        prompts.selecionar("Qual fonte?", ["PostgreSQL", "MariaDB"])
+
+        assert fake.kwargs is not None
+        # O "\n" final não é ruído do texto — é o que o questionary usa para
+        # abrir uma linha em branco antes da lista de opções (ver
+        # comentário em `selecionar()`, prompts.py).
+        assert fake.kwargs["instruction"] == "(setas para navegar, enter confirma)\n"
+
     def test_confirmar_devolve_false_quando_usuario_recusa(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -114,16 +145,16 @@ class TestFeliz:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Repassa o texto e monta o estilo com a cor recebida."""
-        chamadas: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            "questionary.print",
-            lambda texto, style=None: chamadas.append({"texto": texto, "style": style}),
-        )
+        chamadas = _interceptar_print(monkeypatch)
 
         prompts.imprimir_destacado("✓ Conexão validada.", prompts.COR_SUCESSO)
 
         assert chamadas == [
-            {"texto": "✓ Conexão validada.", "style": f"bold fg:{prompts.COR_SUCESSO}"}
+            {
+                "texto": "✓ Conexão validada.",
+                "style": f"bold fg:{prompts.COR_SUCESSO}",
+                "end": "\n",
+            }
         ]
 
     def test_imprimir_destacado_com_negrito_falso_omite_bold(
@@ -131,52 +162,72 @@ class TestFeliz:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """negrito=False produz estilo sem "bold" — texto de segundo plano."""
-        chamadas: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            "questionary.print",
-            lambda texto, style=None: chamadas.append({"texto": texto, "style": style}),
-        )
+        chamadas = _interceptar_print(monkeypatch)
 
         prompts.imprimir_destacado(
             "Bem-vindo.", prompts.COR_SECUNDARIA, negrito=False
         )
 
         assert chamadas == [
-            {"texto": "Bem-vindo.", "style": f"fg:{prompts.COR_SECUNDARIA}"}
+            {
+                "texto": "Bem-vindo.",
+                "style": f"fg:{prompts.COR_SECUNDARIA}",
+                "end": "\n",
+            }
         ]
+
+    def test_imprimir_destacado_sem_cor_produz_estilo_so_com_bold(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """cor=None não sobrescreve `fg` — mimetiza o token `question`."""
+        chamadas = _interceptar_print(monkeypatch)
+
+        prompts.imprimir_destacado("Fonte", None)
+
+        assert chamadas == [{"texto": "Fonte", "style": "bold", "end": "\n"}]
 
     def test_cabecalho_etapa_imprime_numero_total_e_titulo(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Rótulo "Etapa N/total — título" aparece centralizado, na cor de destaque."""
-        chamadas: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            "questionary.print",
-            lambda texto, style=None: chamadas.append({"texto": texto, "style": style}),
-        )
+        """Rótulo "└─ Etapa N/total — título" aparece na cor de destaque."""
+        chamadas = _interceptar_print(monkeypatch)
 
         prompts.cabecalho_etapa(2, 12, "Escolher escopos")
 
-        assert len(chamadas) == 1
-        assert chamadas[0]["style"] == f"bold fg:{prompts.COR_DESTAQUE}"
-        assert "Etapa 2/12 — Escolher escopos" in chamadas[0]["texto"]
+        assert chamadas == [
+            {
+                "texto": "└─ Etapa 2/12 — Escolher escopos",
+                "style": f"bold fg:{prompts.COR_DESTAQUE}",
+                "end": "\n",
+            }
+        ]
 
     def test_linha_de_decisao_imprime_rotulo_e_valor_com_conector_de_arvore(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Rótulo e valor aparecem juntos, prefixados por "├─", na cor de destaque."""
-        chamadas: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            "questionary.print",
-            lambda texto, style=None: chamadas.append({"texto": texto, "style": style}),
-        )
+        """Conector e rótulo na cor da pergunta, valor na cor de destaque.
+
+        Três chamadas a `questionary.print` compõem uma única linha: o
+        conector (`├─`) acompanha o rótulo (`cor=None`, mimetizando o token
+        `question` do tema padrão — `"bold"`, sem `fg`); só o valor mantém
+        `COR_DESTAQUE`, mesma cor que `_ESTILO` usa para o token `answer` do
+        questionary.
+        """
+        chamadas = _interceptar_print(monkeypatch)
 
         prompts.linha_de_decisao("Fonte", "PostgreSQL")
 
         assert chamadas == [
-            {"texto": "├─ Fonte PostgreSQL", "style": f"bold fg:{prompts.COR_DESTAQUE}"}
+            {"texto": "├─", "style": "bold", "end": " "},
+            {"texto": "Fonte", "style": "bold", "end": " "},
+            {
+                "texto": "PostgreSQL",
+                "style": f"bold fg:{prompts.COR_DESTAQUE}",
+                "end": "\n",
+            },
         ]
 
     def test_progresso_paralelo_com_total_mostra_fracao(
@@ -184,18 +235,14 @@ class TestFeliz:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Com total conhecido, mostra 'concluídas/total'."""
-        callback, _definir_total, inicio = prompts.progresso_paralelo(
-            "Extraindo...", total=2
-        )
+        callback, _definir_total = prompts.progresso_paralelo("Extraindo...", total=2)
 
-        inicio("public.clientes")
         callback("public.clientes")
-        inicio("public.pedidos")
         callback("public.pedidos")
 
         saida = capsys.readouterr().out
-        assert "(1/2) — finalizando..." in saida
-        assert "(2/2) — finalizando..." in saida
+        assert "(1/2) — public.clientes" in saida
+        assert "(2/2) — public.pedidos" in saida
 
 
 class TestErro:
@@ -331,58 +378,44 @@ class TestBorda:
 
         assert excinfo.value.code == 0
 
-    def test_linha_de_decisao_usa_sempre_o_mesmo_conector_mesmo_na_ultima_chamada(
+    def test_linha_de_decisao_usa_o_mesmo_conector_por_padrao_mesmo_na_ultima_chamada(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Nunca usa "└─" — as decisões do wizard não formam um bloco fechado."""
-        chamadas: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            "questionary.print",
-            lambda texto, style=None: chamadas.append({"texto": texto, "style": style}),
-        )
+        """Sem `ultimo=True`, nunca usa "└─" — bloco de decisões não fechado."""
+        chamadas = _interceptar_print(monkeypatch)
 
         prompts.linha_de_decisao("Fonte", "PostgreSQL")
         prompts.linha_de_decisao("Destino", "artefatos")
 
-        assert all(chamada["texto"].startswith("├─ ") for chamada in chamadas)
+        # O conector é sempre a 1ª das 3 chamadas de cada linha (índices 0 e 3).
+        assert chamadas[0]["texto"] == "├─"
+        assert chamadas[3]["texto"] == "├─"
 
-    def test_cabecalho_etapa_com_titulo_longo_nao_estoura_preenchimento_negativo(
+    def test_linha_de_decisao_com_ultimo_fecha_o_bloco_com_outro_conector(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Título maior que a largura fixa ainda produz separador mínimo, sem erro."""
-        chamadas: list[dict[str, Any]] = []
-        monkeypatch.setattr(
-            "questionary.print",
-            lambda texto, style=None: chamadas.append({"texto": texto, "style": style}),
-        )
+        """`ultimo=True` troca "├─" por "└─" — só a última linha de um bloco."""
+        chamadas = _interceptar_print(monkeypatch)
 
-        prompts.cabecalho_etapa(
-            5, 12, "Gerar skeletons e pausar para curadoria manual dos overrides"
-        )
+        prompts.linha_de_decisao("Host", "localhost")
+        prompts.linha_de_decisao("Senha", "****", ultimo=True)
 
-        assert len(chamadas) == 1
-        assert "──" in chamadas[0]["texto"]
-        assert (
-            "Etapa 5/12 — Gerar skeletons e pausar para curadoria manual dos overrides"
-            in chamadas[0]["texto"]
-        )
+        assert chamadas[0]["texto"] == "├─"
+        assert chamadas[3]["texto"] == "└─"
 
     def test_progresso_paralelo_sem_total_mostra_contagem_corrida(
         self,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Sem total (None), mostra só a contagem corrida, sem fração."""
-        callback, _definir_total, inicio = prompts.progresso_paralelo(
-            "Gerando skeletons..."
-        )
+        callback, _definir_total = prompts.progresso_paralelo("Gerando skeletons...")
 
-        inicio("public.clientes")
         callback("public.clientes")
 
         saida = capsys.readouterr().out
-        assert "(1) — finalizando..." in saida
+        assert "(1) — public.clientes" in saida
         assert "/1" not in saida
 
     def test_progresso_paralelo_definir_total_depois_passa_a_mostrar_fracao(
@@ -390,60 +423,24 @@ class TestBorda:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Total definido após a criação passa a valer nas chamadas seguintes."""
-        callback, definir_total, inicio = prompts.progresso_paralelo("Extraindo...")
+        callback, definir_total = prompts.progresso_paralelo("Extraindo...")
 
-        inicio("public.clientes")
         callback("public.clientes")
         definir_total(2)
-        inicio("public.pedidos")
         callback("public.pedidos")
 
         saida = capsys.readouterr().out
-        assert "(1) — finalizando..." in saida
-        assert "(2/2) — finalizando..." in saida
-
-    def test_progresso_paralelo_mostra_identificadores_em_andamento(
-        self,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """Com duas tabelas em andamento, mostra as duas, não só a última iniciada."""
-        _callback, _definir_total, inicio = prompts.progresso_paralelo(
-            "Extraindo...", total=2
-        )
-
-        inicio("public.pedidos")
-        inicio("public.clientes")
-
-        saida = capsys.readouterr().out
-        assert "em andamento: public.clientes, public.pedidos" in saida
-
-    def test_progresso_paralelo_conclusao_remove_do_conjunto_em_andamento(
-        self,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """Tabela concluída sai da lista de "em andamento", com outra ainda rodando."""
-        callback, _definir_total, inicio = prompts.progresso_paralelo(
-            "Extraindo...", total=2
-        )
-        inicio("public.pedidos")
-        inicio("public.clientes")
-
-        callback("public.pedidos")
-
-        saida = capsys.readouterr().out
-        ultima_linha = saida.splitlines()[-1]
-        assert "em andamento: public.clientes" in ultima_linha
-        assert "public.pedidos" not in ultima_linha
+        assert "(1) — public.clientes" in saida
+        assert "(2/2) — public.pedidos" in saida
 
     def test_progresso_paralelo_devolve_named_tuple_com_campos_nomeados(
         self,
     ) -> None:
-        """Acesso por nome (.callback/.definir_total/.inicio), não só por posição."""
+        """Acesso por nome (.callback/.definir_total), não só por posição."""
         resultado = prompts.progresso_paralelo("Extraindo...")
 
         assert resultado.callback is resultado[0]
         assert resultado.definir_total is resultado[1]
-        assert resultado.inicio is resultado[2]
 
     def test_ampulheta_nao_propaga_excecao_e_encerra_a_thread(
         self,

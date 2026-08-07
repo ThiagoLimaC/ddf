@@ -16,11 +16,6 @@ from ddf.infrastructure.adapters.orchestrator.orquestrador_paralelo import (
 
 _TOTAL_ETAPAS = 12
 
-# Acima desse tamanho, listar os escopos por extenso na linha de decisão
-# deixaria a linha mais larga que qualquer outra do wizard, sem ganho real de
-# informação — o usuário acabou de vê-los marcados no checkbox.
-_LIMITE_ESCOPOS_POR_EXTENSO = 5
-
 _BANNER = r"""
 
                                   __...--~~~~~-._   _.-~~~~~--...__
@@ -57,7 +52,7 @@ _BOAS_VINDAS = (
     "\n"
     "\n"
     "Bem-vindo ao ddf. As próximas etapas conectam a uma fonte de dados, extraem e curam a\n"
-    "estrutura das tabelas e geram os artefatos de documentação escolhidos"
+    "estrutura das tabelas e geram os artefatos de documentação escolhidos."
 )
 
 
@@ -90,17 +85,6 @@ def _sair_se_vazio(itens: Sequence[object], mensagem: str) -> None:
         sys.exit(1)
 
 
-def _formatar_escopos(escopos: Sequence[str]) -> str:
-    """Formata os escopos escolhidos para a linha de decisão pós-checkbox.
-
-    Lista por extenso até `_LIMITE_ESCOPOS_POR_EXTENSO`; acima disso, mostra
-    só a contagem — ver motivação na constante.
-    """
-    if len(escopos) > _LIMITE_ESCOPOS_POR_EXTENSO:
-        return f"{len(escopos)} escopos selecionados"
-    return ", ".join(escopos)
-
-
 @click.command()
 def executar() -> None:
     """Executa o wizard interativo do ddf, da conexão aos artefatos gerados."""
@@ -117,7 +101,6 @@ def executar() -> None:
     escopos = prompts.escolher_multiplos(
         "Escolha um ou mais escopos:", escopos_disponiveis
     )
-    prompts.linha_de_decisao("Escopos", _formatar_escopos(escopos))
 
     prompts.cabecalho_etapa(3, _TOTAL_ETAPAS, "Escolher estratégia de amostragem")
     extracao.configurar_amostragem(configuracao)

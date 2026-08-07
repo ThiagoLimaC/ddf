@@ -21,7 +21,6 @@ class OrquestradorDeTabelas(Protocol):
         /,
         progresso: Callable[[str], None] | None = None,
         ao_conhecer_total: Callable[[int], None] | None = None,
-        inicio: Callable[[str], None] | None = None,
     ) -> Resultado[list[TabelaExtraida]]:
         """Extrai, em paralelo, todas as tabelas dos escopos informados.
 
@@ -34,13 +33,6 @@ class OrquestradorDeTabelas(Protocol):
         nº de tabelas que de fato serão extraídas. Existe para o chamador
         mostrar um total real sem precisar listar as tabelas de novo por
         fora.
-
-        `inicio`, se informado, é chamado uma vez por tabela assim que um
-        worker começa a processá-la — antes de `progresso`, nunca depois.
-        Diferente de `progresso` (sempre serializado pela thread principal
-        via `as_completed`), `inicio` é chamado de dentro de cada worker,
-        podendo disparar concorrentemente para itens diferentes — quem
-        implementa este callback é responsável pela própria thread-safety.
         """
         ...
 
@@ -49,17 +41,10 @@ class OrquestradorDeTabelas(Protocol):
         tabelas: list[TabelaExtraida],
         sobrescrita: Estagio[TabelaExtraida, TabelaCurada],
         progresso: Callable[[str], None] | None = None,
-        inicio: Callable[[str], None] | None = None,
     ) -> Resultado[BancoCurado]:
         """Aplica, em paralelo, a Sobrescrita sobre cada TabelaExtraida.
 
         Falhas individuais nunca abortam o lote inteiro — viram Aviso no
         Sucesso devolvido, junto das tabelas cuja sobrescrita deu certo.
-
-        `inicio`, se informado, é chamado uma vez por tabela assim que um
-        worker começa a processá-la — antes de `progresso`, nunca depois,
-        de dentro do próprio worker (pode disparar concorrentemente para
-        itens diferentes; thread-safety é responsabilidade de quem
-        implementa o callback).
         """
         ...

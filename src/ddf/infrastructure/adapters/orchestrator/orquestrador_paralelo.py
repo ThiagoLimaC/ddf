@@ -156,7 +156,6 @@ class OrquestradorParalelo:
         funcao: Callable[[_Item], Resultado[_Saida]],
         identificador: Callable[[_Item], str],
         progresso: Callable[[str], None] | None = None,
-        inicio: Callable[[str], None] | None = None,
     ) -> tuple[list[_Saida], list[Aviso], list[tuple[str, str]]]:
         """Executa `funcao` em paralelo sobre `itens`, acumulando sucessos e falhas.
 
@@ -171,13 +170,6 @@ class OrquestradorParalelo:
         na thread principal, nunca dentro de um worker, por isso dispensa
         lock: as chamadas já são seriais por construção.
 
-        `inicio`, se informado, é chamado uma vez por item, de dentro do
-        próprio worker, assim que ele começa a processar — antes de
-        `progresso`, nunca depois. Ao contrário de `progresso`, `inicio`
-        pode disparar concorrentemente para itens diferentes (um worker por
-        thread); thread-safety é responsabilidade de quem implementa o
-        callback, não deste método.
-
         Args:
             nome_estagio: identificador do Estagio chamado por `funcao`
                 (ex.: "Extrator", "Sobrescrita"), usado como prefixo na
@@ -188,8 +180,6 @@ class OrquestradorParalelo:
                 para nomear o item numa falha ou numa chamada de progresso.
             progresso: callback opcional invocado com o identificador de cada
                 item assim que ele termina de processar.
-            inicio: callback opcional invocado com o identificador de cada
-                item assim que um worker começa a processá-lo.
 
         Returns:
             Tupla (sucessos, avisos, falhas) — avisos de todo Resultado
@@ -201,8 +191,6 @@ class OrquestradorParalelo:
         falhas: list[tuple[str, str]] = []
 
         def _funcao_segura(item: _Item) -> Resultado[_Saida]:
-            if inicio is not None:
-                inicio(identificador(item))
             return executar_com_seguranca(
                 f"{nome_estagio}[{identificador(item)}]", lambda: funcao(item)
             )
@@ -229,7 +217,6 @@ class OrquestradorParalelo:
         /,
         progresso: Callable[[str], None] | None = None,
         ao_conhecer_total: Callable[[int], None] | None = None,
-        inicio: Callable[[str], None] | None = None,
     ) -> Resultado[list[TabelaExtraida]]:
         """Lista e extrai, em paralelo, todas as tabelas dos escopos informados.
 
@@ -244,9 +231,6 @@ class OrquestradorParalelo:
             ao_conhecer_total: callback opcional invocado uma vez, logo após
                 a listagem interna terminar, com o nº de pares (escopo,
                 tabela) que de fato serão extraídos.
-            inicio: callback opcional invocado com "<escopo>.<tabela>" assim
-                que um worker começa a extrair a tabela, de dentro do
-                próprio worker (pode disparar concorrentemente).
 
         Returns:
             Sucesso com list[TabelaExtraida] ordenada por (nome_escopo,
@@ -284,7 +268,6 @@ class OrquestradorParalelo:
             lambda par: extrator.extrair_tabela(*par),
             lambda par: f"{par[0]}.{par[1]}",
             progresso,
-            inicio,
         )
 
         tabelas.sort(key=lambda tabela: (tabela.nome_escopo, tabela.nome_tabela))
@@ -301,7 +284,6 @@ class OrquestradorParalelo:
         tabelas: list[TabelaExtraida],
         sobrescrita: Estagio[TabelaExtraida, TabelaCurada],
         progresso: Callable[[str], None] | None = None,
-        inicio: Callable[[str], None] | None = None,
     ) -> Resultado[BancoCurado]:
         """Aplica, em paralelo, a Sobrescrita sobre cada TabelaExtraida.
 
@@ -313,9 +295,6 @@ class OrquestradorParalelo:
             sobrescrita: Estagio que traduz TabelaExtraida em TabelaCurada.
             progresso: callback opcional invocado com "<escopo>.<tabela>" a
                 cada tabela concluída (sucesso ou falha).
-            inicio: callback opcional invocado com "<escopo>.<tabela>" assim
-                que um worker começa a aplicar a sobrescrita, de dentro do
-                próprio worker (pode disparar concorrentemente).
 
         Returns:
             Sucesso com BancoCurado (tabelas ordenadas por (nome_escopo,
@@ -329,7 +308,6 @@ class OrquestradorParalelo:
             sobrescrita,
             lambda tabela: f"{tabela.nome_escopo}.{tabela.nome_tabela}",
             progresso,
-            inicio,
         )
 
         tabelas_curadas.sort(

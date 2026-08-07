@@ -35,7 +35,6 @@ def conectar() -> tuple[Extrator, ConfiguracaoDeExtracao, list[str]]:
     nome_fonte = prompts.selecionar(
         "Qual fonte?", list(EXTRATORES_REGISTRADOS.keys())
     )
-    prompts.linha_de_decisao("Fonte", nome_fonte)
     configuracao = ConfiguracaoDeExtracao()
     extrator = EXTRATORES_REGISTRADOS[nome_fonte].construir(configuracao)
     escopos = _testar_conexao(extrator)
@@ -55,7 +54,6 @@ def configurar_amostragem(configuracao: ConfiguracaoDeExtracao) -> None:
     nome_estrategia = prompts.selecionar(
         "Qual estratégia de amostragem?", list(ESTRATEGIAS_REGISTRADAS.keys())
     )
-    prompts.linha_de_decisao("Amostragem", nome_estrategia)
     configuracao.estrategia = ESTRATEGIAS_REGISTRADAS[nome_estrategia].construir()
 
 
@@ -95,16 +93,10 @@ def extrair(
     (`ao_conhecer_total`), assim que ele termina de listar as tabelas
     internamente — sem uma 2ª listagem só para saber a contagem.
     """
-    progresso, definir_total, inicio_de_item = prompts.progresso_paralelo(
-        "Extraindo tabelas..."
-    )
+    progresso, definir_total = prompts.progresso_paralelo("Extraindo tabelas...")
     inicio = time.monotonic()
     resultado = orquestrador.extrair(
-        escopos,
-        extrator,
-        progresso=progresso,
-        ao_conhecer_total=definir_total,
-        inicio=inicio_de_item,
+        escopos, extrator, progresso=progresso, ao_conhecer_total=definir_total
     )
     print()
     print(f"⏱️  duração: {time.monotonic() - inicio:.0f}s")

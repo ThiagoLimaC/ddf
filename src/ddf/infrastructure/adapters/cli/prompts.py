@@ -24,11 +24,6 @@ COR_SUCESSO = "#00d700"
 # cores vivas reservadas a decisões e resultados.
 COR_SECUNDARIA = "#6c6c6c"
 
-# Largura fixa (não segue o terminal) para o rótulo ficar sempre centralizado
-# de forma previsível — inclusive em teste, sem depender de mock de
-# get_terminal_size.
-_LARGURA_CABECALHO_ETAPA = 70
-
 # Mesmo tom do banner (_BANNER em wizard.py) — resposta do usuário destacada
 # na mesma cor. É um teste de identidade visual; ajustar/reverter é só mudar
 # esta constante.
@@ -132,7 +127,12 @@ def selecionar(mensagem: str, escolhas: list[str]) -> str:
     print()
     resposta = cast(
         "str | None",
-        questionary.select(mensagem, choices=escolhas, style=_ESTILO).ask(),
+        questionary.select(
+            mensagem,
+            choices=escolhas,
+            style=_ESTILO,
+            instruction="(setas para navegar, enter confirma)\n",
+        ).ask(),
     )
     if resposta is None:
         sys.exit(0)
@@ -154,32 +154,58 @@ def pausar(mensagem: str) -> None:
         sys.exit(0)
 
 
-def imprimir_destacado(texto_a_exibir: str, cor: str, negrito: bool = True) -> None:
-    """Imprime um texto com a cor indicada (ex.: banner, confirmação).
+def imprimir_destacado(
+    texto_a_exibir: str, cor: str | None, negrito: bool = True, end: str = "\n"
+) -> None:
+    r"""Imprime um texto com a cor indicada (ex.: banner, confirmação).
+
+    `cor=None` imprime sem sobrescrever a cor do terminal — equivalente ao
+    token `question` do tema padrão do `questionary` (só `"bold"`, sem `fg`,
+    ver `linha_de_decisao`). `end` existe para compor uma linha com mais de
+    uma cor: `questionary.print` (via `prompt_toolkit.print_formatted_text`)
+    só aceita um `style` por chamada, então uma linha bicolor é duas
+    chamadas consecutivas, a 1ª com `end=" "` ou `end=""`.
 
     Args:
         texto_a_exibir: texto a exibir — uma linha ou um bloco ASCII de
             várias linhas.
         cor: código hex da cor, tipicamente `COR_DESTAQUE`, `COR_SUCESSO` ou
-            `COR_SECUNDARIA`.
+            `COR_SECUNDARIA`. `None` para não sobrescrever a cor padrão do
+            terminal.
         negrito: `False` para texto de contexto/segundo plano (ex.: mensagem
             de boas-vindas com `COR_SECUNDARIA`) — negrito reforçaria
             destaque, o oposto do efeito "apagado" buscado ali.
+        end: terminador da linha, repassado a `print_formatted_text`. Só
+            vale a pena mudar para compor uma linha com mais de uma cor
+            (ver `linha_de_decisao`); no resto do módulo cada chamada é uma
+            linha inteira, então o padrão `"\\n"` basta.
     """
-    estilo = f"bold fg:{cor}" if negrito else f"fg:{cor}"
-    questionary.print(texto_a_exibir, style=estilo)
+    partes = []
+    if negrito:
+        partes.append("bold")
+    if cor is not None:
+        partes.append(f"fg:{cor}")
+    estilo = " ".join(partes)
+    questionary.print(texto_a_exibir, style=estilo, end=end)
 
 
 def cabecalho_etapa(numero: int, total: int, titulo: str) -> None:
-    """Imprime um separador "── Etapa N/total — título ──" antes de uma fase do wizard.
+    """Imprime "└─ Etapa N/total — título" antes de uma fase do wizard.
 
     Depois do banner de abertura (`_BANNER` em `wizard.py`), o fluxo do
     wizard virava prompt puro do `questionary` — sem nenhuma pista visual de
-    onde uma etapa termina e a próxima começa, nem de quanto falta. Inspirado
-    em `rich.rule` (regra horizontal com título centralizado): mesma ideia,
-    sem trazer a dependência — reaproveita `imprimir_destacado`, que já é o
-    único ponto deste módulo que fala com `questionary.print`, e a mesma
-    `COR_DESTAQUE` do banner, para não criar uma segunda linguagem visual.
+    onde uma etapa termina e a próxima começa, nem de quanto falta. Usa o
+    mesmo vocabulário de conector de árvore do shell da Oxide que motivou
+    `linha_de_decisao` — sem régua horizontal decorativa, só o símbolo que
+    introduz o próximo bloco. Reaproveita `imprimir_destacado`, único ponto
+    deste módulo que fala com `questionary.print`, e a mesma `COR_DESTAQUE`
+    do banner, para não criar uma segunda linguagem visual.
+
+    `└─` aqui não é "último item de uma lista" (como `linha_de_decisao`
+    evita propositalmente) — é o marcador de entrada de um bloco novo e
+    isolado: cada etapa aparece sozinha, nunca como parte de uma sequência
+    visualmente contígua de cabeçalhos, então não há ambiguidade de "isso é
+    a última etapa?" para desfazer.
 
     `numero`/`total` contam checkpoints visíveis ao usuário, não
     necessariamente as 14 "etapas" documentadas por módulo em
@@ -194,42 +220,69 @@ def cabecalho_etapa(numero: int, total: int, titulo: str) -> None:
         titulo: nome curto da etapa, ex. "Escolher escopos".
     """
     print()
-    rotulo = f" Etapa {numero}/{total} — {titulo} "
-    preenchimento = max(_LARGURA_CABECALHO_ETAPA - len(rotulo), 4)
-    esquerda = "─" * (preenchimento // 2)
-    direita = "─" * (preenchimento - preenchimento // 2)
-    imprimir_destacado(f"{esquerda}{rotulo}{direita}", COR_DESTAQUE)
+    imprimir_destacado(f"└─ Etapa {numero}/{total} — {titulo}", COR_DESTAQUE)
 
 
-def linha_de_decisao(rotulo: str, valor: str) -> None:
-    """Imprime uma linha "├─ rótulo valor" resumindo uma decisão do usuário.
+def linha_de_decisao(rotulo: str, valor: str, ultimo: bool = False) -> None:
+    """Imprime uma linha "├─ rótulo valor" (ou "└─", se `ultimo`) resumindo uma decisão.
 
     Inspirado no resumo em árvore do shell da Oxide (uma sequência de linhas
     "├─ Title ..." / "└─ Deploy ...", cada uma ecoando uma pergunta já
     respondida). Lá o bloco é fechado e contíguo — todas as perguntas são
     feitas em sequência, sem nada entre elas — por isso faz sentido reservar
-    `└─` para a última linha.
+    `└─` para a última linha: é o marcador de "esse bloco de decisões
+    terminou aqui", não de "última decisão do fluxo inteiro".
 
-    Aqui não existe esse bloco fechado: as decisões reais do usuário (fonte,
-    escopos, estratégia de amostragem, geradores, destino) estão espalhadas
-    ao longo de 12 etapas do wizard, intercaladas por `cabecalho_etapa` e por
-    blocos de processamento (extração, análise) que não são decisões — são o
-    sistema trabalhando. Marcar uma dessas linhas com `└─` afirmaria "essa
-    foi a última decisão", o que só é verdade por acaso, na hora em que ela
-    é impressa — a próxima decisão real pode vir só depois de duas etapas de
-    processamento. Por isso todo item usa sempre `├─`: um marcador honesto
-    de "isto foi uma escolha sua", sem fingir uma árvore fechada que a
-    interação real não tem.
+    Na maior parte do wizard esse bloco fechado não existe: as decisões
+    reais do usuário (escopos, estratégia de amostragem, geradores, destino)
+    estão espalhadas ao longo de várias etapas, intercaladas por
+    `cabecalho_etapa` e por blocos de processamento (extração, análise) que
+    não são decisões — são o sistema trabalhando. Marcar uma dessas linhas
+    com `└─` afirmaria "esse bloco de decisões terminou", o que não é
+    verdade ali — a próxima linha de decisão pode vir logo em seguida, sem
+    nenhum processamento entre elas. Por isso o padrão é `ultimo=False`
+    (sempre `├─`): um marcador honesto de "isto foi uma escolha sua", sem
+    fingir uma árvore fechada que a interação real não tem.
 
-    Reaproveita `imprimir_destacado`/`COR_DESTAQUE` — a mesma cor do banner
-    e de `cabecalho_etapa` — para não introduzir uma 2ª linguagem visual
-    concorrente só para marcar decisões.
+    A etapa de conexão (`cli/etapas/extracao.py::conectar`) é a exceção
+    real, não uma segunda regra: Fonte/Host/Porta/[Banco]/Usuário/Senha são
+    perguntadas em sequência contígua, sem nenhum processamento entre elas —
+    exatamente a condição que a regra acima já previa para justificar
+    `└─`. Ali o último `linha_de_decisao` da sequência (Senha) passa
+    `ultimo=True`. Continua sendo a mesma regra ("`└─` fecha um bloco
+    contíguo de decisões"), só que essa é a primeira etapa onde a condição
+    é verdadeira.
+
+    O conector (`├─`/`└─`) usa a mesma cor do rótulo, não `COR_DESTAQUE` —
+    aqui (diferente de `cabecalho_etapa`, que é estrutura do wizard) o
+    conector faz parte da árvore de decisão em si, então acompanha o
+    rótulo. O rótulo (`Fonte`, `Host`, ...) e o valor (`PostgreSQL`,
+    `db.exemplo.com`, ...) imitam visualmente a pergunta original e a
+    resposta que o usuário deu a ela:
+
+    - Conector e rótulo → estilo do token `question` do tema padrão do `questionary`
+      (`site-packages/questionary/constants.py::DEFAULT_STYLE`), que nunca
+      foi sobrescrito por `_ESTILO` neste módulo: `"bold"`, sem `fg` — ou
+      seja, a cor de "uma pergunta já feita" aqui é literalmente a cor
+      padrão do terminal, só em negrito. `cor=None` em `imprimir_destacado`
+      reproduz exatamente isso, em vez de inventar um hex novo.
+    - Valor → `COR_DESTAQUE`, a mesma cor que `_ESTILO` já usa para
+      sobrescrever o token `answer` do `questionary` (a resposta ecoada ao
+      lado da pergunta) — não a cor default do `answer` do tema
+      (`#FF9D00`), que este projeto nunca usa.
 
     Args:
         rotulo: nome curto da decisão, ex. "Fonte".
         valor: resposta escolhida pelo usuário, ex. "PostgreSQL".
+        ultimo: `True` fecha um bloco contíguo de decisões com `└─` em vez
+            de `├─`. Só faz sentido quando não há mais nenhuma linha de
+            decisão logo em seguida, sem processamento entre elas — ver
+            `conectar()` para o único caso de uso hoje.
     """
-    imprimir_destacado(f"├─ {rotulo} {valor}", COR_DESTAQUE)
+    conector = "└─" if ultimo else "├─"
+    imprimir_destacado(conector, None, end=" ")
+    imprimir_destacado(rotulo, None, end=" ")
+    imprimir_destacado(valor, COR_DESTAQUE)
 
 
 def confirmar(mensagem: str, default: bool = True) -> bool:
@@ -269,7 +322,9 @@ def escolher_multiplos(mensagem: str, escolhas: list[str]) -> list[str]:
             choices=escolhas,
             use_search_filter=True,
             use_jk_keys=False,
-            instruction="(digite para filtrar, espaço marca, enter confirma)",
+            # Mesma técnica de `selecionar()`: "\n" no fim da instrução, não
+            # um print à parte — ver o comentário lá para o porquê.
+            instruction="(digite para filtrar, espaço marca, enter confirma)\n",
         ).ask(),
     )
     if not selecionados:
@@ -308,27 +363,26 @@ def ampulheta(mensagem: str) -> Generator[None, None, None]:
 
 
 class Progresso(NamedTuple):
-    """Trio de callbacks devolvido por `progresso_paralelo`.
+    """Par de callbacks devolvido por `progresso_paralelo`.
 
-    `NamedTuple`, não uma tupla posicional crua — os três campos têm
-    papéis bem diferentes (um alimenta `progresso=`, outro
-    `ao_conhecer_total=`, outro `inicio=`); nomear evita desempacotamento
-    por posição num `tuple[Callable, Callable, Callable]` sem pistas do que
-    é cada um.
+    `NamedTuple`, não uma tupla posicional crua — os dois campos têm
+    papéis bem diferentes (um alimenta `progresso=`, o outro
+    `ao_conhecer_total=`); nomear evita que um 3º callback futuro precise
+    de desempacotamento por posição em `tuple[Callable, Callable, Callable]`.
     """
 
     callback: Callable[[str], None]
     definir_total: Callable[[int], None]
-    inicio: Callable[[str], None]
 
 
 def progresso_paralelo(mensagem_base: str, total: int | None = None) -> Progresso:
-    """Devolve os callbacks de progresso, total e início usados sob paralelismo.
+    """Devolve (callback de progresso, callback para definir o total depois).
 
-    Pensado para `.callback`/`.inicio` serem passados como `progresso=`/
-    `inicio=` a `OrquestradorDeTabelas.extrair`/`aplicar_sobrescritas`. Não
-    mostra tempo decorrido por item — a duração é do processo inteiro,
-    exibida uma vez ao final pelo chamador.
+    Pensado para `.callback` ser passado como `progresso=` a
+    `OrquestradorDeTabelas.extrair`/`aplicar_sobrescritas` — cada chamada já
+    chega serializada pela thread principal (ver `_executar_em_paralelo`),
+    sem necessidade de lock aqui. Não mostra tempo decorrido por item — a
+    duração é do processo inteiro, exibida uma vez ao final pelo chamador.
 
     `.definir_total` existe para os casos em que o total só é conhecido
     depois de iniciada a chamada (ex.: `extrair`, que lista as tabelas de
@@ -337,56 +391,31 @@ def progresso_paralelo(mensagem_base: str, total: int | None = None) -> Progress
     seguinte. Chamadores que já sabem o total (ex.: `aplicar_sobrescritas`,
     com `len(tabelas)` em mãos) simplesmente não usam `.definir_total`.
 
-    `.callback` (conclusão) já chega serializado pela thread principal (ver
-    `_executar_em_paralelo`), mas `.inicio` dispara de dentro de cada
-    worker — pode chegar concorrentemente para itens diferentes. Por isso um
-    `threading.Lock` interno protege tanto o conjunto de identificadores em
-    andamento quanto a própria escrita no terminal, evitando linhas
-    intercaladas quando dois workers chamam `.inicio`/`.callback` ao mesmo
-    tempo.
-
     Args:
         mensagem_base: texto fixo exibido antes da contagem.
         total: número total de itens esperados, exibido como fração
             "N/total". Omitido quando ainda não é conhecido na criação.
     """
     print()
-    lock = threading.Lock()
     concluidas = 0
     total_atual = total
-    em_andamento: set[str] = set()
 
     def _definir_total(novo_total: int) -> None:
         nonlocal total_atual
         total_atual = novo_total
 
-    def _renderizar() -> None:
+    def _callback(identificador: str) -> None:
+        nonlocal concluidas
+        concluidas += 1
         contagem = (
             f"{concluidas}/{total_atual}"
             if total_atual is not None
             else str(concluidas)
         )
-        descricao = (
-            f"em andamento: {', '.join(sorted(em_andamento))}"
-            if em_andamento
-            else "finalizando..."
-        )
         print(
-            f"\r\x1b[K{mensagem_base} ({contagem}) — {descricao}",
+            f"\r\x1b[K{mensagem_base} ({contagem}) — {identificador}",
             end="",
             flush=True,
         )
 
-    def _inicio(identificador: str) -> None:
-        with lock:
-            em_andamento.add(identificador)
-            _renderizar()
-
-    def _callback(identificador: str) -> None:
-        nonlocal concluidas
-        with lock:
-            em_andamento.discard(identificador)
-            concluidas += 1
-            _renderizar()
-
-    return Progresso(callback=_callback, definir_total=_definir_total, inicio=_inicio)
+    return Progresso(callback=_callback, definir_total=_definir_total)
