@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -62,7 +63,7 @@ class TestFeliz:
 
     def test_gerar_skeletons_conta_criados_e_preservados(
         self,
-        capsys: pytest.CaptureFixture[str],
+        interceptar_print: list[dict[str, Any]],
         fabrica_tabela_extraida: Callable[[str, str], TabelaExtraida],
     ) -> None:
         """Skeletons com Aviso contam como criados/atualizados."""
@@ -80,15 +81,17 @@ class TestFeliz:
 
         curadoria._gerar_skeletons(orquestrador, object(), tabelas)  # type: ignore[arg-type]
 
-        saida = capsys.readouterr().out
-        assert "1 skeleton(s) criado(s)/atualizado(s)" in saida
-        assert "1 preservado(s) sem mudança." in saida
-        assert "Preencha a curadoria e reexecute." in saida
-        assert "skeleton criado para 'public.clientes'" not in saida
+        textos = [chamada["texto"] for chamada in interceptar_print]
+        assert any("1 skeleton(s) criado(s)/atualizado(s)" in texto for texto in textos)
+        assert any("1 preservado(s) sem mudança." in texto for texto in textos)
+        assert any("Preencha a curadoria e reexecute." in texto for texto in textos)
+        assert not any(
+            "skeleton criado para 'public.clientes'" in texto for texto in textos
+        )
 
     def test_gerar_skeletons_sem_nenhum_criado_nao_sugere_reexecutar(
         self,
-        capsys: pytest.CaptureFixture[str],
+        interceptar_print: list[dict[str, Any]],
         fabrica_tabela_extraida: Callable[[str, str], TabelaExtraida],
     ) -> None:
         """Sem Aviso (tudo preservado), não há nada novo pra curar/reexecutar."""
@@ -97,8 +100,10 @@ class TestFeliz:
 
         curadoria._gerar_skeletons(orquestrador, object(), tabelas)  # type: ignore[arg-type]
 
-        saida = capsys.readouterr().out
-        assert "Preencha a curadoria e reexecute." not in saida
+        assert not any(
+            "Preencha a curadoria e reexecute." in chamada["texto"]
+            for chamada in interceptar_print
+        )
 
     def test_aplicar_sobrescritas_devolve_o_banco_curado(
         self,

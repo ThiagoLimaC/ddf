@@ -35,23 +35,6 @@ def _substituir(
     return fake
 
 
-def _interceptar_print(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
-    """Substitui `questionary.print`, registrando texto/estilo/terminador.
-
-    `imprimir_destacado` agora pode ser chamado mais de uma vez para compor
-    uma única linha com mais de uma cor (ver `linha_de_decisao`) — por isso
-    o fake precisa aceitar `end`, não só `texto`/`style`.
-    """
-    chamadas: list[dict[str, Any]] = []
-    monkeypatch.setattr(
-        "questionary.print",
-        lambda texto, style=None, end="\n": chamadas.append(
-            {"texto": texto, "style": style, "end": end}
-        ),
-    )
-    return chamadas
-
-
 # texto() — caminho feliz
 
 
@@ -143,10 +126,10 @@ class TestFeliz:
 
     def test_imprimir_destacado_usa_a_cor_informada(
         self,
-        monkeypatch: pytest.MonkeyPatch,
+        interceptar_print: list[dict[str, Any]],
     ) -> None:
         """Repassa o texto e monta o estilo com a cor recebida."""
-        chamadas = _interceptar_print(monkeypatch)
+        chamadas = interceptar_print
 
         prompts.imprimir_destacado("✓ Conexão validada.", prompts.COR_SUCESSO)
 
@@ -160,10 +143,10 @@ class TestFeliz:
 
     def test_imprimir_destacado_com_negrito_falso_omite_bold(
         self,
-        monkeypatch: pytest.MonkeyPatch,
+        interceptar_print: list[dict[str, Any]],
     ) -> None:
         """negrito=False produz estilo sem "bold" — texto de segundo plano."""
-        chamadas = _interceptar_print(monkeypatch)
+        chamadas = interceptar_print
 
         prompts.imprimir_destacado(
             "Bem-vindo.", prompts.COR_SECUNDARIA, negrito=False
@@ -179,10 +162,10 @@ class TestFeliz:
 
     def test_imprimir_destacado_sem_cor_produz_estilo_so_com_bold(
         self,
-        monkeypatch: pytest.MonkeyPatch,
+        interceptar_print: list[dict[str, Any]],
     ) -> None:
         """cor=None não sobrescreve `fg` — mimetiza o token `question`."""
-        chamadas = _interceptar_print(monkeypatch)
+        chamadas = interceptar_print
 
         prompts.imprimir_destacado("Fonte", None)
 
@@ -190,10 +173,10 @@ class TestFeliz:
 
     def test_cabecalho_etapa_imprime_numero_total_e_titulo(
         self,
-        monkeypatch: pytest.MonkeyPatch,
+        interceptar_print: list[dict[str, Any]],
     ) -> None:
         """Rótulo "└─ Etapa N/total — título" aparece na cor de destaque."""
-        chamadas = _interceptar_print(monkeypatch)
+        chamadas = interceptar_print
 
         prompts.cabecalho_etapa(2, 12, "Escolher escopos")
 
@@ -207,7 +190,7 @@ class TestFeliz:
 
     def test_linha_de_decisao_imprime_rotulo_e_valor_com_conector_de_arvore(
         self,
-        monkeypatch: pytest.MonkeyPatch,
+        interceptar_print: list[dict[str, Any]],
     ) -> None:
         """Conector e rótulo na cor da pergunta, valor na cor de destaque.
 
@@ -217,7 +200,7 @@ class TestFeliz:
         `COR_DESTAQUE`, mesma cor que `_ESTILO` usa para o token `answer` do
         questionary.
         """
-        chamadas = _interceptar_print(monkeypatch)
+        chamadas = interceptar_print
 
         prompts.linha_de_decisao("Fonte", "PostgreSQL")
 
@@ -276,7 +259,9 @@ class TestErro:
         assert excinfo.value.code == 0
 
     def test_numero_com_entrada_invalida_reprompt_ate_funcionar(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        interceptar_print: list[dict[str, Any]],
     ) -> None:
         """Entrada não numérica reexibe o prompt em vez de propagar."""
         respostas = iter(["abc", "", "8"])
@@ -286,11 +271,14 @@ class TestErro:
         )
 
         assert prompts.numero("Porta:", int) == 8
-        assert "Erro: valor inválido" in capsys.readouterr().out
+        assert any(
+            "Erro: valor inválido" in chamada["texto"] for chamada in interceptar_print
+        )
 
     def test_numero_opcional_com_entrada_invalida_reprompt_ate_funcionar(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        interceptar_print: list[dict[str, Any]],
     ) -> None:
         """Entrada não numérica reexibe o prompt, branco continua valendo."""
         respostas = iter(["abc", "7"])
@@ -300,6 +288,7 @@ class TestErro:
         )
 
         assert prompts.numero_opcional("Seed (opcional):", int) == 7
+        assert interceptar_print
 
     def test_senha_cancelada_sai_com_codigo_0(
         self, monkeypatch: pytest.MonkeyPatch
@@ -396,10 +385,10 @@ class TestBorda:
 
     def test_linha_de_decisao_usa_o_mesmo_conector_por_padrao_mesmo_na_ultima_chamada(
         self,
-        monkeypatch: pytest.MonkeyPatch,
+        interceptar_print: list[dict[str, Any]],
     ) -> None:
         """Sem `ultimo=True`, nunca usa "└─" — bloco de decisões não fechado."""
-        chamadas = _interceptar_print(monkeypatch)
+        chamadas = interceptar_print
 
         prompts.linha_de_decisao("Fonte", "PostgreSQL")
         prompts.linha_de_decisao("Destino", "artefatos")
@@ -410,10 +399,10 @@ class TestBorda:
 
     def test_linha_de_decisao_com_ultimo_fecha_o_bloco_com_outro_conector(
         self,
-        monkeypatch: pytest.MonkeyPatch,
+        interceptar_print: list[dict[str, Any]],
     ) -> None:
         """`ultimo=True` troca "├─" por "└─" — só a última linha de um bloco."""
-        chamadas = _interceptar_print(monkeypatch)
+        chamadas = interceptar_print
 
         prompts.linha_de_decisao("Host", "localhost")
         prompts.linha_de_decisao("Senha", "****", ultimo=True)
