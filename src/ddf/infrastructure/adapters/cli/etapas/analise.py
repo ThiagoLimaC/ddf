@@ -44,4 +44,6 @@ def analisar(
     with prompts.barra_indeterminada("Analisando..."):
         resultado = compor(*analisadores_ordenados)(contexto)
     print()
-    return ou_sair(resultado).analisado
+    banco_analisado = ou_sair(resultado).analisado
+    prompts.imprimir_destacado("✓ Análise concluída.", prompts.COR_SUCESSO)
+    return banco_analisado

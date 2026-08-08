@@ -51,7 +51,7 @@ def _gerar_skeletons(
         resultado = orquestrador.aplicar_sobrescritas(tabelas, sobrescrita)
     print()
     if isinstance(resultado, Falha):
-        print(f"Erro: {resultado.erro}")
+        prompts.imprimir_destacado(f"Erro: {resultado.erro}", prompts.COR_ERRO)
         sys.exit(1)
 
     criados_ou_atualizados = len(resultado.avisos)
@@ -62,7 +62,7 @@ def _gerar_skeletons(
     )
     if criados_ou_atualizados:
         mensagem += " Preencha a curadoria e reexecute."
-    print(mensagem)
+    prompts.imprimir_destacado(f"✓ {mensagem}", prompts.COR_SUCESSO)
 
 
 def aplicar_sobrescritas(
@@ -74,4 +74,8 @@ def aplicar_sobrescritas(
     with prompts.ampulheta("Aplicando sobrescritas..."):
         resultado = orquestrador.aplicar_sobrescritas(tabelas, sobrescrita)
     print()
-    return ou_sair(resultado)
+    banco_curado = ou_sair(resultado)
+    prompts.imprimir_destacado(
+        f"✓ {len(banco_curado.tabelas)} tabela(s) curada(s).", prompts.COR_SUCESSO
+    )
+    return banco_curado

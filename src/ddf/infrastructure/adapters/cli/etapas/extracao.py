@@ -73,9 +73,10 @@ def _testar_conexao(extrator: Extrator) -> list[str]:
             prompts.imprimir_destacado("✓ Conexão validada.", prompts.COR_SUCESSO)
             return resultado.valor
 
-        print(
+        prompts.imprimir_destacado(
             f"Falha ao conectar (tentativa {tentativa}/"
-            f"{_MAXIMO_TENTATIVAS_CONEXAO}): {resultado.erro}"
+            f"{_MAXIMO_TENTATIVAS_CONEXAO}): {resultado.erro}",
+            prompts.COR_ERRO,
         )
         if tentativa >= _MAXIMO_TENTATIVAS_CONEXAO:
             sys.exit(1)

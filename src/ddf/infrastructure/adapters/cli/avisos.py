@@ -6,6 +6,7 @@ from typing import TypeVar
 
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado
+from ddf.infrastructure.adapters.cli import prompts
 
 T = TypeVar("T")
 
@@ -19,7 +20,7 @@ def ou_sair(resultado: Resultado[T]) -> T:
     """Exibe os avisos e devolve o valor de Sucesso; sai com código 1 em Falha."""
     exibir_avisos(resultado.avisos)
     if isinstance(resultado, Falha):
-        print(f"Erro: {resultado.erro}")
+        prompts.imprimir_destacado(f"Erro: {resultado.erro}", prompts.COR_ERRO)
         sys.exit(1)
     return resultado.valor
 
@@ -70,9 +71,17 @@ def exibir_avisos(avisos: list[Aviso]) -> None:
     for origem in ordem_origem:
         grupos = grupos_por_origem[origem]
         total = sum(len(mensagens) for mensagens in grupos.values())
-        print(f"  [{origem}] {total} aviso(s):")
+        prompts.imprimir_destacado(
+            f"  [{origem}] {total} aviso(s):", prompts.COR_AVISO
+        )
         for tipo, mensagens in grupos.items():
             for mensagem in mensagens[:_LIMITE_AVISOS_DETALHADOS]:
-                print(f"    - {mensagem}")
+                prompts.imprimir_destacado(
+                    f"    - {mensagem}", prompts.COR_AVISO, negrito=False
+                )
             if len(mensagens) > _LIMITE_AVISOS_DETALHADOS:
-                print(f"    - {tipo} (x{len(mensagens)})")
+                prompts.imprimir_destacado(
+                    f"    - {tipo} (x{len(mensagens)})",
+                    prompts.COR_AVISO,
+                    negrito=False,
+                )

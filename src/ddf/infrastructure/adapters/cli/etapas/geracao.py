@@ -62,10 +62,15 @@ def executar_geradores(
         )
         exibir_avisos(resultado.avisos)
         if isinstance(resultado, Falha):
-            print(f"Falha em '{nome}': {resultado.erro}")
+            prompts.imprimir_destacado(
+                f"Falha em '{nome}': {resultado.erro}", prompts.COR_ERRO
+            )
             houve_falha = True
             continue
-        print(f"'{nome}': artefato escrito em '{destino_gerador.resolve()}'.")
+        prompts.imprimir_destacado(
+            f"✓ '{nome}': artefato escrito em '{destino_gerador.resolve()}'.",
+            prompts.COR_SUCESSO,
+        )
 
     if houve_falha:
         sys.exit(1)

@@ -17,6 +17,13 @@ _QUADROS_AMPULHETA = ("⏳", "⌛")
 COR_DESTAQUE = "#00d7ff"
 COR_SUCESSO = "#00d700"
 
+# Vermelho/âmbar do mesmo cubo xterm 256 usado no resto da paleta (steps
+# 0x00/0x87/0xd7/0xff) — erro é sempre fatal para o passo atual (sys.exit ou
+# retry obrigatório); aviso é informativo, não interrompe o fluxo. Cores
+# distintas para não confundir as duas categorias visualmente.
+COR_ERRO = "#ff5f5f"
+COR_AVISO = "#d7af00"
+
 # Cinza fosco/dimmed para texto de contexto (ex.: mensagem de boas-vindas),
 # em segundo plano deliberado perante COR_DESTAQUE/COR_SUCESSO. Mesmo tom
 # usado por `gh` para texto secundário (`Gray()`, ANSI 256 cor 242 ≈ RGB
@@ -79,7 +86,9 @@ def numero(
         try:
             return conversor(resposta)
         except ValueError:
-            print(f"Erro: valor inválido ({resposta!r}). Tente novamente.")
+            imprimir_destacado(
+                f"Erro: valor inválido ({resposta!r}). Tente novamente.", COR_ERRO
+            )
 
 
 def numero_opcional(
@@ -99,7 +108,9 @@ def numero_opcional(
         try:
             return conversor(resposta)
         except ValueError:
-            print(f"Erro: valor inválido ({resposta!r}). Tente novamente.")
+            imprimir_destacado(
+                f"Erro: valor inválido ({resposta!r}). Tente novamente.", COR_ERRO
+            )
 
 
 def senha(mensagem: str) -> str:
