@@ -60,13 +60,13 @@ def executar_geradores(
         destino: diretório raiz onde os artefatos são escritos.
     """
     houve_falha = False
+    print()
     for nome in nomes_geradores:
         gerador = GERADORES_REGISTRADOS[nome]
         destino_gerador = destino / _slugificar(nome)
         resultado = executar_com_seguranca(
             nome, lambda: gerador(banco_analisado, destino_gerador)
         )
-        print()
         for aviso in resultado.avisos:
             prompts.imprimir_destacado(f"▲ {aviso.mensagem}", prompts.COR_AVISO)
         if isinstance(resultado, Falha):
