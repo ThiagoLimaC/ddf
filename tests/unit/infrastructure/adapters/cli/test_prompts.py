@@ -1,5 +1,6 @@
 """Testes de prompts.py — cancelamento, dica_limpar, estilo e progresso."""
 
+import time
 from typing import Any
 
 import pytest
@@ -247,6 +248,18 @@ class TestFeliz:
         assert prompts._BLOCO_CHEIO in saida
         assert prompts._BLOCO_VAZIO in saida
 
+    def test_barra_indeterminada_anima_mensagem_com_a_mesma_textura_da_barra(
+        self,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Mostra a mensagem ao lado de retângulos ciano, sem fração N/total."""
+        with prompts.barra_indeterminada("Analisando..."):
+            time.sleep(0.15)
+
+        saida = capsys.readouterr().out
+        assert "Analisando..." in saida
+        assert prompts._BLOCO_CHEIO in saida
+
 
 class TestErro:
     """Erro esperado."""
@@ -450,4 +463,11 @@ class TestBorda:
     ) -> None:
         """Sair do bloco `with` (com ou sem exceção) encerra a thread de animação."""
         with prompts.ampulheta("Testando..."):
+            pass  # bloco vazio — só valida que entrar/sair funciona sem travar
+
+    def test_barra_indeterminada_nao_propaga_excecao_e_encerra_a_thread(
+        self,
+    ) -> None:
+        """Mesma garantia de `ampulheta`: sair do bloco encerra a thread de animação."""
+        with prompts.barra_indeterminada("Analisando..."):
             pass  # bloco vazio — só valida que entrar/sair funciona sem travar

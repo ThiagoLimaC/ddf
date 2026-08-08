@@ -41,7 +41,7 @@ def analisar(
 ) -> BancoAnalisado:
     """Etapa 11: roda os Analisadores via compor(), monta o BancoAnalisado."""
     contexto = iniciar_contexto(banco_curado)
-    with prompts.ampulheta("Analisando..."):
+    with prompts.barra_indeterminada("Analisando..."):
         resultado = compor(*analisadores_ordenados)(contexto)
     print()
     return ou_sair(resultado).analisado

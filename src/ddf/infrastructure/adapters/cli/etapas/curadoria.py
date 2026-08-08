@@ -47,10 +47,8 @@ def _gerar_skeletons(
     o efeito colateral em disco já é o que importa, resumido numa única
     linha informativa em vez de um Aviso por arquivo.
     """
-    progresso, _definir_total = prompts.progresso_paralelo(
-        "Skeletons gerados", len(tabelas)
-    )
-    resultado = orquestrador.aplicar_sobrescritas(tabelas, sobrescrita, progresso)
+    with prompts.ampulheta("Gerando skeletons..."):
+        resultado = orquestrador.aplicar_sobrescritas(tabelas, sobrescrita)
     print()
     if isinstance(resultado, Falha):
         print(f"Erro: {resultado.erro}")
@@ -73,9 +71,7 @@ def aplicar_sobrescritas(
     tabelas: list[TabelaExtraida],
 ) -> BancoCurado:
     """Etapa 8: reaplica a sobrescrita (já editada) em paralelo, gera o BancoCurado."""
-    progresso, _definir_total = prompts.progresso_paralelo(
-        "Sobrescritas aplicadas", len(tabelas)
-    )
-    resultado = orquestrador.aplicar_sobrescritas(tabelas, sobrescrita, progresso)
+    with prompts.ampulheta("Aplicando sobrescritas..."):
+        resultado = orquestrador.aplicar_sobrescritas(tabelas, sobrescrita)
     print()
     return ou_sair(resultado)

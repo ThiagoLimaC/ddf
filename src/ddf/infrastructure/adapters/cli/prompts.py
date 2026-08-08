@@ -503,3 +503,52 @@ def progresso_paralelo(mensagem_base: str, total: int | None = None) -> Progress
         _desenhar()
 
     return Progresso(callback=_callback, definir_total=_definir_total)
+
+
+_LARGURA_BARRA_INDETERMINADA = 12
+_TAMANHO_BLOCO_INDETERMINADO = 3
+
+
+@contextmanager
+def barra_indeterminada(mensagem: str) -> Generator[None, None, None]:
+    r"""Anima um trecho de retângulos "correndo" ao lado da mensagem, sem N/total.
+
+    Mesma estrutura de `ampulheta` (thread separada, `\r\x1b[K` redesenha a
+    linha) — a diferença é só visual: usa a mesma textura de retângulos
+    (`▮`/`▯`, `COR_DESTAQUE`) de `progresso_paralelo`, em vez do ícone de
+    ampulheta, para operações sem um total real por item a contar (ex.:
+    `analise.py::analisar`, que roda `compor()` numa única chamada opaca,
+    sem callback por Analisador — ver `ddf/pipeline/compor.py`). Uma fração
+    "N/total" ali mentiria um progresso que o código não tem como medir;
+    esta barra corre sem prometer conclusão, só sinaliza "ainda vivo".
+
+    Args:
+        mensagem: texto exibido ao lado da barra.
+    """
+    print()
+    parar = threading.Event()
+
+    def _quadro(posicao: int) -> str:
+        segmentos = [_BLOCO_VAZIO] * _LARGURA_BARRA_INDETERMINADA
+        for deslocamento in range(_TAMANHO_BLOCO_INDETERMINADO):
+            indice = (posicao + deslocamento) % _LARGURA_BARRA_INDETERMINADA
+            segmentos[indice] = _BLOCO_CHEIO
+        return "".join(segmentos)
+
+    def _animar() -> None:
+        posicao = 0
+        while not parar.is_set():
+            barra = (
+                f"{_cor_ansi_truecolor(COR_DESTAQUE)}{_quadro(posicao)}{_ANSI_RESET}"
+            )
+            print(f"\r\x1b[K{barra} {mensagem}", end="", flush=True)
+            posicao = (posicao + 1) % _LARGURA_BARRA_INDETERMINADA
+            time.sleep(0.08)
+
+    thread = threading.Thread(target=_animar, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        parar.set()
+        thread.join()
