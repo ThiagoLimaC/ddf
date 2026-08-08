@@ -122,7 +122,6 @@ def executar() -> None:
             dica_limpar=True,
         )
     ).expanduser()
-    prompts.linha_de_decisao("Destino", str(destino))
 
     prompts.cabecalho_etapa(10, _TOTAL_ETAPAS, "Confirmar execução")
     geracao.confirmar_execucao(nomes_geradores, destino)

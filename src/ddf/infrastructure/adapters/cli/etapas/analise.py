@@ -20,7 +20,6 @@ def escolher_geradores() -> list[str]:
     nomes_geradores = prompts.escolher_multiplos(
         "Escolha um ou mais geradores:", list(GERADORES_REGISTRADOS.keys())
     )
-    prompts.linha_de_decisao("Geradores", ", ".join(nomes_geradores))
     return nomes_geradores
 
 
