@@ -1,6 +1,7 @@
 """Etapas 6-8 do wizard: skeletons de sobrescrita, pausa e curadoria manual."""
 
 import sys
+import time
 from pathlib import Path
 
 from ddf.domain.model.curation import BancoCurado
@@ -71,6 +72,7 @@ def aplicar_sobrescritas(
     tabelas: list[TabelaExtraida],
 ) -> BancoCurado:
     """Etapa 8: reaplica a sobrescrita (já editada) em paralelo, gera o BancoCurado."""
+    inicio = time.monotonic()
     with prompts.ampulheta("Aplicando sobrescritas..."):
         resultado = orquestrador.aplicar_sobrescritas(tabelas, sobrescrita)
     print()
@@ -78,4 +80,5 @@ def aplicar_sobrescritas(
     prompts.imprimir_destacado(
         f"✓ {len(banco_curado.tabelas)} tabela(s) curada(s).", prompts.COR_SUCESSO
     )
+    print(f"⏱️  duração: {time.monotonic() - inicio:.0f}s")
     return banco_curado

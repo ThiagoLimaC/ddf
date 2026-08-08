@@ -1,5 +1,7 @@
 """Etapas 9-11 do wizard: escolha de Geradores, validação e análise."""
 
+import time
+
 from ddf.domain.model.analysis import BancoAnalisado, iniciar_contexto
 from ddf.domain.model.curation import BancoCurado
 from ddf.domain.ports.analisador import Analisador
@@ -41,9 +43,11 @@ def analisar(
 ) -> BancoAnalisado:
     """Etapa 11: roda os Analisadores via compor(), monta o BancoAnalisado."""
     contexto = iniciar_contexto(banco_curado)
+    inicio = time.monotonic()
     with prompts.barra_indeterminada("Analisando..."):
         resultado = compor(*analisadores_ordenados)(contexto)
     print()
     banco_analisado = ou_sair(resultado).analisado
     prompts.imprimir_destacado("✓ Análise concluída.", prompts.COR_SUCESSO)
+    print(f"⏱️  duração: {time.monotonic() - inicio:.0f}s")
     return banco_analisado
