@@ -609,9 +609,10 @@ def test_amostragem_por_faixa_le_a_tabela_via_tablesample_system(dsn: str) -> No
     """Caminho feliz: AmostragemPorFaixa (issue #114) usa TABLESAMPLE SYSTEM real.
 
     percentual=100 torna a amostra determinística (TABLESAMPLE SYSTEM(100)
-    lê todas as páginas) — prova que o dispatch chega ao Postgres real e
-    emite o Aviso de viés por página física, sem depender da variância de
-    quantas linhas cabem em cada página amostrada.
+    lê todas as páginas) — prova que o dispatch chega ao Postgres real, sem
+    depender da variância de quantas linhas cabem em cada página amostrada.
+    Sem Aviso de viés por tabela (saiu na #116 — sai uma vez, na escolha da
+    estratégia no wizard).
     """
     configuracao = ConfiguracaoDeExtracao(estrategia=AmostragemPorFaixa(percentual=100))
     extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
@@ -622,8 +623,7 @@ def test_amostragem_por_faixa_le_a_tabela_via_tablesample_system(dsn: str) -> No
     assert resultado.valor.total_linhas == 500
     assert resultado.valor.metadados_amostra.tamanho_amostra == 500
     assert resultado.valor.metadados_amostra.estrategia == "amostragem_por_faixa"
-    assert len(resultado.avisos) == 1
-    assert "página física" in resultado.avisos[0].mensagem
+    assert resultado.avisos == []
 
 
 def test_amostragem_por_faixa_mesma_seed_produz_a_mesma_amostra(dsn: str) -> None:

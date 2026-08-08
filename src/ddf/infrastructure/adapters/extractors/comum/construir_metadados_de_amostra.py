@@ -20,28 +20,24 @@ def construir_metadados_de_amostra(
     origem: str,
     causa_provavel: str,
     identificador_tabela: str,
-    descricao_vies_por_faixa: str = "",
 ) -> tuple[MetadadosDeAmostra, list[Aviso]]:
     """Monta MetadadosDeAmostra e emite os Avisos de custo associados à estratégia.
 
-    Dois Avisos independentes, nenhum fatal: (1) toda vez que a requisição é
-    RequisicaoPorFaixa, documenta o viés de cluster do mecanismo — texto
-    próprio de cada Extrator concreto (`descricao_vies_por_faixa`), já que o
-    mecanismo (bloco físico no Postgres, faixas de chave primária no
-    MariaDB) difere entre motores; (2) quando a amostra excede
-    `total_linhas`, sintoma de estimativa de catálogo desatualizada. Ambos
-    citam `identificador_tabela`, mesmo padrão de `construir_colunas_fk` —
-    sem isso, os exemplos que `avisos.py` mostra antes de colapsar por
-    contagem ficam anônimos, sem dizer qual tabela específica paga o custo.
+    Um Aviso possível aqui: quando a amostra excede `total_linhas`, sintoma
+    de estimativa de catálogo desatualizada. Cita `identificador_tabela`,
+    mesmo padrão de `construir_colunas_fk` — sem isso, os exemplos que
+    `avisos.py` mostra antes de colapsar por contagem ficam anônimos, sem
+    dizer qual tabela específica paga o custo.
 
-    AmostragemProbabilistica (estratégia `PercentualDeLinhas`) não emite
-    Aviso por tabela aqui — o custo de I/O que ela sempre paga (varredura
-    completa, independente do percentual) é um fato estrutural da
-    estratégia, idêntico em qualquer tabela/execução nos dois motores; um
-    Aviso repetindo o mesmo texto a cada tabela extraída (dezenas/centenas
-    de vezes numa extração real) era ruído puro. Avisado uma vez, na escolha
-    da estratégia (`cli/registro/estrategias.py::_construir_percentual_de_linhas`),
-    não aqui.
+    Nem AmostragemProbabilistica (`PercentualDeLinhas`) nem RequisicaoPorFaixa
+    (`AmostragemPorFaixa`) emitem Aviso por tabela aqui — o custo/viés que
+    cada uma sempre paga (varredura completa; amostragem por bloco físico ou
+    faixa de PK, não por linha) é um fato estrutural da estratégia, idêntico
+    em qualquer tabela/execução nos dois motores; um Aviso repetindo o mesmo
+    texto a cada tabela extraída (dezenas/centenas de vezes numa extração
+    real) era ruído puro. Avisado uma vez, na escolha da estratégia
+    (`cli/registro/estrategias.py::_construir_percentual_de_linhas`/
+    `_construir_amostragem_por_faixa`), não aqui.
 
     Args:
         nome: identificador da EstrategiaDeAmostragem (MetadadosDeAmostra.estrategia).
@@ -58,11 +54,7 @@ def construir_metadados_de_amostra(
         causa_provavel: explicação, específica do motor, de por que
             total_linhas pode estar desatualizado (ex.: "sem ANALYZE
             recente" no Postgres, "sem ANALYZE TABLE recente" no MariaDB).
-        identificador_tabela: "escopo.tabela", citado nas mensagens de Aviso.
-        descricao_vies_por_faixa: explicação, específica do motor, do
-            mecanismo de amostragem por faixa e do viés de cluster
-            resultante — obrigatória para todo Extrator que despacha
-            RequisicaoPorFaixa, ignorada nas outras duas requisições.
+        identificador_tabela: "escopo.tabela", citado na mensagem de Aviso.
     """
     avisos: list[Aviso] = []
     match requisicao:
@@ -83,14 +75,6 @@ def construir_metadados_de_amostra(
                 tamanho_amostra=tamanho_amostra,
                 percentual=percentual,
                 seed=seed,
-            )
-            avisos.append(
-                Aviso(
-                    mensagem=(
-                        f"'{identificador_tabela}': {descricao_vies_por_faixa}"
-                    ),
-                    origem=origem,
-                )
             )
         case _ as nunca:
             assert_never(nunca)

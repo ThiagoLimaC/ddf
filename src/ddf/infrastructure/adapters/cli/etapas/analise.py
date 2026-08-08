@@ -48,5 +48,5 @@ def analisar(
     print()
     banco_analisado = ou_sair(resultado).analisado
     prompts.imprimir_destacado("✓ Análise concluída.", prompts.COR_SUCESSO)
-    print(f"⏱️  duração: {time.monotonic() - inicio:.0f}s")
+    print(f"duração: {time.monotonic() - inicio:.0f}s")
     return banco_analisado

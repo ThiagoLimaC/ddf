@@ -1018,11 +1018,14 @@ decide o caminho:
   os PKs mais baixos da tabela, independente do seed. Aproxima o
   comportamento de blocos espalhados do `TABLESAMPLE SYSTEM` do Postgres,
   sem exigir `LIMIT 1` repetido `n` vezes (inviável: um round-trip por
-  linha amostrada). `Aviso` de viés distinto do Postgres — explica o
-  trade-off de origem (custo de amostra verdadeiramente aleatória por PK),
-  não só o efeito. Gaps densos na PK (linhas deletadas) podem fazer a
-  amostra sair bem menor que o pedido — `Aviso` condicional adicional
-  quando `tamanho_amostra < 0.5 * n_pedido`.
+  linha amostrada). O aviso do trade-off (custo de amostra verdadeiramente
+  aleatória por PK, não só o efeito de viés) sai uma vez, na escolha da
+  estratégia no wizard (issue #116) — não mais um `Aviso` por tabela
+  extraída (mesmo padrão do Postgres). Gaps densos na PK (linhas deletadas)
+  podem fazer a amostra sair bem menor que o pedido — `Aviso` condicional
+  adicional quando `tamanho_amostra < 0.5 * n_pedido`, esse sim continua
+  por tabela (é uma condição real que varia por execução, não um fato
+  estrutural repetido).
 - **PK não elegível** (composta, ausente, ou não numérica): fallback pra
   `WHERE RAND(seed) <= percentual/100` — o mesmo SQL de
   `AmostragemProbabilistica`. `requisicao_efetiva` vira
@@ -1244,11 +1247,22 @@ acima). Em troca, sujeita a viés de cluster: linhas de uma mesma
 faixa/página/bloco tendem a ser semelhantes (inseridas juntas, mesmo
 padrão temporal), podendo distorcer `percentual_nulo`/`percentual_unico`/
 `valores_frequentes` em tabelas com padrão de inserção em lote. Por isso
-é **opt-in** — nunca troca silenciosa do default (`PercentualDeLinhas`)
-— e todo Extrator emite um `Aviso` incondicional explicando o viés em
-toda extração que a usa, texto próprio por motor (página física no
-Postgres, faixas contíguas de PK no MariaDB — a banca de revisão pediu
-mensagens distintas, não uma genérica compartilhada).
+é **opt-in** — nunca troca silenciosa do default (`PercentualDeLinhas`).
+
+Até a issue #116, cada Extrator emitia um `Aviso` incondicional explicando
+o viés em toda extração que a usa, texto próprio por motor (página física
+no Postgres, faixas contíguas de PK no MariaDB — a banca de revisão pediu
+mensagens distintas, não uma genérica compartilhada). Numa extração real
+com centenas de tabelas, esse texto saía idêntico centenas de vezes — só o
+nome da tabela mudava, o fato (mecanismo + risco de distorção) é
+estrutural da estratégia, não da tabela. Movido pra um aviso único, na
+escolha da estratégia no wizard da CLI (`cli/registro/estrategias.py::
+_construir_amostragem_por_faixa`, via `prompts.imprimir_destacado`
+informativo — não mais um `prompts.confirmar` bloqueante, mesmo padrão de
+`_construir_percentual_de_linhas`) — motor-agnóstico de propósito, já que
+o Extrator concreto ainda não foi escolhido nesse ponto do wizard. Mesmo
+padrão já aplicado a `PercentualDeLinhas` (issue #116, custo de I/O da
+varredura completa).
 
 **Por que reverte a escolha "sem viés" das outras duas Estratégias:**
 `PercentualDeLinhas`/`TabelaInteira` foram desenhadas deliberadamente

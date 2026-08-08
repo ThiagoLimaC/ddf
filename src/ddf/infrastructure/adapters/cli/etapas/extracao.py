@@ -106,5 +106,5 @@ def extrair(
     )
     print()
     print()
-    print(f"⏱️  duração: {time.monotonic() - inicio:.0f}s")
+    print(f"duração: {time.monotonic() - inicio:.0f}s")
     return ou_sair(resultado)

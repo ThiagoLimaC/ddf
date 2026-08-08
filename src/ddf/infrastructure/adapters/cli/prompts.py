@@ -12,7 +12,13 @@ import questionary
 
 _Numero = TypeVar("_Numero", int, float)
 
-_QUADROS_AMPULHETA = ("⏳", "⌛")
+# Braille dots (U+2800, bloco "Braille Patterns") — mesmo padrão default de
+# `rich.spinner`/`cli-spinners` (Sindre Sorhus), não emoji: glifo de texto
+# monoespaçado, largura fixa e cor controlável via COR_*, ao contrário de um
+# emoji real (ampulheta ⏳/⌛ antiga), que tem largura variável entre fontes
+# e ignora `COR_*`. Mesmo critério já usado para preferir `▮`/`▯` a `█`/`░`
+# (ver comentário perto de `_BLOCO_CHEIO`).
+_QUADROS_AMPULHETA = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
 COR_DESTAQUE = "#00d7ff"
 COR_SUCESSO = "#00d700"
@@ -345,7 +351,11 @@ def escolher_multiplos(mensagem: str, escolhas: list[str]) -> list[str]:
 
 @contextmanager
 def ampulheta(mensagem: str) -> Generator[None, None, None]:
-    """Anima uma ampulheta virando ao lado da mensagem enquanto o bloco roda.
+    """Anima um spinner de braille ao lado da mensagem enquanto o bloco roda.
+
+    Nome mantido por compatibilidade com o resto do módulo/chamadores —
+    era literalmente uma ampulheta (⏳/⌛) até esta função trocar de emoji
+    para o spinner de texto puro (ver `_QUADROS_AMPULHETA`).
 
     Roda numa thread separada porque a chamada protegida dentro do `with` é
     síncrona/bloqueante — sem isso não haveria como atualizar o quadro
@@ -362,7 +372,7 @@ def ampulheta(mensagem: str) -> Generator[None, None, None]:
             if parar.is_set():
                 return
             print(f"\r\x1b[K{quadro} {mensagem}", end="", flush=True)
-            time.sleep(0.3)
+            time.sleep(0.08)
 
     thread = threading.Thread(target=_animar, daemon=True)
     thread.start()

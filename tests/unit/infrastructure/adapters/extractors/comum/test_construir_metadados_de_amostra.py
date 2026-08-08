@@ -51,10 +51,15 @@ class TestFeliz:
         assert metadados.seed is None
         assert avisos == []
 
-    def test_requisicao_por_faixa_registra_percentual_e_seed_e_avisa_vies(
+    def test_requisicao_por_faixa_registra_percentual_e_seed_sem_aviso(
         self,
     ) -> None:
-        """percentual/seed ficam em MetadadosDeAmostra; Aviso é incondicional."""
+        """percentual/seed ficam em MetadadosDeAmostra; sem Aviso por tabela.
+
+        O aviso de viés de cluster saiu daqui na #116 — passou a ser avisado
+        uma vez, na escolha da estratégia (`cli/registro/estrategias.py::
+        _construir_amostragem_por_faixa`), não mais por tabela extraída.
+        """
         metadados, avisos = construir_metadados_de_amostra(
             nome="amostragem_por_faixa",
             requisicao=RequisicaoPorFaixa(percentual=10.0, seed=42),
@@ -63,15 +68,12 @@ class TestFeliz:
             origem="ExtratorFake",
             causa_provavel="sem ANALYZE recente",
             identificador_tabela="public.clientes",
-            descricao_vies_por_faixa="amostragem por página física de disco.",
         )
 
         assert metadados.estrategia == "amostragem_por_faixa"
         assert metadados.percentual == 10.0
         assert metadados.seed == 42
-        assert len(avisos) == 1
-        assert "página física de disco" in avisos[0].mensagem
-        assert "public.clientes" in avisos[0].mensagem
+        assert avisos == []
 
 
 class TestBorda:

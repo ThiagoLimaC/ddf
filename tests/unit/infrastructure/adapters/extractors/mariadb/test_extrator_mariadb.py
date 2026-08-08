@@ -923,9 +923,9 @@ class TestBorda:
 
         O corte de cada faixa é sorteado em Python (não `RAND()` no SQL —
         reavaliado por linha pelo motor, colapsaria a amostra pro início do
-        intervalo de PK) e embutido como parâmetro literal. Aviso de viés
-        cita o mecanismo real (faixas contíguas de chave primária), distinto
-        do texto do ExtratorPostgres (página física).
+        intervalo de PK) e embutido como parâmetro literal. Sem Aviso de
+        viés por tabela — sai uma vez, na escolha da estratégia no wizard
+        (#116).
         """
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
@@ -952,8 +952,7 @@ class TestBorda:
 
         assert isinstance(resultado, Sucesso)
         assert resultado.valor.metadados_amostra.estrategia == "amostragem_por_faixa"
-        assert len(resultado.avisos) == 1
-        assert "faixas contíguas de chave primária" in resultado.avisos[0].mensagem
+        assert resultado.avisos == []
         chamada_amostra = cursor_fake.execute.call_args_list[-1]
         consulta_amostra, parametros_amostra = chamada_amostra.args
         assert consulta_amostra.count("UNION ALL") == 9  # 10 faixas, 9 uniões
@@ -1009,7 +1008,11 @@ class TestBorda:
         pool_classe_fake: MagicMock,
         configuracao_por_faixa: ConfiguracaoDeExtracao,
     ) -> None:
-        """Amostra bem menor que o n pedido soma um Aviso de gaps densos na PK."""
+        """Amostra bem menor que o n pedido gera um Aviso de gaps densos na PK.
+
+        Sem Aviso de viés por tabela pra somar aqui (saiu na #116) — só o
+        de gaps densos.
+        """
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
@@ -1034,7 +1037,7 @@ class TestBorda:
         resultado = extrator.extrair_tabela("vendas", "tabela")
 
         assert isinstance(resultado, Sucesso)
-        assert len(resultado.avisos) == 2
+        assert len(resultado.avisos) == 1
         assert "gaps densos" in resultado.avisos[0].mensagem
 
     def test_tinyint_um_com_valor_atipico_na_amostra_mantem_integer(

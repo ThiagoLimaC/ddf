@@ -940,17 +940,17 @@ class TestBorda:
         assert resultado.valor.metadados_amostra.seed is not None
         assert isinstance(resultado.valor.metadados_amostra.seed, int)
 
-    def test_amostragem_por_faixa_usa_tablesample_system_e_avisa_vies(
+    def test_amostragem_por_faixa_usa_tablesample_system(
         self,
         pool_classe_fake: MagicMock,
         configuracao_por_faixa: ConfiguracaoDeExtracao,
     ) -> None:
-        """RequisicaoPorFaixa gera TABLESAMPLE SYSTEM e emite Aviso de viés.
+        """RequisicaoPorFaixa gera TABLESAMPLE SYSTEM, sem Aviso por tabela.
 
-        Diferente de PercentualDeLinhas (BERNOULLI, sem Aviso por tabela — o
-        custo de I/O é avisado uma vez na escolha da estratégia), o Aviso
-        aqui é sobre viés de cluster, incondicional toda vez que a
-        estratégia é usada — mecanismo (bloco físico), não custo de I/O.
+        O aviso de viés de cluster saiu daqui na #116 — sai uma vez, na
+        escolha da estratégia no wizard (`cli/registro/estrategias.py::
+        _construir_amostragem_por_faixa`), igual ao caso já resolvido de
+        PercentualDeLinhas.
         """
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
@@ -975,8 +975,7 @@ class TestBorda:
         assert isinstance(resultado, Sucesso)
         assert resultado.valor.metadados_amostra.estrategia == "amostragem_por_faixa"
         assert resultado.valor.total_linhas == 100
-        assert len(resultado.avisos) == 1
-        assert "página física de disco" in resultado.avisos[0].mensagem
+        assert resultado.avisos == []
         consulta_amostra = cursor_fake.execute.call_args_list[-1].args[0]
         assert "TABLESAMPLE SYSTEM" in str(consulta_amostra)
 

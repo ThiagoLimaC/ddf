@@ -485,13 +485,6 @@ class ExtratorPostgres:
                 origem="ExtratorPostgres",
                 causa_provavel="sem ANALYZE recente",
                 identificador_tabela=f"{schema}.{tabela}",
-                descricao_vies_por_faixa=(
-                    "amostragem por página física de disco (TABLESAMPLE "
-                    "SYSTEM), não por linha — pode distorcer percentual_nulo/"
-                    "percentual_unico/valores_frequentes em tabelas com "
-                    "padrão de inserção em lote (staging, eventos, colunas "
-                    "populadas via ALTER TABLE ... DEFAULT recente)."
-                ),
             )
             avisos.extend(avisos_amostra)
             return Sucesso(
