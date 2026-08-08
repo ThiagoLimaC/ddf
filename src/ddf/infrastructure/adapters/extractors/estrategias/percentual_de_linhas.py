@@ -15,9 +15,12 @@ class PercentualDeLinhas:
     descarta a maioria após ler. Relevante pra NFR9 do PRD ("dezenas ou
     centenas de tabelas... tempo razoável") em bancos com tabelas muito
     grandes — não há forma de amostrar sem varredura completa nesses dois
-    motores sem um índice específico para isso. Surfaced como `Aviso`
-    não-fatal em toda extração via `construir_metadados_de_amostra` — nunca
-    só documentação estática, o usuário é avisado no momento real.
+    motores sem um índice específico para isso. Avisado uma vez, no momento
+    em que o usuário escolhe esta estratégia no wizard
+    (`cli/registro/estrategias.py::_construir_percentual_de_linhas`) — não
+    mais como um `Aviso` por tabela via `construir_metadados_de_amostra`
+    (comportamento anterior): o fato é estrutural e idêntico em qualquer
+    tabela/execução, então repeti-lo a cada tabela extraída só virava ruído.
     """
 
     def __init__(self, percentual: float, seed: int | None = None) -> None:

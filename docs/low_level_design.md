@@ -1027,11 +1027,15 @@ decide o caminho:
   `WHERE RAND(seed) <= percentual/100` — o mesmo SQL de
   `AmostragemProbabilistica`. `requisicao_efetiva` vira
   `AmostragemProbabilistica` (não uma variação de `RequisicaoPorFaixa`) —
-  reaproveita o `case` já existente em `construir_metadados_de_amostra`,
-  que emite sozinho o `Aviso` de "varredura sequencial completa" (correto:
-  o fallback é exatamente esse SQL). O Extrator soma um segundo `Aviso`
-  explicando por que caiu no fallback, sem duplicar a mensagem de viés de
-  cluster errada (esse caminho não tem mais viés de cluster nenhum).
+  reaproveita o `case` já existente em `construir_metadados_de_amostra`
+  (correto: o fallback é exatamente esse SQL). Diferente de
+  `PercentualDeLinhas` escolhida diretamente no wizard — onde o custo de
+  I/O da varredura completa é avisado uma vez, na escolha da estratégia
+  (issue #116) —, aqui o Extrator emite um `Aviso` explicando por que caiu
+  no fallback (o usuário nunca escolheu "percentual", pediu "por faixa" e
+  não tinha como saber que cairia nesse caminho), sem duplicar a mensagem
+  de viés de cluster errada (esse caminho não tem mais viés de cluster
+  nenhum).
   `MetadadosDeAmostra.estrategia` também segue o mecanismo efetivo, não a
   `Estrategia` escolhida no wizard: um `match requisicao_efetiva` decide
   `"amostragem_por_faixa"`/`"percentual_de_linhas"`/`"tabela_inteira"` —

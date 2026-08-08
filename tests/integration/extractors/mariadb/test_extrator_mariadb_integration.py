@@ -331,10 +331,10 @@ def test_extrair_tabela_com_fk_polimorfica_mantem_as_duas_referencias(
             nome_escopo="polimorfismo", nome_tabela="fornecedores", nome_coluna="id"
         ),
     ]
-    # Único Aviso é o de varredura completa da AmostragemProbabilistica
-    # (fixture `configuracao`) — nenhum Aviso de FK descartada.
-    assert len(resultado.avisos) == 1
-    assert "varredura sequencial completa" in resultado.avisos[0].mensagem
+    # Nenhum Aviso de FK descartada — nem de varredura completa: a
+    # AmostragemProbabilistica avisa isso uma vez na escolha da estratégia,
+    # não por tabela.
+    assert resultado.avisos == []
 
 
 def test_extrair_tabela_com_constraint_de_mesmo_nome_em_outra_tabela_nao_confunde(

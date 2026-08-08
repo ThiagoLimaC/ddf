@@ -363,11 +363,10 @@ def test_extrair_tabela_com_fk_composta_pareia_colunas_corretamente(
             nome_escopo="geografia", nome_tabela="pais", nome_coluna="estado"
         )
     ]
-    # Não gera Aviso de FK composta espúrio — só o Aviso de custo, esperado
-    # para qualquer extração via PercentualDeLinhas (ver
-    # construir_metadados_de_amostra).
-    assert len(resultado.avisos) == 1
-    assert "varredura sequencial completa" in resultado.avisos[0].mensagem
+    # Não gera Aviso de FK composta espúrio nem nenhum outro — a varredura
+    # completa da AmostragemProbabilistica é avisada uma vez na escolha da
+    # estratégia, não por tabela (ver cli/registro/estrategias.py).
+    assert resultado.avisos == []
 
     # issue #95: as mesmas 2 colunas também formam uma RestricaoDeFkComposta,
     # apontando pra geografia.pais(codigo, estado) — a PK composta real.
@@ -444,10 +443,10 @@ def test_extrair_tabela_com_fk_polimorfica_mantem_as_duas_referencias(
             nome_escopo="polimorfismo", nome_tabela="fornecedores", nome_coluna="id"
         ),
     ]
-    # Único Aviso é o de varredura completa da AmostragemProbabilistica
-    # (fixture `configuracao`) — nenhum Aviso de FK descartada.
-    assert len(resultado.avisos) == 1
-    assert "varredura sequencial completa" in resultado.avisos[0].mensagem
+    # Nenhum Aviso de FK descartada — nem de varredura completa: a
+    # AmostragemProbabilistica avisa isso uma vez na escolha da estratégia,
+    # não por tabela.
+    assert resultado.avisos == []
 
 
 def test_coluna_array_com_valores_vazios_e_nulos_nao_quebra_analisador(

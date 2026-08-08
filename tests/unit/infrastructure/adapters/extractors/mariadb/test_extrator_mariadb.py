@@ -704,11 +704,11 @@ class TestBorda:
                 nome_escopo="vendas", nome_tabela="fornecedores", nome_coluna="id"
             ),
         ]
-        # Único Aviso remanescente é o de varredura completa da
-        # AmostragemProbabilistica (fixture `configuracao`) — nenhum Aviso
-        # de FK descartada, diferente do comportamento anterior à #105.
-        assert len(resultado.avisos) == 1
-        assert "varredura sequencial completa" in resultado.avisos[0].mensagem
+        # Nenhum Aviso de FK descartada, diferente do comportamento anterior
+        # à #105 — a varredura completa da AmostragemProbabilistica não é
+        # mais um Aviso por tabela (avisada uma vez na escolha da
+        # estratégia, ver cli/registro/estrategias.py).
+        assert resultado.avisos == []
 
     def test_listar_escopos_sem_databases_de_usuario_retorna_lista_vazia(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
@@ -837,9 +837,9 @@ class TestBorda:
         assert isinstance(resultado, Sucesso)
         assert resultado.valor.total_linhas == 1
         assert resultado.valor.metadados_amostra.tamanho_amostra == 2
-        assert len(resultado.avisos) == 2
-        assert resultado.avisos[1].origem == "ExtratorMariaDB"
-        assert "maior que total_linhas" in resultado.avisos[1].mensagem
+        assert len(resultado.avisos) == 1
+        assert resultado.avisos[0].origem == "ExtratorMariaDB"
+        assert "maior que total_linhas" in resultado.avisos[0].mensagem
 
     def test_amostragem_integral_usa_tamanho_da_amostra_como_total_linhas(
         self, pool_classe_fake: MagicMock, configuracao_integral: ConfiguracaoDeExtracao
@@ -969,12 +969,7 @@ class TestBorda:
         pool_classe_fake: MagicMock,
         configuracao_por_faixa: ConfiguracaoDeExtracao,
     ) -> None:
-        """Tabela sem PK: cai para WHERE RAND(seed) <= p, com Aviso de fallback.
-
-        O fallback reusa exatamente o mecanismo de PercentualDeLinhas — soma
-        os dois Avisos: o de fallback (explica o motivo) e o de varredura
-        sequencial completa (automático, mesmo caminho de AmostragemProbabilistica).
-        """
+        """Tabela sem PK: cai para WHERE RAND(seed) <= p, com Aviso de fallback."""
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
@@ -1001,12 +996,11 @@ class TestBorda:
         # que o usuário pediu no wizard — o campo precisa refletir o que foi
         # lido de fato, não a escolha original da Estrategia.
         assert resultado.valor.metadados_amostra.estrategia == "percentual_de_linhas"
-        assert len(resultado.avisos) == 2
+        assert len(resultado.avisos) == 1
         assert "caiu para o mecanismo probabilístico padrão" in (
             resultado.avisos[0].mensagem
         )
         assert "tabela sem chave primária" in resultado.avisos[0].mensagem
-        assert "varredura sequencial completa" in resultado.avisos[1].mensagem
         consulta_amostra = cursor_fake.execute.call_args_list[-1].args[0]
         assert "RAND(%s) <= %s" in consulta_amostra
 

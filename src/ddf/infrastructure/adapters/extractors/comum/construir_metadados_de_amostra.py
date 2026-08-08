@@ -25,18 +25,23 @@ def construir_metadados_de_amostra(
     """Monta MetadadosDeAmostra e emite os Avisos de custo associados à estratégia.
 
     Dois Avisos independentes, nenhum fatal: (1) toda vez que a requisição é
-    AmostragemProbabilistica, documenta que a leitura varre a tabela inteira
-    independente do percentual pedido — limitação estrutural da estratégia
-    (ver docstring de `PercentualDeLinhas`), não uma condição de erro; (1b)
-    toda vez que a requisição é RequisicaoPorFaixa, documenta o viés de
-    cluster do mecanismo — texto próprio de cada Extrator concreto
-    (`descricao_vies_por_faixa`), já que o mecanismo (bloco físico no
-    Postgres, faixas de chave primária no MariaDB) difere entre motores;
-    (2) quando a amostra excede `total_linhas`, sintoma de estimativa de
-    catálogo desatualizada. Todos citam `identificador_tabela`, mesmo padrão
-    de `construir_colunas_fk` — sem isso, os exemplos que `avisos.py` mostra
-    antes de colapsar por contagem ficam anônimos, sem dizer qual tabela
-    específica paga o custo.
+    RequisicaoPorFaixa, documenta o viés de cluster do mecanismo — texto
+    próprio de cada Extrator concreto (`descricao_vies_por_faixa`), já que o
+    mecanismo (bloco físico no Postgres, faixas de chave primária no
+    MariaDB) difere entre motores; (2) quando a amostra excede
+    `total_linhas`, sintoma de estimativa de catálogo desatualizada. Ambos
+    citam `identificador_tabela`, mesmo padrão de `construir_colunas_fk` —
+    sem isso, os exemplos que `avisos.py` mostra antes de colapsar por
+    contagem ficam anônimos, sem dizer qual tabela específica paga o custo.
+
+    AmostragemProbabilistica (estratégia `PercentualDeLinhas`) não emite
+    Aviso por tabela aqui — o custo de I/O que ela sempre paga (varredura
+    completa, independente do percentual) é um fato estrutural da
+    estratégia, idêntico em qualquer tabela/execução nos dois motores; um
+    Aviso repetindo o mesmo texto a cada tabela extraída (dezenas/centenas
+    de vezes numa extração real) era ruído puro. Avisado uma vez, na escolha
+    da estratégia (`cli/registro/estrategias.py::_construir_percentual_de_linhas`),
+    não aqui.
 
     Args:
         nome: identificador da EstrategiaDeAmostragem (MetadadosDeAmostra.estrategia).
@@ -67,18 +72,6 @@ def construir_metadados_de_amostra(
                 tamanho_amostra=tamanho_amostra,
                 percentual=percentual,
                 seed=seed,
-            )
-            avisos.append(
-                Aviso(
-                    mensagem=(
-                        f"'{identificador_tabela}': amostragem por percentual "
-                        f"faz varredura sequencial completa da tabela "
-                        f"({total_linhas} linhas), independente do percentual "
-                        "pedido — custo de I/O não escala com o tamanho da "
-                        "amostra resultante."
-                    ),
-                    origem=origem,
-                )
             )
         case AmostragemIntegral():
             metadados = MetadadosDeAmostra(

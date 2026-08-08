@@ -525,11 +525,11 @@ class TestBorda:
                 nome_escopo="vendas", nome_tabela="fornecedores", nome_coluna="id"
             ),
         ]
-        # Único Aviso remanescente é o de varredura completa da
-        # AmostragemProbabilistica (fixture `configuracao`) — nenhum Aviso
-        # de FK descartada, diferente do comportamento anterior à #105.
-        assert len(resultado.avisos) == 1
-        assert "varredura sequencial completa" in resultado.avisos[0].mensagem
+        # Nenhum Aviso de FK descartada, diferente do comportamento anterior
+        # à #105 — a varredura completa da AmostragemProbabilistica não é
+        # mais um Aviso por tabela (avisada uma vez na escolha da
+        # estratégia, ver cli/registro/estrategias.py).
+        assert resultado.avisos == []
 
     def test_extrair_tabela_com_unique_composto_monta_restricao_unica(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
@@ -866,9 +866,9 @@ class TestBorda:
         assert isinstance(resultado, Sucesso)
         assert resultado.valor.total_linhas == 1
         assert resultado.valor.metadados_amostra.tamanho_amostra == 2
-        assert len(resultado.avisos) == 2
-        assert resultado.avisos[1].origem == "ExtratorPostgres"
-        assert "maior que total_linhas" in resultado.avisos[1].mensagem
+        assert len(resultado.avisos) == 1
+        assert resultado.avisos[0].origem == "ExtratorPostgres"
+        assert "maior que total_linhas" in resultado.avisos[0].mensagem
 
     def test_amostragem_integral_usa_tamanho_da_amostra_como_total_linhas(
         self, pool_classe_fake: MagicMock, configuracao_integral: ConfiguracaoDeExtracao
@@ -947,9 +947,10 @@ class TestBorda:
     ) -> None:
         """RequisicaoPorFaixa gera TABLESAMPLE SYSTEM e emite Aviso de viés.
 
-        Diferente de PercentualDeLinhas (BERNOULLI), o Aviso aqui não é sobre
-        varredura sequencial completa — é sobre viés de cluster, incondicional
-        toda vez que a estratégia é usada.
+        Diferente de PercentualDeLinhas (BERNOULLI, sem Aviso por tabela — o
+        custo de I/O é avisado uma vez na escolha da estratégia), o Aviso
+        aqui é sobre viés de cluster, incondicional toda vez que a
+        estratégia é usada — mecanismo (bloco físico), não custo de I/O.
         """
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
