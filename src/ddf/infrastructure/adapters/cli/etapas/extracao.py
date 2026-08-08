@@ -36,8 +36,7 @@ def conectar() -> tuple[Extrator, ConfiguracaoDeExtracao, list[str]]:
         "Qual fonte?", list(EXTRATORES_REGISTRADOS.keys())
     )
     configuracao = ConfiguracaoDeExtracao()
-    extrator = EXTRATORES_REGISTRADOS[nome_fonte].construir(configuracao)
-    escopos = _testar_conexao(extrator)
+    extrator, escopos = _testar_conexao(nome_fonte, configuracao)
     return extrator, configuracao, escopos
 
 
@@ -57,21 +56,27 @@ def configurar_amostragem(configuracao: ConfiguracaoDeExtracao) -> None:
     configuracao.estrategia = ESTRATEGIAS_REGISTRADAS[nome_estrategia].construir()
 
 
-def _testar_conexao(extrator: Extrator) -> list[str]:
-    """Etapa 3: testa a conexão via listar_escopos(), com retry manual até 3x.
+def _testar_conexao(
+    nome_fonte: str, configuracao: ConfiguracaoDeExtracao
+) -> tuple[Extrator, list[str]]:
+    """Etapa 3: constrói o Extrator e testa a conexão, com retry manual até 3x.
 
-    Nunca faz retry automático com a mesma credencial — em caso de senha
-    errada contra um banco real, retry cego pode contribuir para travar a
-    conta por excesso de tentativas. Quem decide tentar de novo é o usuário.
+    Reconstrói o Extrator a cada tentativa — pedindo host/porta/credenciais
+    de novo — em vez de reusar a mesma instância com os mesmos parâmetros já
+    errados: se a falha foi por um dado digitado errado (ex.: senha), retry
+    cego contra a mesma credencial nunca teria sucesso, só desperdiçaria
+    tentativas. Nunca insiste sozinho — quem decide tentar de novo (e o que
+    muda nos parâmetros) é o usuário.
     """
     tentativa = 1
     while True:
+        extrator = EXTRATORES_REGISTRADOS[nome_fonte].construir(configuracao)
         with prompts.ampulheta("Testando conexão..."):
             resultado = extrator.listar_escopos()
         print()
         if not isinstance(resultado, Falha):
             prompts.imprimir_destacado("✓ Conexão validada.", prompts.COR_SUCESSO)
-            return resultado.valor
+            return extrator, resultado.valor
 
         prompts.imprimir_destacado(
             f"Falha ao conectar (tentativa {tentativa}/"
@@ -80,7 +85,7 @@ def _testar_conexao(extrator: Extrator) -> list[str]:
         )
         if tentativa >= _MAXIMO_TENTATIVAS_CONEXAO:
             sys.exit(1)
-        if prompts.selecionar("O que fazer?", ["Tentar novamente", "Sair"]) == "Sair":
+        if not prompts.confirmar("Tentar novamente?"):
             sys.exit(1)
         tentativa += 1
 
