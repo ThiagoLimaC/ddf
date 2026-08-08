@@ -83,6 +83,22 @@ class TestFeliz:
         saida = capsys.readouterr().out
         assert "1 skeleton(s) criado(s)/atualizado(s)" in saida
         assert "1 preservado(s) sem mudança." in saida
+        assert "Preencha a curadoria e reexecute." in saida
+        assert "skeleton criado para 'public.clientes'" not in saida
+
+    def test_gerar_skeletons_sem_nenhum_criado_nao_sugere_reexecutar(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        fabrica_tabela_extraida: Callable[[str, str], TabelaExtraida],
+    ) -> None:
+        """Sem Aviso (tudo preservado), não há nada novo pra curar/reexecutar."""
+        tabelas = [fabrica_tabela_extraida("public", "clientes")]
+        orquestrador = OrquestradorFake(Sucesso(valor=BancoCurado(tabelas=[])))
+
+        curadoria._gerar_skeletons(orquestrador, object(), tabelas)  # type: ignore[arg-type]
+
+        saida = capsys.readouterr().out
+        assert "Preencha a curadoria e reexecute." not in saida
 
     def test_aplicar_sobrescritas_devolve_o_banco_curado(
         self,
