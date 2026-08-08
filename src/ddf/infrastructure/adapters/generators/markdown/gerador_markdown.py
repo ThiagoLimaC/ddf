@@ -36,11 +36,12 @@ class GeradorMarkdown:
             destino: diretório raiz onde os artefatos serão escritos.
 
         Returns:
-            Sucesso(None) com Aviso por tabela sem papel_de_negocio, ou
-            Falha na primeira escrita em disco que falhar.
+            Sucesso(None) com um Aviso único de contagem se alguma tabela
+            estiver sem papel_de_negocio, ou Falha na primeira escrita em
+            disco que falhar.
         """
         gerado_em = datetime.now(UTC).isoformat()
-        avisos: list[Aviso] = []
+        sem_papel_de_negocio = 0
         for tabela in entrada.tabelas:
             caminho_tabela = destino / tabela.nome_escopo / f"{tabela.nome_tabela}.md"
             conteudo = _TEMPLATE_TABELA.render(
@@ -53,15 +54,7 @@ class GeradorMarkdown:
             if isinstance(resultado, Falha):
                 return resultado
             if tabela.papel_de_negocio is None:
-                avisos.append(
-                    Aviso(
-                        mensagem=(
-                            f"Tabela '{tabela.nome_escopo}.{tabela.nome_tabela}' "
-                            "sem papel_de_negocio."
-                        ),
-                        origem="GeradorMarkdown",
-                    )
-                )
+                sem_papel_de_negocio += 1
 
         ordenadas = sorted(
             entrada.tabelas, key=lambda t: (t.nome_escopo, t.nome_tabela)
@@ -71,4 +64,12 @@ class GeradorMarkdown:
         if isinstance(resultado_index, Falha):
             return resultado_index
 
+        avisos: list[Aviso] = []
+        if sem_papel_de_negocio:
+            avisos.append(
+                Aviso(
+                    mensagem=f"{sem_papel_de_negocio} tabela(s) sem papel_de_negocio.",
+                    origem="GeradorMarkdown",
+                )
+            )
         return Sucesso(None, avisos=avisos)

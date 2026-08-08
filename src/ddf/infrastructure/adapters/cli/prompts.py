@@ -21,7 +21,12 @@ _Numero = TypeVar("_Numero", int, float)
 _QUADROS_AMPULHETA = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
 COR_DESTAQUE = "#00d7ff"
-COR_SUCESSO = "#00d700"
+
+# Verde pastel/fosco — não o verde puro `#00d700` usado antes, que destoava
+# do resto da paleta (todas as outras cores são tons "quebrados", não um
+# canal isolado no extremo). Pedido explícito do usuário: verde
+# "extremamente marcante e chamativo" demais para o tom geral da CLI.
+COR_SUCESSO = "#58cd58"
 
 # Vermelho/âmbar do mesmo cubo xterm 256 usado no resto da paleta (steps
 # 0x00/0x87/0xd7/0xff) — erro é sempre fatal para o passo atual (sys.exit ou
