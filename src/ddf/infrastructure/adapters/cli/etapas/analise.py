@@ -53,6 +53,7 @@ def analisar(
     with prompts.barra_indeterminada("Analisando..."):
         resultado = compor(*analisadores_ordenados)(contexto)
     print()
+    print()
     for aviso in resultado.avisos:
         prompts.imprimir_destacado(f"▲ {aviso.mensagem}", prompts.COR_AVISO)
     if isinstance(resultado, Falha):
