@@ -376,12 +376,54 @@ class TestFeliz:
 
         assert isinstance(resultado, Sucesso)
         assert len(resultado.avisos) == 1
-        assert "rh.funcionarios" in resultado.avisos[0].mensagem
+        assert "1 coluna(s)" in resultado.avisos[0].mensagem
+        assert "fora do lote" in resultado.avisos[0].mensagem
 
         schema = _schema_yml(tmp_path, "vendas")
         modelo = _modelo(schema, "stg_vendas__pedidos")
         coluna_yaml = _coluna(modelo, "funcionario_id")
         assert "tests" not in coluna_yaml
+
+    def test_varias_colunas_com_fk_fora_do_lote_colapsam_em_um_aviso(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Várias colunas com FK fora do lote geram um único Aviso, não por coluna."""
+        coluna_funcionario = construir_coluna(
+            nome="funcionario_id",
+            chave_estrangeira=True,
+            referencias=[
+                ReferenciaDeColuna(
+                    nome_escopo="rh", nome_tabela="funcionarios", nome_coluna="id"
+                ),
+            ],
+            metricas=[],
+        )
+        coluna_filial = construir_coluna(
+            nome="filial_id",
+            chave_estrangeira=True,
+            referencias=[
+                ReferenciaDeColuna(
+                    nome_escopo="rh", nome_tabela="filiais", nome_coluna="id"
+                ),
+            ],
+            metricas=[],
+        )
+        tabela = construir_tabela(
+            colunas=[coluna_funcionario, coluna_filial],
+            nome_tabela="pedidos",
+            nome_escopo="vendas",
+        )
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        assert len(resultado.avisos) == 1
+        assert "2 coluna(s)" in resultado.avisos[0].mensagem
 
     def test_fk_polimorfica_com_2_mais_referencias_suprime_relationships_e_avisa(
         self,
@@ -429,15 +471,15 @@ class TestFeliz:
 
         assert isinstance(resultado, Sucesso)
         assert len(resultado.avisos) == 1
-        assert "entidade_id" in resultado.avisos[0].mensagem
-        assert "2 FKs distintas" in resultado.avisos[0].mensagem
+        assert "1 coluna(s)" in resultado.avisos[0].mensagem
+        assert "FK polimórfica" in resultado.avisos[0].mensagem
 
         schema = _schema_yml(tmp_path, "vendas")
         modelo = _modelo(schema, "stg_vendas__movimentos")
         coluna_yaml = _coluna(modelo, "entidade_id")
         assert "tests" not in coluna_yaml
 
-    def test_fk_polimorfica_com_3_referencias_lista_todos_os_alvos_no_aviso(
+    def test_fk_polimorfica_com_3_referencias_tambem_suprime_relationships(
         self,
         tmp_path: Path,
         construir_coluna: Callable[..., ColunaAnalisada],
@@ -446,8 +488,8 @@ class TestFeliz:
     ) -> None:
         """Borda: 3+ referências (não só 2) continuam suprimindo o teste.
 
-        Prova que `len(referencias) > 1` generaliza de verdade — a
-        mensagem do Aviso permanece legível e cita as 3 tabelas alvo.
+        Prova que `len(referencias) > 1` generaliza de verdade, não só
+        para o caso de 2 referências.
         """
         coluna_fk = construir_coluna(
             nome="entidade_id",
@@ -489,12 +531,8 @@ class TestFeliz:
 
         assert isinstance(resultado, Sucesso)
         assert len(resultado.avisos) == 1
-        mensagem = resultado.avisos[0].mensagem
-        assert "entidade_id" in mensagem
-        assert "3 FKs distintas" in mensagem
-        assert "vendas.clientes" in mensagem
-        assert "vendas.fornecedores" in mensagem
-        assert "vendas.parceiros" in mensagem
+        assert "1 coluna(s)" in resultado.avisos[0].mensagem
+        assert "FK polimórfica" in resultado.avisos[0].mensagem
 
         schema = _schema_yml(tmp_path, "vendas")
         modelo = _modelo(schema, "stg_vendas__movimentos")
@@ -605,7 +643,7 @@ class TestFeliz:
 
         assert isinstance(resultado, Sucesso)
         assert len(resultado.avisos) == 1
-        assert "geografia.estados" in resultado.avisos[0].mensagem
+        assert "1 FK(s) composta(s)" in resultado.avisos[0].mensagem
 
         schema = _schema_yml(tmp_path, "vendas")
         modelo = _modelo(schema, "stg_vendas__pedidos")

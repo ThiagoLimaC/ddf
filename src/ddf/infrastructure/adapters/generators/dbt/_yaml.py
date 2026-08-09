@@ -5,18 +5,18 @@ from typing import Any
 import yaml
 
 from ddf.domain.model.analysis import ColunaAnalisada, TabelaAnalisada
-from ddf.domain.shared.aviso import Aviso
 from ddf.infrastructure.adapters.generators.dbt._sql import _nome_model
 from ddf.infrastructure.adapters.generators.dbt._templates import _TEMPLATE_README
-from ddf.infrastructure.adapters.generators.dbt._testes import _sugestoes_de_teste
-
-_ORIGEM = "GeradorDbt"
+from ddf.infrastructure.adapters.generators.dbt._testes import (
+    ContadoresDeAviso,
+    _sugestoes_de_teste,
+)
 
 
 def _coluna_schema_yaml(
     coluna: ColunaAnalisada,
     presentes: set[tuple[str, str]],
-    avisos: list[Aviso],
+    contadores: ContadoresDeAviso,
     tamanho_amostra: int,
     colunas_em_fk_composta: set[str],
 ) -> dict[str, Any]:
@@ -25,7 +25,7 @@ def _coluna_schema_yaml(
     Args:
         coluna: coluna analisada a documentar.
         presentes: pares (nome_escopo, nome_tabela) do lote analisado.
-        avisos: lista de avisos acumulada pelo Gerador.
+        contadores: contadores de Aviso acumulados pelo Gerador.
         tamanho_amostra: total de linhas amostradas da tabela desta coluna.
         colunas_em_fk_composta: nomes de coluna desta tabela que pertencem
             a alguma `RestricaoDeFkComposta`.
@@ -38,7 +38,7 @@ def _coluna_schema_yaml(
     if coluna.papel_de_negocio:
         entrada["description"] = coluna.papel_de_negocio
     testes = _sugestoes_de_teste(
-        coluna, presentes, avisos, tamanho_amostra, colunas_em_fk_composta
+        coluna, presentes, contadores, tamanho_amostra, colunas_em_fk_composta
     )
     if testes:
         entrada["tests"] = testes
@@ -48,7 +48,7 @@ def _coluna_schema_yaml(
 def _testes_de_modelo(
     tabela: TabelaAnalisada,
     presentes: set[tuple[str, str]],
-    avisos: list[Aviso],
+    contadores: ContadoresDeAviso,
 ) -> list[Any]:
     """Sugere os testes dbt de qualidade aplicáveis no nível do model (tabela).
 
@@ -59,14 +59,14 @@ def _testes_de_modelo(
       (UNIQUE composto real do schema).
     - `composite_relationships` — um por `RestricaoDeFkComposta`, só quando
       a tabela referenciada está no lote (mesma regra do `relationships`
-      single-column); senão, `Aviso` + omissão.
+      single-column); senão, incrementa `contadores` e omite o teste.
 
     Args:
         tabela: tabela analisada a documentar.
         presentes: pares (nome_escopo, nome_tabela) do lote analisado —
             usado só pela checagem de `composite_relationships`.
-        avisos: lista de avisos acumulada pelo Gerador, alimentada quando
-            uma FK composta referencia tabela fora do lote.
+        contadores: contadores de Aviso acumulados pelo Gerador, alimentados
+            quando uma FK composta referencia tabela fora do lote.
 
     Returns:
         Lista de testes no formato aceito por `schema.yml` (dicts).
@@ -85,18 +85,7 @@ def _testes_de_modelo(
             restricao_fk.nome_tabela_referenciada,
         )
         if chave_referenciada not in presentes:
-            avisos.append(
-                Aviso(
-                    mensagem=(
-                        f"FK composta de '{tabela.nome_escopo}.{tabela.nome_tabela}' "
-                        f"({', '.join(restricao_fk.colunas_locais)}) referencia "
-                        f"'{chave_referenciada[0]}.{chave_referenciada[1]}', fora do "
-                        "lote analisado nesta execução — teste "
-                        "composite_relationships omitido."
-                    ),
-                    origem=_ORIGEM,
-                )
-            )
+            contadores.fk_composta_fora_do_lote += 1
             continue
         nome_model_referenciado = _nome_model(*chave_referenciada)
         testes.append(
@@ -112,14 +101,16 @@ def _testes_de_modelo(
 
 
 def _model_schema_yaml(
-    tabela: TabelaAnalisada, presentes: set[tuple[str, str]], avisos: list[Aviso]
+    tabela: TabelaAnalisada,
+    presentes: set[tuple[str, str]],
+    contadores: ContadoresDeAviso,
 ) -> dict[str, Any]:
     """Monta a entrada de um staging model em `schema.yml`.
 
     Args:
         tabela: tabela analisada a documentar.
         presentes: pares (nome_escopo, nome_tabela) do lote analisado.
-        avisos: lista de avisos acumulada pelo Gerador.
+        contadores: contadores de Aviso acumulados pelo Gerador.
 
     Returns:
         Dict com `name`, `description` opcional, `tests` opcional
@@ -129,7 +120,7 @@ def _model_schema_yaml(
     entrada: dict[str, Any] = {"name": nome_model}
     if tabela.papel_de_negocio:
         entrada["description"] = tabela.papel_de_negocio
-    testes_de_modelo = _testes_de_modelo(tabela, presentes, avisos)
+    testes_de_modelo = _testes_de_modelo(tabela, presentes, contadores)
     if testes_de_modelo:
         entrada["tests"] = testes_de_modelo
     tamanho_amostra = tabela.metadados_amostra.tamanho_amostra
@@ -138,7 +129,7 @@ def _model_schema_yaml(
         colunas_em_fk_composta.update(restricao.colunas_locais)
     entrada["columns"] = [
         _coluna_schema_yaml(
-            coluna, presentes, avisos, tamanho_amostra, colunas_em_fk_composta
+            coluna, presentes, contadores, tamanho_amostra, colunas_em_fk_composta
         )
         for coluna in tabela.colunas
     ]
