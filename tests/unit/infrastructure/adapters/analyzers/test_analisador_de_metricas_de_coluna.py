@@ -262,8 +262,8 @@ class TestBorda:
         assert isinstance(resultado, Sucesso)
         assert len(resultado.avisos) == 1
         assert resultado.avisos[0].origem == "AnalisadorDeMetricasDeColuna"
-        assert "1 tabela(s)" in resultado.avisos[0].mensagem
-        assert "1 coluna(s)" in resultado.avisos[0].mensagem
+        assert "1 de 1 tabela(s)" in resultado.avisos[0].mensagem
+        assert "1 de 1 coluna(s)" in resultado.avisos[0].mensagem
 
     def test_amostra_pequena_colapsa_varias_colunas_em_um_aviso(
         self,
@@ -289,8 +289,8 @@ class TestBorda:
 
         assert isinstance(resultado, Sucesso)
         assert len(resultado.avisos) == 1
-        assert "1 tabela(s)" in resultado.avisos[0].mensagem
-        assert "3 coluna(s)" in resultado.avisos[0].mensagem
+        assert "1 de 1 tabela(s)" in resultado.avisos[0].mensagem
+        assert "3 de 3 coluna(s)" in resultado.avisos[0].mensagem
 
     def test_amostra_pequena_colapsa_varias_tabelas_em_um_aviso(
         self,
@@ -318,8 +318,37 @@ class TestBorda:
 
         assert isinstance(resultado, Sucesso)
         assert len(resultado.avisos) == 1
-        assert "2 tabela(s)" in resultado.avisos[0].mensagem
-        assert "3 coluna(s)" in resultado.avisos[0].mensagem
+        assert "2 de 2 tabela(s)" in resultado.avisos[0].mensagem
+        assert "3 de 3 coluna(s)" in resultado.avisos[0].mensagem
+
+    def test_amostra_pequena_denominador_reflete_total_nao_so_afetadas(
+        self,
+        tipo_integer: TipoDeDado,
+        construir_contexto: Callable[[list[TabelaCurada]], ContextoDeAnalise],
+    ) -> None:
+        """Denominador da mensagem é o total de tabelas/colunas, não só as pequenas."""
+        pequena = _tabela_curada(
+            colunas=[ColunaCurada(nome="id", tipo_dado=tipo_integer)],
+            amostra=pl.DataFrame({"id": list(range(50))}),
+            tamanho_amostra=50,
+        )
+        grande = _tabela_curada(
+            colunas=[
+                ColunaCurada(nome="id", tipo_dado=tipo_integer),
+                ColunaCurada(nome="idade", tipo_dado=tipo_integer),
+            ],
+            amostra=pl.DataFrame({"id": list(range(200)), "idade": list(range(200))}),
+            tamanho_amostra=200,
+            nome_tabela="pedidos",
+        )
+        contexto = construir_contexto([pequena, grande])
+
+        resultado = AnalisadorDeMetricasDeColuna()(contexto)
+
+        assert isinstance(resultado, Sucesso)
+        assert len(resultado.avisos) == 1
+        assert "1 de 2 tabela(s)" in resultado.avisos[0].mensagem
+        assert "1 de 3 coluna(s)" in resultado.avisos[0].mensagem
 
     def test_valores_frequentes_desempate_por_valor_crescente(
         self,

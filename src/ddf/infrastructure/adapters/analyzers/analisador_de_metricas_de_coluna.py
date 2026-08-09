@@ -48,11 +48,12 @@ class AnalisadorDeMetricasDeColuna:
             Sucesso com um ContextoDeAnalise novo, `analisado` enriquecido
             com MetricasBaseColuna por coluna e `curado.tabelas[*].amostra`
             liberado, com um único Aviso agregado (tabelas e colunas
-            afetadas) se alguma tabela tiver amostra menor que 100 linhas —
-            não um Aviso por tabela nem por coluna, para não assustar com
-            uma lista longa numa análise com muitas tabelas pequenas. Falha
-            apenas se curado e analisado estiverem fora de sincronia
-            (violação de invariante estrutural, não erro de dado).
+            afetadas, com o total analisado como denominador) se alguma
+            tabela tiver amostra menor que 100 linhas — não um Aviso por
+            tabela nem por coluna, para não assustar com uma lista longa
+            numa análise com muitas tabelas pequenas. Falha apenas se
+            curado e analisado estiverem fora de sincronia (violação de
+            invariante estrutural, não erro de dado).
         """
         if len(entrada.curado.tabelas) != len(entrada.analisado.tabelas):
             return Falha(
@@ -62,6 +63,7 @@ class AnalisadorDeMetricasDeColuna:
 
         tabelas_com_amostra_pequena = 0
         colunas_com_amostra_pequena = 0
+        total_colunas = 0
         novas_tabelas_curadas: list[TabelaCurada] = []
         novas_tabelas_analisadas: list[TabelaAnalisada] = []
         for tabela_curada, tabela_analisada in zip(
@@ -73,6 +75,7 @@ class AnalisadorDeMetricasDeColuna:
                     f"'{tabela_curada.nome_escopo}.{tabela_curada.nome_tabela}' "
                     "não bate entre curado e analisado."
                 )
+            total_colunas += len(tabela_curada.colunas)
             nova_curada, nova_analisada, colunas_pequenas = _processar_tabela(
                 tabela_curada, tabela_analisada
             )
@@ -90,14 +93,15 @@ class AnalisadorDeMetricasDeColuna:
         )
         avisos: list[Aviso] = []
         if tabelas_com_amostra_pequena:
+            total_tabelas = len(entrada.curado.tabelas)
             avisos.append(
                 Aviso(
                     mensagem=(
-                        f"Amostra pequena em {tabelas_com_amostra_pequena} "
-                        f"tabela(s): {colunas_com_amostra_pequena} coluna(s) "
-                        "com métricas potencialmente pouco confiáveis "
-                        f"(amostra menor que {_TAMANHO_AMOSTRA_MINIMO_AVISO} "
-                        "linhas)."
+                        f"Amostra pequena em {tabelas_com_amostra_pequena} de "
+                        f"{total_tabelas} tabela(s): {colunas_com_amostra_pequena} "
+                        f"de {total_colunas} coluna(s) com métricas potencialmente "
+                        "pouco confiáveis (amostra menor que "
+                        f"{_TAMANHO_AMOSTRA_MINIMO_AVISO} linhas)."
                     ),
                     origem=_ORIGEM,
                 )
