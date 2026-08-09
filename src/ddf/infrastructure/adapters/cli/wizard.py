@@ -39,14 +39,6 @@ _BANNER = r"""
                                 [ github.com/ThiagoLimaC/ddf ]
 """
 
-# Reserva a `COR_DESTAQUE` do banner/cabecalho_etapa/linha_de_decisao para o
-# que exige atenção — este texto é só contexto, por isso sai em
-# `COR_SECUNDARIA` (cinza fosco): a mesma hierarquia do shell da Oxide, onde
-# a mensagem de abertura aparece apagada e o prompt interativo abaixo dela
-# recebe a cor viva. Margem esquerda encostada (sem indentação, ao contrário
-# do banner) — as quebras de linha são as naturais de um parágrafo com
-# largura de linha igual à do banner (91 colunas, a mesma linha "> ... <"),
-# não uma indentação visual.
 _BOAS_VINDAS = (
     "\n"
     "\n"

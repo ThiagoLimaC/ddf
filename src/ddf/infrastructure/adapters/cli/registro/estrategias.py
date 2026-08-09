@@ -63,17 +63,11 @@ def _construir_percentual_de_linhas() -> EstrategiaDeAmostragem:
     com mensagem em português, mesmo padrão de `ou_sair` (avisos.py).
 
     Avisa uma vez, aqui na escolha da estratégia, que ela sempre varre a
-    tabela inteira (custo estrutural, igual nos dois Extratores) — não mais
-    um `Aviso` por tabela extraída (`construir_metadados_de_amostra`, antes
-    da #116): o fato não muda de tabela pra tabela, então repeti-lo dezenas/
-    centenas de vezes numa extração real só era ruído. Mesma família de
-    aviso pontual de `_construir_tabela_inteira`/`_construir_amostragem_
-    por_faixa`, só que informativo (não bloqueia com `confirmar`) — o
-    default de 10% já protege contra o pior caso por acidente. `print()`
-    antes do aviso segue o mesmo padrão do resto do módulo `cli/` (ex.:
-    `extracao.py::_testar_conexao`, `curadoria.py::_gerar_skeletons`): uma
-    linha em branco separando uma mensagem de status da pergunta/ação que
-    veio antes dela.
+    tabela inteira (custo estrutural, igual nos dois Extratores) — não por
+    tabela extraída (`construir_metadados_de_amostra`), pra não repetir o
+    mesmo fato dezenas/centenas de vezes numa extração real. Informativo
+    (não bloqueia com `confirmar`): o default de 10% já protege contra o
+    pior caso por acidente.
     """
     percentual = prompts.numero(
         "Percentual de amostragem (0-100]:", float, default="10"
@@ -124,19 +118,13 @@ def _construir_amostragem_por_faixa() -> EstrategiaDeAmostragem:
     vez de linha — pode distorcer métricas em tabelas com padrão de
     inserção em lote.
 
-    Padronizado com `_construir_percentual_de_linhas` (#116): aviso
-    informativo (`imprimir_destacado`, não bloqueia com `confirmar`) depois
-    de montar a estratégia — não mais uma pergunta de sim/não antes das
-    perguntas de percentual/seed. Esse aviso também é o que substitui o
-    `Aviso` que `construir_metadados_de_amostra` emitia por tabela pra
-    RequisicaoPorFaixa (antes da #116): mesmo texto estrutural repetido
-    dezenas/centenas de vezes numa extração real (só o nome da tabela
-    mudava) — igual ao caso já resolvido de `PercentualDeLinhas`. É
-    motor-agnóstico de propósito: o Extrator concreto ainda não foi
-    escolhido/conectado quando o wizard pergunta a estratégia, então não dá
-    pra citar o mecanismo específico (TABLESAMPLE SYSTEM no Postgres,
-    faixas de PK no MariaDB) aqui — só o efeito (viés de cluster), que é o
-    que importa pra decisão do usuário.
+    Aviso informativo (não bloqueia com `confirmar`) depois de montar a
+    estratégia, substituindo o `Aviso` que `construir_metadados_de_amostra`
+    emitia por tabela pra RequisicaoPorFaixa. Motor-agnóstico de propósito:
+    o Extrator concreto ainda não foi escolhido/conectado quando o wizard
+    pergunta a estratégia, então cita só o efeito (viés de cluster), não o
+    mecanismo específico por motor (TABLESAMPLE SYSTEM no Postgres, faixas
+    de PK no MariaDB).
     """
     percentual = prompts.numero(
         "Percentual de amostragem (0-100]:", float, default="10"

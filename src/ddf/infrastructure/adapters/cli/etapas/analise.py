@@ -19,10 +19,9 @@ from ddf.pipeline.compor import compor
 
 def escolher_geradores() -> list[str]:
     """Etapa 9: escolhe um ou mais Geradores entre os registrados."""
-    nomes_geradores = prompts.escolher_multiplos(
+    return prompts.escolher_multiplos(
         "Escolha um ou mais geradores:", list(GERADORES_REGISTRADOS.keys())
     )
-    return nomes_geradores
 
 
 def validar_selecao(nomes_geradores_escolhidos: list[str]) -> list[Analisador]:
@@ -53,7 +52,6 @@ def analisar(
     inicio = time.monotonic()
     with prompts.barra_indeterminada("Analisando..."):
         resultado = compor(*analisadores_ordenados)(contexto)
-    print()
     print()
     for aviso in resultado.avisos:
         prompts.imprimir_destacado(f"▲ {aviso.mensagem}", prompts.COR_AVISO)

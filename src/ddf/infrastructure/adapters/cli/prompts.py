@@ -12,39 +12,23 @@ import questionary
 
 _Numero = TypeVar("_Numero", int, float)
 
-# Braille dots (U+2800, bloco "Braille Patterns") — mesmo padrão default de
-# `rich.spinner`/`cli-spinners` (Sindre Sorhus), não emoji: glifo de texto
-# monoespaçado, largura fixa e cor controlável via COR_*, ao contrário de um
-# emoji real (ampulheta ⏳/⌛ antiga), que tem largura variável entre fontes
-# e ignora `COR_*`. Mesmo critério já usado para preferir `▮`/`▯` a `█`/`░`
-# (ver comentário perto de `_BLOCO_CHEIO`).
+# Spinner de texto puro (braille dots), não emoji — largura fixa, cor
+# controlável via COR_*.
 _QUADROS_AMPULHETA = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
 COR_DESTAQUE = "#00d7ff"
-
-# Verde pastel/fosco — não o verde puro `#00d700` usado antes, que destoava
-# do resto da paleta (todas as outras cores são tons "quebrados", não um
-# canal isolado no extremo). Pedido explícito do usuário: verde
-# "extremamente marcante e chamativo" demais para o tom geral da CLI.
 COR_SUCESSO = "#58cd58"
 
-# Vermelho/âmbar do mesmo cubo xterm 256 usado no resto da paleta (steps
-# 0x00/0x87/0xd7/0xff) — erro é sempre fatal para o passo atual (sys.exit ou
-# retry obrigatório); aviso é informativo, não interrompe o fluxo. Cores
-# distintas para não confundir as duas categorias visualmente.
+# Erro é sempre fatal para o passo atual; aviso é informativo, não
+# interrompe o fluxo — cores distintas evitam confundir as duas categorias.
 COR_ERRO = "#ff5f5f"
 COR_AVISO = "#d7af00"
 
-# Cinza fosco/dimmed para texto de contexto (ex.: mensagem de boas-vindas),
-# em segundo plano deliberado perante COR_DESTAQUE/COR_SUCESSO. Mesmo tom
-# usado por `gh` para texto secundário (`Gray()`, ANSI 256 cor 242 ≈ RGB
-# 108,108,108) — legível sobre fundo escuro ou claro, sem competir com as
-# cores vivas reservadas a decisões e resultados.
+# Texto de contexto/segundo plano (ex.: mensagem de boas-vindas), deliberadamente
+# discreto perante COR_DESTAQUE/COR_SUCESSO.
 COR_SECUNDARIA = "#6c6c6c"
 
-# Mesmo tom do banner (_BANNER em wizard.py) — resposta do usuário destacada
-# na mesma cor. É um teste de identidade visual; ajustar/reverter é só mudar
-# esta constante.
+# Resposta do usuário ecoada em COR_DESTAQUE, a mesma cor do banner.
 _ESTILO = questionary.Style([("answer", f"fg:{COR_DESTAQUE} bold")])
 
 
@@ -181,26 +165,19 @@ def imprimir_destacado(
 ) -> None:
     r"""Imprime um texto com a cor indicada (ex.: banner, confirmação).
 
-    `cor=None` imprime sem sobrescrever a cor do terminal — equivalente ao
-    token `question` do tema padrão do `questionary` (só `"bold"`, sem `fg`,
-    ver `linha_de_decisao`). `end` existe para compor uma linha com mais de
-    uma cor: `questionary.print` (via `prompt_toolkit.print_formatted_text`)
-    só aceita um `style` por chamada, então uma linha bicolor é duas
-    chamadas consecutivas, a 1ª com `end=" "` ou `end=""`.
+    `cor=None` reproduz o token `question` padrão do `questionary` (bold,
+    sem `fg`). `end` permite compor uma linha bicolor em duas chamadas
+    consecutivas, já que `questionary.print` só aceita um `style` por vez.
 
     Args:
         texto_a_exibir: texto a exibir — uma linha ou um bloco ASCII de
             várias linhas.
-        cor: código hex da cor, tipicamente `COR_DESTAQUE`, `COR_SUCESSO` ou
-            `COR_SECUNDARIA`. `None` para não sobrescrever a cor padrão do
-            terminal.
+        cor: código hex da cor (`COR_DESTAQUE`, `COR_SUCESSO`,
+            `COR_SECUNDARIA`...) ou `None` para a cor padrão do terminal.
         negrito: `False` para texto de contexto/segundo plano (ex.: mensagem
-            de boas-vindas com `COR_SECUNDARIA`) — negrito reforçaria
-            destaque, o oposto do efeito "apagado" buscado ali.
-        end: terminador da linha, repassado a `print_formatted_text`. Só
-            vale a pena mudar para compor uma linha com mais de uma cor
-            (ver `linha_de_decisao`); no resto do módulo cada chamada é uma
-            linha inteira, então o padrão `"\\n"` basta.
+            de boas-vindas com `COR_SECUNDARIA`).
+        end: terminador da linha; só muda ao compor uma linha bicolor (ver
+            `linha_de_decisao`).
     """
     partes = []
     if negrito:
@@ -214,27 +191,11 @@ def imprimir_destacado(
 def cabecalho_etapa(numero: int, total: int, titulo: str) -> None:
     """Imprime "└─ Etapa N/total — título" antes de uma fase do wizard.
 
-    Depois do banner de abertura (`_BANNER` em `wizard.py`), o fluxo do
-    wizard virava prompt puro do `questionary` — sem nenhuma pista visual de
-    onde uma etapa termina e a próxima começa, nem de quanto falta. Usa o
-    mesmo vocabulário de conector de árvore do shell da Oxide que motivou
-    `linha_de_decisao` — sem régua horizontal decorativa, só o símbolo que
-    introduz o próximo bloco. Reaproveita `imprimir_destacado`, único ponto
-    deste módulo que fala com `questionary.print`, e a mesma `COR_DESTAQUE`
-    do banner, para não criar uma segunda linguagem visual.
-
-    `└─` aqui não é "último item de uma lista" (como `linha_de_decisao`
-    evita propositalmente) — é o marcador de entrada de um bloco novo e
-    isolado: cada etapa aparece sozinha, nunca como parte de uma sequência
-    visualmente contígua de cabeçalhos, então não há ambiguidade de "isso é
-    a última etapa?" para desfazer.
-
     `numero`/`total` contam checkpoints visíveis ao usuário, não
     necessariamente as 14 "etapas" documentadas por módulo em
-    `docs/system_design_doc.md` — duas dessas etapas (escolher fonte +
-    testar conexão; gerar skeletons + pausar para curadoria) acontecem
-    dentro de uma única chamada de `cli/etapas/*.py` sem uma pergunta nova
-    ao usuário entre elas, então compartilham um único cabeçalho.
+    `docs/system_design_doc.md` — etapas sem pergunta nova ao usuário entre
+    si (ex.: escolher fonte + testar conexão) compartilham um único
+    cabeçalho.
 
     Args:
         numero: posição do checkpoint atual (1-indexado).
@@ -248,58 +209,24 @@ def cabecalho_etapa(numero: int, total: int, titulo: str) -> None:
 def linha_de_decisao(rotulo: str, valor: str, ultimo: bool = False) -> None:
     """Imprime uma linha "├─ rótulo valor" (ou "└─", se `ultimo`) resumindo uma decisão.
 
-    Inspirado no resumo em árvore do shell da Oxide (uma sequência de linhas
-    "├─ Title ..." / "└─ Deploy ...", cada uma ecoando uma pergunta já
-    respondida). Lá o bloco é fechado e contíguo — todas as perguntas são
-    feitas em sequência, sem nada entre elas — por isso faz sentido reservar
-    `└─` para a última linha: é o marcador de "esse bloco de decisões
-    terminou aqui", não de "última decisão do fluxo inteiro".
+    `├─` é o padrão: a maior parte do wizard não forma um bloco fechado de
+    decisões (elas se espalham por várias etapas, intercaladas por
+    `cabecalho_etapa` e processamento) — `└─` só se aplica quando não há
+    mais nenhuma linha de decisão logo em seguida sem processamento entre
+    elas. Hoje só `conectar()` (Fonte/Host/Porta/Usuário/Senha em sequência
+    contígua) usa `ultimo=True`, na última linha (Senha).
 
-    Na maior parte do wizard esse bloco fechado não existe: as decisões
-    reais do usuário (escopos, estratégia de amostragem, geradores, destino)
-    estão espalhadas ao longo de várias etapas, intercaladas por
-    `cabecalho_etapa` e por blocos de processamento (extração, análise) que
-    não são decisões — são o sistema trabalhando. Marcar uma dessas linhas
-    com `└─` afirmaria "esse bloco de decisões terminou", o que não é
-    verdade ali — a próxima linha de decisão pode vir logo em seguida, sem
-    nenhum processamento entre elas. Por isso o padrão é `ultimo=False`
-    (sempre `├─`): um marcador honesto de "isto foi uma escolha sua", sem
-    fingir uma árvore fechada que a interação real não tem.
-
-    A etapa de conexão (`cli/etapas/extracao.py::conectar`) é a exceção
-    real, não uma segunda regra: Fonte/Host/Porta/[Banco]/Usuário/Senha são
-    perguntadas em sequência contígua, sem nenhum processamento entre elas —
-    exatamente a condição que a regra acima já previa para justificar
-    `└─`. Ali o último `linha_de_decisao` da sequência (Senha) passa
-    `ultimo=True`. Continua sendo a mesma regra ("`└─` fecha um bloco
-    contíguo de decisões"), só que essa é a primeira etapa onde a condição
-    é verdadeira.
-
-    O conector (`├─`/`└─`) usa a mesma cor do rótulo, não `COR_DESTAQUE` —
-    aqui (diferente de `cabecalho_etapa`, que é estrutura do wizard) o
-    conector faz parte da árvore de decisão em si, então acompanha o
-    rótulo. O rótulo (`Fonte`, `Host`, ...) e o valor (`PostgreSQL`,
-    `db.exemplo.com`, ...) imitam visualmente a pergunta original e a
-    resposta que o usuário deu a ela:
-
-    - Conector e rótulo → estilo do token `question` do tema padrão do `questionary`
-      (`site-packages/questionary/constants.py::DEFAULT_STYLE`), que nunca
-      foi sobrescrito por `_ESTILO` neste módulo: `"bold"`, sem `fg` — ou
-      seja, a cor de "uma pergunta já feita" aqui é literalmente a cor
-      padrão do terminal, só em negrito. `cor=None` em `imprimir_destacado`
-      reproduz exatamente isso, em vez de inventar um hex novo.
-    - Valor → `COR_DESTAQUE`, a mesma cor que `_ESTILO` já usa para
-      sobrescrever o token `answer` do `questionary` (a resposta ecoada ao
-      lado da pergunta) — não a cor default do `answer` do tema
-      (`#FF9D00`), que este projeto nunca usa.
+    Conector e rótulo saem sem cor (`cor=None`, o mesmo `"bold"` sem `fg`
+    do token `question` padrão do `questionary`), imitando visualmente uma
+    pergunta já feita. Valor sai em `COR_DESTAQUE`, a mesma cor que
+    `_ESTILO` usa pra sobrescrever o token `answer` (a resposta ecoada pelo
+    `questionary`).
 
     Args:
         rotulo: nome curto da decisão, ex. "Fonte".
         valor: resposta escolhida pelo usuário, ex. "PostgreSQL".
         ultimo: `True` fecha um bloco contíguo de decisões com `└─` em vez
-            de `├─`. Só faz sentido quando não há mais nenhuma linha de
-            decisão logo em seguida, sem processamento entre elas — ver
-            `conectar()` para o único caso de uso hoje.
+            de `├─`.
     """
     conector = "└─" if ultimo else "├─"
     imprimir_destacado(conector, None, end=" ")
@@ -358,10 +285,6 @@ def escolher_multiplos(mensagem: str, escolhas: list[str]) -> list[str]:
 def ampulheta(mensagem: str) -> Generator[None, None, None]:
     """Anima um spinner de braille ao lado da mensagem enquanto o bloco roda.
 
-    Nome mantido por compatibilidade com o resto do módulo/chamadores —
-    era literalmente uma ampulheta (⏳/⌛) até esta função trocar de emoji
-    para o spinner de texto puro (ver `_QUADROS_AMPULHETA`).
-
     Roda numa thread separada porque a chamada protegida dentro do `with` é
     síncrona/bloqueante — sem isso não haveria como atualizar o quadro
     enquanto se espera a resposta (ex.: teste de conexão, análise).
@@ -401,15 +324,10 @@ class Progresso(NamedTuple):
     definir_total: Callable[[int], None]
 
 
-# Retângulo vertical cheio/vazio (U+25AE/U+25AF, bloco "Geometric Shapes" do
-# Unicode) — não os blocos de textura (`█`/`░`) usados antes. `▯` já É um
-# contorno (só a borda do retângulo é desenhada, o miolo é o glifo "vazio"
-# do próprio terminal), então o segmento não-concluído nunca pinta um fundo
-# sólido cinza por cima do fundo real do terminal — pedido explícito do
-# usuário ao revisar a 1ª versão desta barra. Ambos amplamente suportados em
-# fontes monoespaçadas de terminal (mesmo bloco geométrico de `■`/`□`/`▪`,
-# já cobertos por qualquer fonte com bom suporte a Unicode — DejaVu Sans
-# Mono, Cascadia Code, JetBrains Mono, etc.).
+# Retângulo vertical cheio/vazio (U+25AE/U+25AF) — `▯` já é um contorno (só
+# a borda desenhada, o miolo é o glifo "vazio" do próprio terminal), então
+# o segmento não-concluído nunca pinta um fundo sólido por cima do
+# terminal.
 _BLOCO_CHEIO = "▮"
 _BLOCO_VAZIO = "▯"
 
@@ -421,9 +339,7 @@ def _cor_ansi_truecolor(cor_hex: str) -> str:
 
     `_barra()` escreve direto via `print`/`\x1b[K`, não via
     `questionary.print` — não há `Style` do `prompt_toolkit` disponível
-    naquele ponto, então a cor é aplicada manualmente com o mesmo esquema
-    truecolor (`ESC[38;2;r;g;bm`) que os terminais modernos já entendem para
-    os hex de `COR_SUCESSO`/`COR_SECUNDARIA` usados no resto do módulo.
+    naquele ponto, então a cor é aplicada manualmente.
 
     Args:
         cor_hex: cor no formato `#rrggbb` (ex.: `COR_SUCESSO`).
@@ -437,45 +353,24 @@ def progresso_paralelo(mensagem_base: str, total: int | None = None) -> Progress
 
     Pensado para `.callback` ser passado como `progresso=` a
     `OrquestradorDeTabelas.extrair`/`aplicar_sobrescritas` — cada chamada já
-    chega serializada pela thread principal (ver `_executar_em_paralelo`),
-    sem necessidade de lock aqui. Não mostra tempo decorrido por item — a
-    duração é do processo inteiro, exibida uma vez ao final pelo chamador.
+    chega serializada pela thread principal, sem necessidade de lock aqui.
 
     Desenha 3 linhas fixas — "mensagem (N/total)", uma linha em branco e uma
-    barra de retângulos (`▮▮▮▯▯▯`, inspirada no shell da Oxide) —
-    reescritas no lugar a cada chamada. Substitui uma tentativa anterior de
-    mostrar o identificador do item "em andamento": sob paralelismo real
-    (~100+ tabelas), a lista de identificadores crescia até quebrar em
-    várias linhas do terminal, e `\\r`/`\\x1b[K` não alcançam linhas acima da
-    atual — gerava um log cascateado (ver
-    `plan/registry-plan/issue-116-ajustes-de-ux-no-wizard.md`). O redesenho
-    (sempre sobe até a 1ª linha, limpa e reescreve as 3) é seguro mesmo com
-    largura variável, porque `\\x1b[K` limpa o resto da linha inteira antes
-    de escrever — não depende de a barra ter sempre o mesmo tamanho.
+    barra de retângulos (`▮▮▮▯▯▯`) — sempre subindo até a 1ª linha antes de
+    limpar e reescrever as 3, o que funciona mesmo com largura variável
+    porque `\\x1b[K` limpa o resto da linha antes de escrever. A barra
+    recalcula a própria largura a cada redesenho, pra terminar sob o `)` de
+    "mensagem (N/total)" mesmo com a contagem crescendo em dígitos
+    (`"(1/122)"` → `"(121/122)"`).
 
-    A barra tem a mesma largura, em colunas, da linha "mensagem (N/total)"
-    acima dela — termina exatamente sob o `)` de fechamento, não um número
-    fixo de segmentos independente do texto. Como a contagem cresce em
-    dígitos ao longo da execução (`"(1/122)"` → `"(121/122)"`), a barra
-    recalcula a largura a cada redesenho.
+    Preenchido em `COR_DESTAQUE` (progresso em andamento, não `COR_SUCESSO`)
+    e vazio em `COR_SECUNDARIA`.
 
-    O segmento preenchido usa `COR_DESTAQUE` (o mesmo ciano do banner, de
-    `cabecalho_etapa` e do valor ecoado em `linha_de_decisao` — não
-    `COR_SUCESSO`: a barra mostra progresso em andamento, não um resultado
-    concluído) e o vazio `COR_SECUNDARIA` (o mesmo cinza fosco de texto de
-    segundo plano). Cada retângulo é um segmento discreto, unido direto ao
-    vizinho (sem espaçador) — não há mais um único caractere de transição
-    (`_SEPARADOR_BARRA`): com `▮`/`▯` como glifos individuais já estreitos, a
-    separação visual entre segmentos já nasce da própria
-    textura, sem precisar de um caractere extra dedicado a isso.
-
-    `.definir_total` existe para os casos em que o total só é conhecido
-    depois de iniciada a chamada (ex.: `extrair`, que lista as tabelas de
-    cada escopo internamente) — nesse caso, passe-o como `ao_conhecer_total=`
-    e a barra é desenhada assim que ele for chamado, antes do 1º item
-    concluído. Chamadores que já sabem o total (ex.: `aplicar_sobrescritas`,
-    com `len(tabelas)` em mãos) não usam `.definir_total` — a barra inicial
-    (0/total) já é desenhada aqui.
+    `.definir_total` existe para quando o total só é conhecido depois de
+    iniciada a chamada (ex.: `extrair`, que lista as tabelas de cada escopo
+    internamente) — a barra é desenhada assim que ele for chamado. Chamadores
+    que já sabem o total (ex.: `aplicar_sobrescritas`) não precisam dele; a
+    barra inicial (0/total) já é desenhada aqui.
 
     Args:
         mensagem_base: texto fixo exibido antes da contagem.
@@ -492,10 +387,6 @@ def progresso_paralelo(mensagem_base: str, total: int | None = None) -> Progress
             round(largura * concluidas / total_atual) if total_atual else 0
         )
         vazios = largura - preenchidos
-        # Cor embutida em cada segmento (não uma sequência ANSI só na
-        # transição) porque os retângulos são unidos direto, sem espaçador —
-        # um único par de blocos "cor + N repetições" como antes deixaria
-        # sem cor definida qualquer separador entre segmentos.
         segmentos = [f"{_cor_ansi_truecolor(COR_DESTAQUE)}{_BLOCO_CHEIO}"] * preenchidos
         segmentos += [f"{_cor_ansi_truecolor(COR_SECUNDARIA)}{_BLOCO_VAZIO}"] * vazios
         return "".join(segmentos) + _ANSI_RESET
@@ -540,13 +431,8 @@ def barra_indeterminada(mensagem: str) -> Generator[None, None, None]:
     r"""Anima um trecho de retângulos "correndo" ao lado da mensagem, sem N/total.
 
     Mesma estrutura de `ampulheta` (thread separada, `\r\x1b[K` redesenha a
-    linha) — a diferença é só visual: usa a mesma textura de retângulos
-    (`▮`/`▯`, `COR_DESTAQUE`) de `progresso_paralelo`, em vez do ícone de
-    ampulheta, para operações sem um total real por item a contar (ex.:
-    `analise.py::analisar`, que roda `compor()` numa única chamada opaca,
-    sem callback por Analisador — ver `ddf/pipeline/compor.py`). Uma fração
-    "N/total" ali mentiria um progresso que o código não tem como medir;
-    esta barra corre sem prometer conclusão, só sinaliza "ainda vivo".
+    linha), pra operações sem um total real por item a contar (ex.:
+    `analise.py::analisar`, que roda `compor()` numa única chamada opaca).
 
     Args:
         mensagem: texto exibido ao lado da barra.
