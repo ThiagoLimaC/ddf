@@ -127,7 +127,7 @@ def test_wizard_fluxo_completo_com_extrator_fake(
     monkeypatch.setattr(
         "questionary.checkbox", _fila_de_respostas([["public"], ["Markdown"]])
     )
-    monkeypatch.setattr("questionary.confirm", _fila_de_respostas([True]))
+    monkeypatch.setattr("questionary.confirm", _fila_de_respostas([True, False]))
     monkeypatch.setattr(
         "questionary.press_any_key_to_continue", _fila_de_respostas([True])
     )
