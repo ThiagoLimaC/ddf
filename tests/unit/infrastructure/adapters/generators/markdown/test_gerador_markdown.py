@@ -196,6 +196,30 @@ class TestFeliz:
         assert len(resultado.avisos) == 1
         assert "papel_de_negocio" in resultado.avisos[0].mensagem
 
+    def test_varias_tabelas_sem_papel_de_negocio_colapsam_em_um_aviso(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Várias tabelas sem papel_de_negocio geram um único Aviso com a contagem."""
+        tabelas = [
+            construir_tabela(
+                colunas=[construir_coluna()],
+                nome_tabela=f"tabela_{i}",
+                papel_de_negocio=None,
+            )
+            for i in range(3)
+        ]
+        banco = construir_banco(tabelas)
+
+        resultado = GeradorMarkdown()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        assert len(resultado.avisos) == 1
+        assert resultado.avisos[0].mensagem == "3 tabela(s) sem papel_de_negocio."
+
     def test_metrica_ausente_gera_placeholder_sem_quebrar(
         self,
         tmp_path: Path,

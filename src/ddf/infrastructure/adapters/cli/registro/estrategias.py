@@ -61,6 +61,13 @@ def _construir_percentual_de_linhas() -> EstrategiaDeAmostragem:
     Percentual fora de (0, 100] levanta ValidationError (Pydantic, mensagem
     em inglês) dentro de AmostragemProbabilistica — capturado aqui pra sair
     com mensagem em português, mesmo padrão de `ou_sair` (avisos.py).
+
+    Avisa uma vez, aqui na escolha da estratégia, que ela sempre varre a
+    tabela inteira (custo estrutural, igual nos dois Extratores) — não por
+    tabela extraída (`construir_metadados_de_amostra`), pra não repetir o
+    mesmo fato dezenas/centenas de vezes numa extração real. Informativo
+    (não bloqueia com `confirmar`): o default de 10% já protege contra o
+    pior caso por acidente.
     """
     percentual = prompts.numero(
         "Percentual de amostragem (0-100]:", float, default="10"
@@ -70,12 +77,19 @@ def _construir_percentual_de_linhas() -> EstrategiaDeAmostragem:
         int,
     )
     try:
-        return PercentualDeLinhas(percentual=percentual, seed=seed)
+        estrategia = PercentualDeLinhas(percentual=percentual, seed=seed)
     except ValidationError:
         prompts.imprimir_destacado(
             f"Erro: percentual deve estar em (0, 100] ({percentual}).", prompts.COR_ERRO
         )
         sys.exit(1)
+    print()
+    prompts.imprimir_destacado(
+        "▲ Amostragem por percentual varre a tabela inteira, independente "
+        "do percentual escolhido.",
+        prompts.COR_AVISO,
+    )
+    return estrategia
 
 
 def _construir_tabela_inteira() -> EstrategiaDeAmostragem:
@@ -97,23 +111,21 @@ def _construir_tabela_inteira() -> EstrategiaDeAmostragem:
 
 
 def _construir_amostragem_por_faixa() -> EstrategiaDeAmostragem:
-    """Confirma o trade-off de viés e monta AmostragemPorFaixa.
+    """Pergunta percentual e seed opcional, monta a AmostragemPorFaixa e avisa o viés.
 
     Mais barata que `PercentualDeLinhas` (custo ~proporcional ao
     percentual, não ao total de linhas), mas amostra por faixa/bloco em
     vez de linha — pode distorcer métricas em tabelas com padrão de
-    inserção em lote. A confirmação existe pra essa troca nunca ser
-    silenciosa, mesmo padrão de `_construir_tabela_inteira`.
+    inserção em lote.
+
+    Aviso informativo (não bloqueia com `confirmar`) depois de montar a
+    estratégia, substituindo o `Aviso` que `construir_metadados_de_amostra`
+    emitia por tabela pra RequisicaoPorFaixa. Motor-agnóstico de propósito:
+    o Extrator concreto ainda não foi escolhido/conectado quando o wizard
+    pergunta a estratégia, então cita só o efeito (viés de cluster), não o
+    mecanismo específico por motor (TABLESAMPLE SYSTEM no Postgres, faixas
+    de PK no MariaDB).
     """
-    prosseguir = prompts.confirmar(
-        "Amostragem por faixa é mais rápida em tabelas grandes, mas "
-        "amostra por faixa/bloco, não por linha — pode distorcer métricas "
-        "em tabelas alimentadas em lote ou particionadas por tempo. "
-        "Continuar?",
-        default=True,
-    )
-    if not prosseguir:
-        sys.exit(0)
     percentual = prompts.numero(
         "Percentual de amostragem (0-100]:", float, default="10"
     )
@@ -122,12 +134,20 @@ def _construir_amostragem_por_faixa() -> EstrategiaDeAmostragem:
         int,
     )
     try:
-        return AmostragemPorFaixa(percentual=percentual, seed=seed)
+        estrategia = AmostragemPorFaixa(percentual=percentual, seed=seed)
     except ValidationError:
         prompts.imprimir_destacado(
             f"Erro: percentual deve estar em (0, 100] ({percentual}).", prompts.COR_ERRO
         )
         sys.exit(1)
+    print()
+    prompts.imprimir_destacado(
+        "▲ Amostragem por faixa amostra por faixa/bloco, não por linha — "
+        "pode distorcer métricas em tabelas alimentadas em lote ou "
+        "particionadas por tempo.",
+        prompts.COR_AVISO,
+    )
+    return estrategia
 
 
 registrar_estrategia("Percentual de linhas", _construir_percentual_de_linhas)

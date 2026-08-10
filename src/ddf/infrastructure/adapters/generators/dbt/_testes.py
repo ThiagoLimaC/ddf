@@ -10,6 +10,7 @@ cruzado e forçaria editar dois arquivos toda vez que um threshold soft
 mudasse — mesma razão de mudança, um módulo só.
 """
 
+from dataclasses import dataclass
 from typing import Any
 
 from ddf.domain.model.analysis import (
@@ -17,14 +18,28 @@ from ddf.domain.model.analysis import (
     MetricasBaseColuna,
     TabelaAnalisada,
 )
-from ddf.domain.shared.aviso import Aviso
 from ddf.infrastructure.adapters.generators.comum._metricas import (
     _elegivel_para_enumeracao,
     _metrica_de_coluna,
 )
 from ddf.infrastructure.adapters.generators.dbt._sql import _nome_model
 
-_ORIGEM = "GeradorDbt"
+
+@dataclass
+class ContadoresDeAviso:
+    """Contagem de ocorrências de cada categoria de Aviso do GeradorDbt.
+
+    Substitui um `Aviso` por ocorrência (uma FK composta/polimórfica/fora
+    do lote por linha) por uma contagem — `GeradorDbt.__call__` agrega
+    cada categoria num único `Aviso` ao final, mesmo padrão de
+    `GeradorMarkdown`/`AnalisadorDeMetricasDeColuna`: um schema real com
+    muitas FKs assim geraria dezenas de avisos soltos, um por coluna.
+    """
+
+    fk_composta_fora_do_lote: int = 0
+    fk_polimorfica: int = 0
+    fk_fora_do_lote: int = 0
+
 
 # Testes "soft" — thresholds fixos, não configuráveis nesta v1.
 # Mais afastados da fronteira (10%/95%, não 5%/90%) de propósito: perto do
@@ -87,7 +102,7 @@ def _precisa_teste_soft_unico(
 def _sugestoes_de_teste(
     coluna: ColunaAnalisada,
     presentes: set[tuple[str, str]],
-    avisos: list[Aviso],
+    contadores: ContadoresDeAviso,
     tamanho_amostra: int,
     colunas_em_fk_composta: set[str],
 ) -> list[Any]:
@@ -117,8 +132,8 @@ def _sugestoes_de_teste(
         coluna: coluna analisada a avaliar.
         presentes: pares (nome_escopo, nome_tabela) de todas as tabelas do
             lote analisado nesta execução.
-        avisos: lista de avisos acumulada pelo Gerador, alimentada quando
-            uma FK referencia tabela fora do lote.
+        contadores: contadores de Aviso acumulados pelo Gerador, incrementados
+            quando uma FK é polimórfica ou referencia tabela fora do lote.
         tamanho_amostra: total de linhas amostradas da tabela desta coluna.
         colunas_em_fk_composta: nomes de coluna desta tabela que pertencem
             a alguma `RestricaoDeFkComposta` — suprime `relationships`
@@ -178,21 +193,7 @@ def _sugestoes_de_teste(
         and len(coluna.referencias) > 1
         and coluna.nome not in colunas_em_fk_composta
     ):
-        tabelas = ", ".join(
-            f"{referencia.nome_escopo}.{referencia.nome_tabela}"
-            for referencia in coluna.referencias
-        )
-        avisos.append(
-            Aviso(
-                mensagem=(
-                    f"Coluna '{coluna.nome}' tem {len(coluna.referencias)} FKs "
-                    f"distintas ({tabelas}) — relationships automático omitido "
-                    "(FK polimórfica sem discriminator). Teste manualmente com "
-                    "`where` se quiser validar cada relação."
-                ),
-                origem=_ORIGEM,
-            )
-        )
+        contadores.fk_polimorfica += 1
     elif (
         coluna.chave_estrangeira
         and len(coluna.referencias) == 1
@@ -212,17 +213,7 @@ def _sugestoes_de_teste(
                 }
             )
         else:
-            avisos.append(
-                Aviso(
-                    mensagem=(
-                        f"Coluna '{coluna.nome}' referencia "
-                        f"'{referencia.nome_escopo}.{referencia.nome_tabela}', fora "
-                        "do lote analisado nesta execução — teste relationships "
-                        "omitido."
-                    ),
-                    origem=_ORIGEM,
-                )
-            )
+            contadores.fk_fora_do_lote += 1
 
     elegivel = _elegivel_para_enumeracao(coluna, metrica, tamanho_amostra)
     if elegivel and metrica is not None:

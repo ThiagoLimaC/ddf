@@ -80,5 +80,5 @@ def aplicar_sobrescritas(
     prompts.imprimir_destacado(
         f"✓ {len(banco_curado.tabelas)} tabela(s) curada(s).", prompts.COR_SUCESSO
     )
-    print(f"⏱️  duração: {time.monotonic() - inicio:.0f}s")
+    print(f"duração: {time.monotonic() - inicio:.0f}s")
     return banco_curado

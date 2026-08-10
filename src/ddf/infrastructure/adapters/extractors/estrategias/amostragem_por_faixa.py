@@ -13,8 +13,10 @@ class AmostragemPorFaixa:
     primária no MariaDB). Em troca, sujeita a viés de cluster: linhas de uma
     mesma faixa contígua tendem a ser semelhantes, o que pode distorcer
     métricas calculadas sobre a amostra. Por isso é opt-in — nunca troca
-    silenciosa do default (`PercentualDeLinhas`) — e todo Extrator emite um
-    `Aviso` explicando o viés em toda extração que a usa.
+    silenciosa do default (`PercentualDeLinhas`) — e o aviso do viés sai uma
+    vez, na escolha da estratégia no wizard da CLI (`cli/registro/
+    estrategias.py::_construir_amostragem_por_faixa`), não mais como um
+    `Aviso` por tabela extraída.
     """
 
     def __init__(self, percentual: float, seed: int | None = None) -> None:
