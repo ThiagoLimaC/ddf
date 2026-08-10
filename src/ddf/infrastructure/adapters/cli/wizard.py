@@ -1,5 +1,6 @@
 """Wizard interativo do ddf — fluxo completo via click + questionary."""
 
+import logging
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -45,6 +46,21 @@ _BOAS_VINDAS = (
     "Bem-vindo ao ddf. As próximas etapas conectam a uma fonte de dados, extraem e curam a\n"
     "estrutura das tabelas e geram os artefatos de documentação escolhidos."
 )
+
+
+def _configurar_logging() -> None:
+    """Torna visível no terminal o log INFO+ de qualquer módulo do ddf.
+
+    O nível padrão do logger raiz do Python é WARNING, e nada mais no
+    processo registra um handler — sem isso, todo `logger.info(...)` de
+    Adapters (ex.: streaming ativado numa tabela grande) é descartado
+    silenciosamente antes de chegar a qualquer lugar visível.
+    """
+    logger_ddf = logging.getLogger("ddf")
+    logger_ddf.setLevel(logging.INFO)
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    logger_ddf.addHandler(handler)
 
 
 def _sair_se_vazio(itens: Sequence[object], mensagem: str) -> None:

@@ -20,6 +20,7 @@ def construir_metadados_de_amostra(
     origem: str,
     causa_provavel: str,
     identificador_tabela: str,
+    descricao_vies_por_faixa: str = "",
 ) -> tuple[MetadadosDeAmostra, list[Aviso]]:
     """Monta MetadadosDeAmostra e emite os Avisos de custo associados à estratégia.
 

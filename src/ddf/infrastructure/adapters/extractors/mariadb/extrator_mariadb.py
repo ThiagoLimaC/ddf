@@ -554,6 +554,15 @@ class ExtratorMariaDB:
                 origem="ExtratorMariaDB",
                 causa_provavel="sem ANALYZE TABLE recente",
                 identificador_tabela=f"{escopo}.{tabela}",
+                descricao_vies_por_faixa=(
+                    f"amostragem por {k_faixas} faixas contíguas de chave "
+                    "primária, não por bloco físico de disco — pode "
+                    "distorcer percentual_nulo/percentual_unico/"
+                    "valores_frequentes em tabelas com padrão de inserção "
+                    "em lote. Uma amostra verdadeiramente aleatória por PK "
+                    "exigiria uma consulta por linha amostrada, custo "
+                    "inviável em lote."
+                ),
             )
             avisos.extend(avisos_amostra)
             return Sucesso(
