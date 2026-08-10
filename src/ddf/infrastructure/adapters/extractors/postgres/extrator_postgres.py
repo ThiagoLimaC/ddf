@@ -4,9 +4,11 @@ import logging
 import threading
 from collections import defaultdict
 from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from typing import assert_never
 
+import polars as pl
 from psycopg2 import OperationalError, sql
 from psycopg2.extensions import connection as conexao_postgres
 from psycopg2.pool import ThreadedConnectionPool
@@ -32,9 +34,16 @@ from ddf.infrastructure.adapters.extractors.comum.construir_metadados_de_amostra
 from ddf.infrastructure.adapters.extractors.comum.construir_restricoes_fk_compostas import (  # noqa: E501
     construir_restricoes_fk_compostas,
 )
+from ddf.infrastructure.adapters.extractors.comum.leitura_paralela_intra_tabela import (  # noqa: E501
+    MINIMO_CONEXOES_PARALELISMO,
+    deve_paralelizar_leitura,
+    liberar_conexoes,
+    reservar_conexoes,
+)
 from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
     LARGURA_MEDIA_PADRAO_BYTES,
     calcular_tamanho_lote,
+    concatenar_particoes,
     deve_usar_streaming,
     ler_amostra_em_lotes,
     ler_amostra_fetchall,
@@ -44,6 +53,7 @@ from ddf.infrastructure.adapters.extractors.postgres._construcao import (
     _construir_coluna,
     _LinhaColuna,
     _MetadadosDoSchema,
+    particoes_de_blocos,
 )
 from ddf.infrastructure.adapters.extractors.postgres._queries import (
     _CHAVES_ESTRANGEIRAS_SCHEMA_SQL,
@@ -54,6 +64,8 @@ from ddf.infrastructure.adapters.extractors.postgres._queries import (
     _LISTAR_ESCOPOS_SQL,
     _LISTAR_TABELAS_SQL,
     _RESTRICOES_UNICAS_SCHEMA_SQL,
+    _TABELAS_PARTICIONADAS_SCHEMA_SQL,
+    _TOTAL_BLOCOS_TABELA_SQL,
     _TOTAL_LINHAS_SCHEMA_SQL,
 )
 
@@ -74,6 +86,7 @@ class ExtratorPostgres:
         configuracao: ConfiguracaoDeExtracao,
         max_conexoes: int = 8,
         connect_timeout: int = 50,
+        max_conexoes_por_tabela: int | None = None,
     ) -> None:
         """Guarda os parâmetros de conexão — o pool só é criado no primeiro uso.
 
@@ -88,21 +101,40 @@ class ExtratorPostgres:
                 host inacessível por firewall (pacote descartado, não
                 recusado) trava por um timeout de TCP do SO que pode passar
                 de um minuto, antes de qualquer mensagem de erro aparecer.
+            max_conexoes_por_tabela: teto de conexões que uma única tabela
+                grande tenta reservar do mesmo semáforo pra ler em paralelo
+                internamente. `None` (default) usa `min(4, max_conexoes)` —
+                nunca excede o orçamento total, mesmo com `max_conexoes`
+                pequeno (nesse caso a reserva simplesmente nunca atinge
+                `MINIMO_CONEXOES_PARALELISMO` e a tabela cai no caminho
+                sequencial, sem erro). Não exposto no wizard da CLI, mesmo
+                tratamento de `max_conexoes`/`connect_timeout`.
 
         Raises:
-            ValueError: se `max_conexoes` não for positivo.
+            ValueError: se `max_conexoes` não for positivo, ou se
+                `max_conexoes_por_tabela` for explicitado e não for
+                positivo ou exceder `max_conexoes`.
         """
         if max_conexoes <= 0:
             raise ValueError(f"max_conexoes deve ser positivo ({max_conexoes}).")
+        if max_conexoes_por_tabela is None:
+            max_conexoes_por_tabela = min(4, max_conexoes)
+        elif max_conexoes_por_tabela <= 0 or max_conexoes_por_tabela > max_conexoes:
+            raise ValueError(
+                "max_conexoes_por_tabela deve ser positivo e não exceder "
+                f"max_conexoes ({max_conexoes_por_tabela} vs. {max_conexoes})."
+            )
         self._dsn = dsn
         self._configuracao = configuracao
         self._max_conexoes = max_conexoes
         self._connect_timeout = connect_timeout
+        self._max_conexoes_por_tabela = max_conexoes_por_tabela
         self._pool: ThreadedConnectionPool | None = None
         self._semaforo = threading.Semaphore(max_conexoes)
         self._lock_pool = threading.Lock()
         self._cache_schemas: dict[str, _MetadadosDoSchema] = {}
         self._lock_cache_schemas = threading.Lock()
+        self._lock_reserva_paralelismo = threading.Lock()
 
     def _obter_pool(self) -> Resultado[ThreadedConnectionPool]:
         """Cria o pool sob demanda, pra falha de conexão virar Falha, não exceção."""
@@ -162,6 +194,34 @@ class ExtratorPostgres:
         finally:
             pool.putconn(conexao)
             self._semaforo.release()
+
+    @contextmanager
+    def _conexao_ja_reservada(
+        self, autocommit: bool = True
+    ) -> Generator[Resultado[conexao_postgres], None, None]:
+        """Empresta uma conexão do pool sem tocar no semáforo.
+
+        Uso restrito à leitura paralela intra-tabela: o orçamento de
+        conexões já foi reservado antes (via `reservar_conexoes`), fora
+        deste método — adquirir o semáforo de novo aqui dessincronizaria a
+        contagem do quanto está realmente em uso. Mesmo formato de
+        `_conexao`, só sem o `acquire`/`release`.
+        """
+        resultado_pool = self._obter_pool()
+        if isinstance(resultado_pool, Falha):
+            yield resultado_pool
+            return
+        pool = resultado_pool.valor
+        try:
+            conexao = pool.getconn()
+        except OperationalError as erro:
+            yield Falha(f"Não foi possível conectar: {erro}")
+            return
+        try:
+            conexao.autocommit = autocommit
+            yield Sucesso(conexao)
+        finally:
+            pool.putconn(conexao)
 
     def listar_escopos(self) -> Resultado[list[str]]:
         """Lista os escopos (schemas) disponíveis, ordenados por nome."""
@@ -286,6 +346,11 @@ class ExtratorPostgres:
                         nome_tabela for (nome_tabela,) in cursor.fetchall()
                     )
 
+                    cursor.execute(_TABELAS_PARTICIONADAS_SCHEMA_SQL, (schema,))
+                    tabelas_particionadas = frozenset(
+                        nome_tabela for (nome_tabela,) in cursor.fetchall()
+                    )
+
             metadados = _MetadadosDoSchema(
                 colunas_por_tabela=dict(colunas_por_tabela),
                 pks_por_tabela=dict(pks_por_tabela),
@@ -296,6 +361,7 @@ class ExtratorPostgres:
                 total_linhas_por_tabela=total_linhas_por_tabela,
                 largura_media_por_tabela=largura_media_por_tabela,
                 tabelas_com_coluna_comprimivel=tabelas_com_coluna_comprimivel,
+                tabelas_particionadas=tabelas_particionadas,
             )
             self._cache_schemas[schema] = metadados
             return Sucesso(metadados)
@@ -351,6 +417,198 @@ class ExtratorPostgres:
             return Sucesso(LARGURA_MEDIA_PADRAO_BYTES)
         return Sucesso(max(1, int(largura_media)))
 
+    def _total_blocos(self, schema: str, tabela: str) -> Resultado[int]:
+        """Total de blocos de 8KB da tabela, via `pg_relation_size`/`block_size`.
+
+        Só chamada quando a leitura paralela intra-tabela já foi decidida
+        como elegível — não faz parte do round-trip de metadados por
+        schema, que roda uma vez só e cobre todas as tabelas de uma vez.
+        """
+        with self._conexao() as resultado_conexao:
+            if isinstance(resultado_conexao, Falha):
+                return resultado_conexao
+            conexao = resultado_conexao.valor
+            with conexao.cursor() as cursor:
+                cursor.execute(_TOTAL_BLOCOS_TABELA_SQL, (schema, tabela))
+                linha = cursor.fetchone()
+        total_blocos = int(linha[0]) if linha and linha[0] is not None else 0
+        return Sucesso(total_blocos)
+
+    def _ler_particao_em_conexao(
+        self,
+        conexao: conexao_postgres,
+        schema: str,
+        tabela: str,
+        inicio: int,
+        fim: int | None,
+        linhas_estimadas: int,
+        largura_media_bytes: int,
+    ) -> pl.DataFrame:
+        """Lê uma faixa de `ctid` numa conexão/transação já aberta.
+
+        `linhas_estimadas` (tipicamente `total_linhas` dividido pelo nº de
+        faixas) decide streaming por faixa — uma faixa de uma tabela grande
+        ainda pode justificar `fetchmany` em lotes, mesmo que a decisão de
+        paralelizar já tenha sido tomada no nível da tabela inteira.
+        """
+        condicao = sql.SQL("ctid >= {}::tid").format(sql.Literal(f"({inicio},0)"))
+        if fim is not None:
+            condicao = sql.SQL("{} AND ctid < {}::tid").format(
+                condicao, sql.Literal(f"({fim},0)")
+            )
+        consulta = sql.SQL("SELECT * FROM {}.{} WHERE {}").format(
+            sql.Identifier(schema), sql.Identifier(tabela), condicao
+        )
+        usa_streaming = deve_usar_streaming(linhas_estimadas, largura_media_bytes)
+        if usa_streaming:
+            tamanho_lote = calcular_tamanho_lote(largura_media_bytes)
+            with conexao.cursor(name=f"particao_{schema}_{tabela}_{inicio}") as cursor:
+                cursor.itersize = tamanho_lote
+                cursor.execute(consulta)
+                return ler_amostra_em_lotes(cursor, tamanho_lote)
+        with conexao.cursor() as cursor:
+            cursor.execute(consulta)
+            return ler_amostra_fetchall(cursor)
+
+    def _ler_particao_com_snapshot(
+        self,
+        schema: str,
+        tabela: str,
+        inicio: int,
+        fim: int | None,
+        snapshot_id: str,
+        linhas_estimadas: int,
+        largura_media_bytes: int,
+    ) -> Resultado[pl.DataFrame]:
+        """Lê uma faixa numa conexão nova, sob o mesmo snapshot da líder.
+
+        Cada worker abre sua própria transação `REPEATABLE READ` e importa
+        o snapshot exportado pela conexão líder (`SET TRANSACTION
+        SNAPSHOT`) — enxerga exatamente o mesmo estado congelado da tabela
+        que ela, mesmo mecanismo usado pelo `pg_dump --jobs`. Comita assim
+        que termina de ler a própria faixa — só a líder precisa manter a
+        transação aberta até todas as faixas concluírem.
+        """
+        with self._conexao_ja_reservada(autocommit=False) as resultado_conexao:
+            if isinstance(resultado_conexao, Falha):
+                return resultado_conexao
+            conexao = resultado_conexao.valor
+            with conexao.cursor() as cursor:
+                cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                cursor.execute("SET TRANSACTION SNAPSHOT %s", (snapshot_id,))
+            amostra = self._ler_particao_em_conexao(
+                conexao,
+                schema,
+                tabela,
+                inicio,
+                fim,
+                linhas_estimadas,
+                largura_media_bytes,
+            )
+            conexao.commit()
+            return Sucesso(amostra)
+
+    def _ler_tabela_em_paralelo(
+        self,
+        schema: str,
+        tabela: str,
+        n: int,
+        total_linhas: int,
+        largura_media_bytes: int,
+    ) -> Resultado[pl.DataFrame]:
+        """Lê a tabela inteira via `n` conexões, cada uma numa faixa de `ctid`.
+
+        A conexão líder exporta um snapshot (`pg_export_snapshot`) antes de
+        qualquer faixa ser lida, e mantém a própria transação aberta até
+        todas as outras faixas terminarem — é o que sustenta o snapshot
+        vivo pras conexões seguintes importarem. A líder também lê uma
+        faixa própria (a primeira), em vez de só coordenar — com `n` no
+        mínimo `MINIMO_CONEXOES_PARALELISMO`, isso garante paralelismo real
+        mesmo no caso mínimo (líder + 1 worker).
+        """
+        resultado_blocos = self._total_blocos(schema, tabela)
+        if isinstance(resultado_blocos, Falha):
+            return resultado_blocos
+        total_blocos = resultado_blocos.valor
+        faixas = particoes_de_blocos(total_blocos, n)
+        linhas_estimadas_por_faixa = max(1, total_linhas // n)
+        _logger.warning(
+            "'%s.%s': dividindo em %d faixas de blocos (%d blocos no "
+            "total, ~%d blocos/faixa) para leitura paralela — todas as "
+            "faixas competem pelo mesmo storage físico; se o gargalo real "
+            "for I/O sequencial de disco (não CPU de decodificação), o "
+            "ganho de paralelizar aqui é limitado, mesmo com múltiplas "
+            "conexões.",
+            schema,
+            tabela,
+            n,
+            total_blocos,
+            total_blocos // n if n else total_blocos,
+        )
+
+        with self._conexao_ja_reservada(autocommit=False) as resultado_lider:
+            if isinstance(resultado_lider, Falha):
+                return resultado_lider
+            conexao_lider = resultado_lider.valor
+            try:
+                with conexao_lider.cursor() as cursor_lider:
+                    cursor_lider.execute(
+                        "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"
+                    )
+                    cursor_lider.execute("SELECT pg_export_snapshot()")
+                    linha_snapshot = cursor_lider.fetchone()
+                    assert linha_snapshot is not None
+                    snapshot_id = str(linha_snapshot[0])
+
+                resultados: dict[int, Resultado[pl.DataFrame]] = {}
+                inicio_lider, fim_lider = faixas[0]
+                resultados[0] = Sucesso(
+                    self._ler_particao_em_conexao(
+                        conexao_lider,
+                        schema,
+                        tabela,
+                        inicio_lider,
+                        fim_lider,
+                        linhas_estimadas_por_faixa,
+                        largura_media_bytes,
+                    )
+                )
+
+                if n > 1:
+                    with ThreadPoolExecutor(max_workers=n - 1) as executor:
+                        futuros = {
+                            executor.submit(
+                                self._ler_particao_com_snapshot,
+                                schema,
+                                tabela,
+                                inicio,
+                                fim,
+                                snapshot_id,
+                                linhas_estimadas_por_faixa,
+                                largura_media_bytes,
+                            ): indice
+                            for indice, (inicio, fim) in enumerate(faixas[1:], start=1)
+                        }
+                        for futuro in as_completed(futuros):
+                            indice = futuros[futuro]
+                            try:
+                                resultados[indice] = futuro.result()
+                            except Exception as erro:  # noqa: BLE001
+                                resultados[indice] = Falha(
+                                    f"Falha ao ler partição {indice} de "
+                                    f"'{schema}.{tabela}': {erro}"
+                                )
+            finally:
+                conexao_lider.commit()
+
+        falha = next(
+            (resultados[i] for i in range(n) if isinstance(resultados[i], Falha)), None
+        )
+        if falha is not None:
+            return falha
+        particoes = [resultados[i].valor for i in range(n)]  # type: ignore[union-attr]
+        return Sucesso(concatenar_particoes(particoes))
+
     def extrair_tabela(self, schema: str, tabela: str) -> Resultado[TabelaExtraida]:
         """Extrai estrutura, amostra e metadados de uma tabela específica."""
         resultado_estrategia = self._configuracao.estrategia_obrigatoria()
@@ -405,6 +663,67 @@ class ExtratorPostgres:
             if isinstance(resultado_largura, Falha):
                 return resultado_largura
             largura_media_bytes = resultado_largura.valor
+
+        # Paralelismo intra-tabela: só AmostragemIntegral por enquanto (via
+        # PercentualDeLinhas/AmostragemPorFaixa com percentual alto ainda
+        # não implementada — ver registry-plan da issue #126). Tabela
+        # particionada declarativamente nunca é elegível: pg_relation_size
+        # sobre a tabela-mãe não mapeia pra nada físico coerente.
+        particionada = tabela in metadados.tabelas_particionadas
+        elegivel_paralelo = (
+            not particionada
+            and isinstance(requisicao, AmostragemIntegral)
+            and deve_paralelizar_leitura(total_linhas, largura_media_bytes)
+        )
+        n_reservado = 0
+        if elegivel_paralelo:
+            n_reservado = reservar_conexoes(
+                self._semaforo,
+                self._lock_reserva_paralelismo,
+                self._max_conexoes_por_tabela,
+            )
+        if n_reservado >= MINIMO_CONEXOES_PARALELISMO:
+            _logger.info(
+                "'%s.%s': paralelismo intra-tabela ativado (~%d linhas, "
+                "%d conexões).",
+                schema,
+                tabela,
+                total_linhas,
+                n_reservado,
+            )
+            try:
+                resultado_leitura = self._ler_tabela_em_paralelo(
+                    schema, tabela, n_reservado, total_linhas, largura_media_bytes
+                )
+            finally:
+                liberar_conexoes(self._semaforo, n_reservado)
+            if isinstance(resultado_leitura, Falha):
+                return resultado_leitura
+            amostra_paralela = resultado_leitura.valor
+            metadados_amostra, avisos_amostra = construir_metadados_de_amostra(
+                nome=estrategia.nome,
+                requisicao=requisicao,
+                tamanho_amostra=len(amostra_paralela),
+                total_linhas=len(amostra_paralela),
+                origem="ExtratorPostgres",
+                causa_provavel="sem ANALYZE recente",
+                identificador_tabela=f"{schema}.{tabela}",
+            )
+            avisos.extend(avisos_amostra)
+            return Sucesso(
+                TabelaExtraida(
+                    nome_tabela=tabela,
+                    nome_escopo=schema,
+                    colunas=colunas,
+                    total_linhas=len(amostra_paralela),
+                    amostra=amostra_paralela,
+                    metadados_amostra=metadados_amostra,
+                    restricoes_unicas=restricoes_unicas,
+                    restricoes_fk_compostas=restricoes_fk_compostas,
+                ),
+                avisos=avisos,
+            )
+
         usa_streaming = deve_usar_streaming(total_linhas, largura_media_bytes)
         if usa_streaming:
             _logger.info(
