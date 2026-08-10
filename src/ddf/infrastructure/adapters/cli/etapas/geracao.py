@@ -7,7 +7,6 @@ from pathlib import Path
 from ddf.domain.model.analysis import BancoAnalisado
 from ddf.domain.shared.resultado import Falha
 from ddf.infrastructure.adapters.cli import prompts
-from ddf.infrastructure.adapters.cli.avisos import exibir_avisos
 from ddf.infrastructure.adapters.cli.registro.geradores import GERADORES_REGISTRADOS
 from ddf.pipeline.seguranca import executar_com_seguranca
 
@@ -48,24 +47,38 @@ def executar_geradores(
     diferentes no mesmo diretório quando mais de um é escolhido na mesma
     execução.
 
+    Avisos são exibidos como uma linha "▲ mensagem" logo acima da mensagem
+    de sucesso/falha daquele Gerador — mesmo padrão de `_construir_
+    percentual_de_linhas` (registro/estrategias.py) — em vez do bloco
+    agrupado por origem de `avisos.exibir_avisos`: a posição já deixa claro
+    a qual artefato o aviso pertence, sem precisar repetir o nome do
+    Gerador numa linha "[origem] N aviso(s)".
+
     Args:
         nomes_geradores: nomes dos Geradores escolhidos pelo usuário.
         banco_analisado: banco curado com as métricas já calculadas.
         destino: diretório raiz onde os artefatos são escritos.
     """
     houve_falha = False
+    print()
     for nome in nomes_geradores:
         gerador = GERADORES_REGISTRADOS[nome]
         destino_gerador = destino / _slugificar(nome)
         resultado = executar_com_seguranca(
             nome, lambda: gerador(banco_analisado, destino_gerador)
         )
-        exibir_avisos(resultado.avisos)
+        for aviso in resultado.avisos:
+            prompts.imprimir_destacado(f"▲ {aviso.mensagem}", prompts.COR_AVISO)
         if isinstance(resultado, Falha):
-            print(f"Falha em '{nome}': {resultado.erro}")
+            prompts.imprimir_destacado(
+                f"Falha em '{nome}': {resultado.erro}", prompts.COR_ERRO
+            )
             houve_falha = True
             continue
-        print(f"'{nome}': artefato(s) escrito(s) em '{destino_gerador.resolve()}'.")
+        prompts.imprimir_destacado(
+            f"✓ '{nome}': artefato escrito em '{destino_gerador.resolve()}'.",
+            prompts.COR_SUCESSO,
+        )
 
     if houve_falha:
         sys.exit(1)

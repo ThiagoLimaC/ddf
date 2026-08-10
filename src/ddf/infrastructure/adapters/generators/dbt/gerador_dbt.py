@@ -28,6 +28,7 @@ from ddf.infrastructure.adapters.generators.dbt._templates import (
     _CONTEUDO_UNIQUE_PERCENTAGE_AT_LEAST,
 )
 from ddf.infrastructure.adapters.generators.dbt._testes import (
+    ContadoresDeAviso,
     _precisa_composite_relationships,
     _precisa_dbt_utils,
     _precisa_matches_format,
@@ -83,11 +84,12 @@ class GeradorDbt:
             destino: diretório raiz do projeto dbt gerado.
 
         Returns:
-            Sucesso(None) com Aviso por FK que referencia tabela fora do
-            lote analisado, ou Falha na primeira escrita em disco que
-            falhar.
+            Sucesso(None) com um Aviso agregado por categoria (FK composta,
+            FK polimórfica, FK fora do lote) quando aplicável — não um
+            Aviso por ocorrência, ver `ContadoresDeAviso` — ou Falha na
+            primeira escrita em disco que falhar.
         """
-        avisos: list[Aviso] = []
+        contadores = ContadoresDeAviso()
         tabelas = sorted(entrada.tabelas, key=lambda t: (t.nome_escopo, t.nome_tabela))
         presentes = {(tabela.nome_escopo, tabela.nome_tabela) for tabela in tabelas}
         tabelas_por_escopo = _agrupar_por_escopo(tabelas)
@@ -193,7 +195,7 @@ class GeradorDbt:
             schema: dict[str, Any] = {
                 "version": 2,
                 "models": [
-                    _model_schema_yaml(tabela, presentes, avisos)
+                    _model_schema_yaml(tabela, presentes, contadores)
                     for tabela in tabelas_do_escopo
                 ],
             }
@@ -203,4 +205,37 @@ class GeradorDbt:
             if isinstance(resultado_schema, Falha):
                 return resultado_schema
 
+        avisos: list[Aviso] = []
+        if contadores.fk_composta_fora_do_lote:
+            avisos.append(
+                Aviso(
+                    mensagem=(
+                        f"{contadores.fk_composta_fora_do_lote} FK(s) composta(s) "
+                        "referenciam tabela fora do lote analisado — teste "
+                        "composite_relationships omitido."
+                    ),
+                    origem=_ORIGEM,
+                )
+            )
+        if contadores.fk_polimorfica:
+            avisos.append(
+                Aviso(
+                    mensagem=(
+                        f"{contadores.fk_polimorfica} coluna(s) com FK polimórfica "
+                        "(múltiplas referências sem discriminator) — teste "
+                        "relationships automático omitido."
+                    ),
+                    origem=_ORIGEM,
+                )
+            )
+        if contadores.fk_fora_do_lote:
+            avisos.append(
+                Aviso(
+                    mensagem=(
+                        f"{contadores.fk_fora_do_lote} coluna(s) referenciam tabela "
+                        "fora do lote analisado — teste relationships omitido."
+                    ),
+                    origem=_ORIGEM,
+                )
+            )
         return Sucesso(None, avisos=avisos)

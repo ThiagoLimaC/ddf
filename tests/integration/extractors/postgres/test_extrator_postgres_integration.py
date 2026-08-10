@@ -363,11 +363,10 @@ def test_extrair_tabela_com_fk_composta_pareia_colunas_corretamente(
             nome_escopo="geografia", nome_tabela="pais", nome_coluna="estado"
         )
     ]
-    # Não gera Aviso de FK composta espúrio — só o Aviso de custo, esperado
-    # para qualquer extração via PercentualDeLinhas (ver
-    # construir_metadados_de_amostra).
-    assert len(resultado.avisos) == 1
-    assert "varredura sequencial completa" in resultado.avisos[0].mensagem
+    # Não gera Aviso de FK composta espúrio nem nenhum outro — a varredura
+    # completa da AmostragemProbabilistica é avisada uma vez na escolha da
+    # estratégia, não por tabela (ver cli/registro/estrategias.py).
+    assert resultado.avisos == []
 
     # issue #95: as mesmas 2 colunas também formam uma RestricaoDeFkComposta,
     # apontando pra geografia.pais(codigo, estado) — a PK composta real.
@@ -444,10 +443,10 @@ def test_extrair_tabela_com_fk_polimorfica_mantem_as_duas_referencias(
             nome_escopo="polimorfismo", nome_tabela="fornecedores", nome_coluna="id"
         ),
     ]
-    # Único Aviso é o de varredura completa da AmostragemProbabilistica
-    # (fixture `configuracao`) — nenhum Aviso de FK descartada.
-    assert len(resultado.avisos) == 1
-    assert "varredura sequencial completa" in resultado.avisos[0].mensagem
+    # Nenhum Aviso de FK descartada — nem de varredura completa: a
+    # AmostragemProbabilistica avisa isso uma vez na escolha da estratégia,
+    # não por tabela.
+    assert resultado.avisos == []
 
 
 def test_coluna_array_com_valores_vazios_e_nulos_nao_quebra_analisador(
@@ -610,9 +609,10 @@ def test_amostragem_por_faixa_le_a_tabela_via_tablesample_system(dsn: str) -> No
     """Caminho feliz: AmostragemPorFaixa (issue #114) usa TABLESAMPLE SYSTEM real.
 
     percentual=100 torna a amostra determinística (TABLESAMPLE SYSTEM(100)
-    lê todas as páginas) — prova que o dispatch chega ao Postgres real e
-    emite o Aviso de viés por página física, sem depender da variância de
-    quantas linhas cabem em cada página amostrada.
+    lê todas as páginas) — prova que o dispatch chega ao Postgres real, sem
+    depender da variância de quantas linhas cabem em cada página amostrada.
+    Sem Aviso de viés por tabela (saiu na #116 — sai uma vez, na escolha da
+    estratégia no wizard).
     """
     configuracao = ConfiguracaoDeExtracao(estrategia=AmostragemPorFaixa(percentual=100))
     extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao)
@@ -623,8 +623,7 @@ def test_amostragem_por_faixa_le_a_tabela_via_tablesample_system(dsn: str) -> No
     assert resultado.valor.total_linhas == 500
     assert resultado.valor.metadados_amostra.tamanho_amostra == 500
     assert resultado.valor.metadados_amostra.estrategia == "amostragem_por_faixa"
-    assert len(resultado.avisos) == 1
-    assert "página física" in resultado.avisos[0].mensagem
+    assert resultado.avisos == []
 
 
 def test_amostragem_por_faixa_mesma_seed_produz_a_mesma_amostra(dsn: str) -> None:

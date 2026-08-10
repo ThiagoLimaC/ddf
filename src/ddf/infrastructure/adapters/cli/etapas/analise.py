@@ -1,8 +1,12 @@
 """Etapas 9-11 do wizard: escolha de Geradores, validação e análise."""
 
+import sys
+import time
+
 from ddf.domain.model.analysis import BancoAnalisado, iniciar_contexto
 from ddf.domain.model.curation import BancoCurado
 from ddf.domain.ports.analisador import Analisador
+from ddf.domain.shared.resultado import Falha
 from ddf.infrastructure.adapters.cli import prompts
 from ddf.infrastructure.adapters.cli.avisos import ou_sair
 from ddf.infrastructure.adapters.cli.registro.analisadores import (
@@ -37,9 +41,25 @@ def validar_selecao(nomes_geradores_escolhidos: list[str]) -> list[Analisador]:
 def analisar(
     analisadores_ordenados: list[Analisador], banco_curado: BancoCurado
 ) -> BancoAnalisado:
-    """Etapa 11: roda os Analisadores via compor(), monta o BancoAnalisado."""
+    """Etapa 11: roda os Analisadores via compor(), monta o BancoAnalisado.
+
+    Avisos são exibidos como uma linha "▲ mensagem" logo acima da mensagem
+    de sucesso — mesmo padrão de `geracao.py::executar_geradores` e de
+    `_construir_percentual_de_linhas` (registro/estrategias.py) — em vez do
+    bloco agrupado por origem de `avisos.exibir_avisos`.
+    """
     contexto = iniciar_contexto(banco_curado)
-    with prompts.ampulheta("Analisando..."):
+    inicio = time.monotonic()
+    with prompts.barra_indeterminada("Analisando..."):
         resultado = compor(*analisadores_ordenados)(contexto)
     print()
-    return ou_sair(resultado).analisado
+    print()
+    for aviso in resultado.avisos:
+        prompts.imprimir_destacado(f"▲ {aviso.mensagem}", prompts.COR_AVISO)
+    if isinstance(resultado, Falha):
+        prompts.imprimir_destacado(f"Erro: {resultado.erro}", prompts.COR_ERRO)
+        sys.exit(1)
+    banco_analisado = resultado.valor.analisado
+    prompts.imprimir_destacado("✓ Análise concluída.", prompts.COR_SUCESSO)
+    print(f"duração: {time.monotonic() - inicio:.0f}s")
+    return banco_analisado

@@ -140,10 +140,13 @@ Controla a query de amostragem por tabela. Plugável via
   linha pelo motor, colapsaria a amostra pro início do intervalo de PK,
   achado bloqueante da banca de revisão pós-#114) — sem PK inteira de
   coluna única, cai no fallback probabilístico de `PercentualDeLinhas`,
-  com Aviso explicando o motivo. Todo Extrator emite um `Aviso` de viés em
-  toda extração que a usa — nunca é o default, sempre opt-in explícito no
-  wizard. `MetadadosDeAmostra.estrategia` reflete o mecanismo efetivamente
-  usado (inclusive no fallback), não a Estrategia escolhida no wizard.
+  com Aviso explicando o motivo. O viés de cluster é avisado uma vez, na
+  escolha da estratégia no wizard da CLI — não mais um `Aviso` por tabela
+  extraída (issue #116: mesmo texto estrutural repetido dezenas/centenas de
+  vezes numa extração real era ruído puro). Nunca é o default, sempre
+  opt-in explícito. `MetadadosDeAmostra.estrategia` reflete o mecanismo
+  efetivamente usado (inclusive no fallback), não a Estrategia escolhida no
+  wizard.
 - O Port expõe `requisicao: RequisicaoDeAmostragem` (união fechada
   `AmostragemProbabilistica | AmostragemIntegral | RequisicaoPorFaixa`),
   não mais `percentual` solto — ver `low_level_design.md` para o

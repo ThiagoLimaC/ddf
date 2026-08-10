@@ -36,6 +36,20 @@ class _RespostaFake:
         return self.valor
 
 
+def _juntar_linhas(fragmentos: list[str]) -> list[str]:
+    """Reagrupa fragmentos de `questionary.print` em linhas de `linha_de_decisao`.
+
+    `linha_de_decisao` (`prompts.py`) imprime cada linha em 3 chamadas
+    (conector, rótulo, valor — cada um com sua própria cor); os testes deste
+    arquivo verificam o texto final, não a divisão por cor, então juntar os
+    fragmentos de 3 em 3 mantém a asserção legível como antes.
+    """
+    return [
+        " ".join(fragmentos[indice : indice + 3])
+        for indice in range(0, len(fragmentos), 3)
+    ]
+
+
 class ExtratorFake:
     """Extrator fake usado só para popular o registro nos testes."""
 
@@ -98,6 +112,54 @@ class TestFeliz:
 
         assert isinstance(extrator, ExtratorPostgres)
         assert extrator._dsn == "postgresql://user1:senha1@host1:5433/banco1"
+
+    def test_construir_extrator_postgres_imprime_arvore_de_decisao_no_final(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A árvore de decisão só aparece depois de coletado todo o parâmetro.
+
+        Senha mascarada com largura fixa ("****"), nunca em texto claro nem
+        com o comprimento real da senha — "senha-bem-longa-mesmo" tem 22
+        caracteres, e a máscara impressa continua "****". Intercepta
+        `questionary.print` (mesma técnica de `test_prompts.py`), em vez de
+        capturar stdout: `prompt_toolkit` escreve direto no terminal, sem
+        passar de forma confiável pela captura de `sys.stdout` do pytest.
+
+        Cada `linha_de_decisao` agora vira 3 chamadas a `questionary.print`
+        (conector, rótulo, valor — cada um com sua própria cor, ver
+        `prompts.imprimir_destacado`), por isso as linhas são reconstruídas
+        juntando os fragmentos antes de comparar.
+        """
+        respostas_texto = iter(["host1", "5433", "banco1", "user1", ""])
+        monkeypatch.setattr(
+            "questionary.text",
+            lambda *args, **kwargs: _RespostaFake(next(respostas_texto)),
+        )
+        monkeypatch.setattr(
+            "questionary.password",
+            lambda *args, **kwargs: _RespostaFake("senha-bem-longa-mesmo"),
+        )
+        chamadas: list[str] = []
+        monkeypatch.setattr(
+            "questionary.print",
+            lambda texto, style=None, end="\n": chamadas.append(texto),
+        )
+        configuracao = ConfiguracaoDeExtracao(
+            estrategia=PercentualDeLinhas(percentual=10)
+        )
+
+        _construir_extrator_postgres(configuracao)
+
+        assert not any("senha-bem-longa-mesmo" in chamada for chamada in chamadas)
+        assert _juntar_linhas(chamadas) == [
+            "├─ Fonte PostgreSQL",
+            "├─ Host host1",
+            "├─ Porta 5433",
+            "├─ Banco banco1",
+            "├─ Usuário user1",
+            "└─ Senha ****",
+        ]
 
     def test_formatar_host_com_hostname_devolve_sem_alteracao(
         self,
@@ -243,3 +305,45 @@ class TestBorda:
 
         assert isinstance(extrator, ExtratorPostgres)
         assert extrator._dsn == "postgresql://user1:senha1@[::1]:5432/banco1"
+
+    def test_construir_extrator_mariadb_imprime_arvore_de_decisao_no_final(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Mesmo comportamento do Postgres: árvore só no final, senha mascarada.
+
+        MariaDB não tem campo "Banco" na árvore — `ExtratorMariaDB` não pede
+        banco de dados nesta etapa (diferente do Postgres).
+
+        Cada `linha_de_decisao` vira 3 chamadas a `questionary.print` (ver
+        comentário equivalente no teste do Postgres); as linhas são
+        reconstruídas com `_juntar_linhas` antes de comparar.
+        """
+        respostas_texto = iter(["host1", "3307", "user1"])
+        monkeypatch.setattr(
+            "questionary.text",
+            lambda *args, **kwargs: _RespostaFake(next(respostas_texto)),
+        )
+        monkeypatch.setattr(
+            "questionary.password",
+            lambda *args, **kwargs: _RespostaFake("senha-bem-longa-mesmo"),
+        )
+        chamadas: list[str] = []
+        monkeypatch.setattr(
+            "questionary.print",
+            lambda texto, style=None, end="\n": chamadas.append(texto),
+        )
+        configuracao = ConfiguracaoDeExtracao(
+            estrategia=PercentualDeLinhas(percentual=10)
+        )
+
+        _construir_extrator_mariadb(configuracao)
+
+        assert not any("senha-bem-longa-mesmo" in chamada for chamada in chamadas)
+        assert _juntar_linhas(chamadas) == [
+            "├─ Fonte MariaDB",
+            "├─ Host host1",
+            "├─ Porta 3307",
+            "├─ Usuário user1",
+            "└─ Senha ****",
+        ]

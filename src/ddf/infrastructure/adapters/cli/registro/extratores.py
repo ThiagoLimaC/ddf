@@ -24,6 +24,10 @@ from ddf.infrastructure.adapters.extractors.postgres.extrator_postgres import (
 
 EXTRATORES_REGISTRADOS: dict[str, ExtratorRegistrado] = {}
 
+# Máscara de largura fixa para a senha na árvore de decisão — nunca
+# "*" * len(senha_conexao), que denunciaria o tamanho real da senha.
+_MASCARA_SENHA = "****"
+
 
 def registrar_extrator(
     nome: str,
@@ -72,17 +76,18 @@ def _formatar_host(host: str) -> str:
 def _construir_extrator_postgres(configuracao: ConfiguracaoDeExtracao) -> Extrator:
     """Pergunta host/porta/credenciais do Postgres e monta o ExtratorPostgres.
 
-    Campos separados (não uma connection string inteira) para que a senha
-    passe por `prompts.senha()` — mascarada, mesmo tratamento do MariaDB —
-    em vez de aparecer em texto claro na tela/scrollback do terminal.
-    Usuário/senha/banco passam por `quote` antes de compor a DSN: qualquer
-    um pode conter caracteres especiais de URL (`@`, `:`, `/`, `%`) que
-    quebrariam o formato se inseridos crus.
+    Campos separados (não uma connection string inteira) pra que a senha
+    passe por `prompts.senha()` — mascarada, em vez de aparecer em texto
+    claro na tela/scrollback. Usuário/senha/banco passam por `quote` antes
+    de compor a DSN, já que podem conter caracteres especiais de URL
+    (`@`, `:`, `/`, `%`).
 
-    Parâmetros extra (opcional) cobrem o que campos fixos não expressam —
-    principalmente `sslmode`, comum/exigido por Postgres gerenciado em
-    produção (RDS, Azure Database, PgBouncer na frente) — sem voltar a
-    pedir a connection string inteira em texto claro.
+    Parâmetros extra (opcional) cobrem o que os campos fixos não expressam
+    — principalmente `sslmode`, comum em Postgres gerenciado (RDS, Azure
+    Database, PgBouncer).
+
+    A árvore de decisão (Fonte/Host/Porta/Banco/Usuário/Senha) só é
+    impressa aqui no final, depois de coletado todo parâmetro.
     """
     host = prompts.texto("Host do Postgres:")
     porta = prompts.numero("Porta:", int, default="5432")
@@ -99,15 +104,33 @@ def _construir_extrator_postgres(configuracao: ConfiguracaoDeExtracao) -> Extrat
     )
     if parametros_extra:
         dsn += f"?{parametros_extra}"
+    print()
+    prompts.linha_de_decisao("Fonte", "PostgreSQL")
+    prompts.linha_de_decisao("Host", host)
+    prompts.linha_de_decisao("Porta", str(porta))
+    prompts.linha_de_decisao("Banco", banco)
+    prompts.linha_de_decisao("Usuário", usuario)
+    prompts.linha_de_decisao("Senha", _MASCARA_SENHA, ultimo=True)
     return ExtratorPostgres(dsn=dsn, configuracao=configuracao)
 
 
 def _construir_extrator_mariadb(configuracao: ConfiguracaoDeExtracao) -> Extrator:
-    """Pergunta host/porta/credenciais do MariaDB e monta o ExtratorMariaDB."""
+    """Pergunta host/porta/credenciais do MariaDB e monta o ExtratorMariaDB.
+
+    A árvore de decisão (Fonte/Host/Porta/Usuário/Senha) só é impressa aqui
+    no final, depois de coletado todo parâmetro — mesmo padrão de
+    `_construir_extrator_postgres`.
+    """
     host = prompts.texto("Host do MariaDB:")
     porta = prompts.numero("Porta:", int, default="3306")
     usuario = prompts.texto("Usuário:")
     senha_conexao = prompts.senha("Senha:")
+    print()
+    prompts.linha_de_decisao("Fonte", "MariaDB")
+    prompts.linha_de_decisao("Host", host)
+    prompts.linha_de_decisao("Porta", str(porta))
+    prompts.linha_de_decisao("Usuário", usuario)
+    prompts.linha_de_decisao("Senha", _MASCARA_SENHA, ultimo=True)
     return ExtratorMariaDB(
         host=host,
         port=porta,

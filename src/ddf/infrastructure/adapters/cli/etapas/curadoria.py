@@ -1,10 +1,13 @@
 """Etapas 6-8 do wizard: skeletons de sobrescrita, pausa e curadoria manual."""
 
+import sys
+import time
 from pathlib import Path
 
 from ddf.domain.model.curation import BancoCurado
 from ddf.domain.model.extraction import TabelaExtraida
 from ddf.domain.ports.orquestrador_de_tabelas import OrquestradorDeTabelas
+from ddf.domain.shared.resultado import Falha
 from ddf.infrastructure.adapters.cli import prompts
 from ddf.infrastructure.adapters.cli.avisos import ou_sair
 from ddf.infrastructure.adapters.overrides.sobrescrita_de_tabela import (
@@ -39,20 +42,28 @@ def _gerar_skeletons(
     só o efeito colateral em disco e os Avisos importam nesta passada; a
     curadoria de verdade vem da 2ª passada, em `aplicar_sobrescritas`, após
     o usuário editar os YAMLs.
+
+    Não usa `avisos.ou_sair` (que exibiria um Aviso por tabela criada/
+    atualizada) — com dezenas ou centenas de tabelas, essa lista vira ruído;
+    o efeito colateral em disco já é o que importa, resumido numa única
+    linha informativa em vez de um Aviso por arquivo.
     """
-    progresso, _definir_total = prompts.progresso_paralelo(
-        "Gerando skeletons de sobrescrita...", len(tabelas)
-    )
-    resultado = orquestrador.aplicar_sobrescritas(tabelas, sobrescrita, progresso)
+    with prompts.ampulheta("Gerando skeletons..."):
+        resultado = orquestrador.aplicar_sobrescritas(tabelas, sobrescrita)
     print()
-    ou_sair(resultado)
+    if isinstance(resultado, Falha):
+        prompts.imprimir_destacado(f"Erro: {resultado.erro}", prompts.COR_ERRO)
+        sys.exit(1)
 
     criados_ou_atualizados = len(resultado.avisos)
     preservados = len(tabelas) - criados_ou_atualizados
-    print(
+    mensagem = (
         f"{criados_ou_atualizados} skeleton(s) criado(s)/atualizado(s), "
         f"{preservados} preservado(s) sem mudança."
     )
+    if criados_ou_atualizados:
+        mensagem += " Preencha a curadoria e reexecute."
+    prompts.imprimir_destacado(f"✓ {mensagem}", prompts.COR_SUCESSO)
 
 
 def aplicar_sobrescritas(
@@ -61,9 +72,13 @@ def aplicar_sobrescritas(
     tabelas: list[TabelaExtraida],
 ) -> BancoCurado:
     """Etapa 8: reaplica a sobrescrita (já editada) em paralelo, gera o BancoCurado."""
-    progresso, _definir_total = prompts.progresso_paralelo(
-        "Aplicando sobrescritas...", len(tabelas)
-    )
-    resultado = orquestrador.aplicar_sobrescritas(tabelas, sobrescrita, progresso)
+    inicio = time.monotonic()
+    with prompts.ampulheta("Aplicando sobrescritas..."):
+        resultado = orquestrador.aplicar_sobrescritas(tabelas, sobrescrita)
     print()
-    return ou_sair(resultado)
+    banco_curado = ou_sair(resultado)
+    prompts.imprimir_destacado(
+        f"✓ {len(banco_curado.tabelas)} tabela(s) curada(s).", prompts.COR_SUCESSO
+    )
+    print(f"duração: {time.monotonic() - inicio:.0f}s")
+    return banco_curado

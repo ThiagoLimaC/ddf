@@ -14,18 +14,38 @@ from ddf.infrastructure.adapters.orchestrator.orquestrador_paralelo import (
     OrquestradorParalelo,
 )
 
-_BANNER = r"""
-      __      __     ___
-     /\ \    /\ \  /'___\
-     \_\ \   \_\ \/\ \__/
-     /'_` \  /'_` \ \ ,__\
-    /\ \L\ \/\ \L\ \ \ \_/
-    \ \___,_\ \___,_\ \_\
-     \/__,_ /\/__,_ /\/_/
+_TOTAL_ETAPAS = 11
 
-   data dictionary framework
-   by: Thiago Lima
+_BANNER = r"""
+
+                                  __...--~~~~~-._   _.-~~~~~--...__
+                                //               `V'               \\
+                               //                 |                 \\
+                              //__...--~~~~~~-._  |  _.-~~~~~~--...__\\
+                             //__.....----~~~~._\ | /_.~~~~----.....__\\
+                            ====================\\|//====================
+                                                `---`
+      
+                 ██████╗  █████╗ ████████╗ █████╗     ██████╗ ██╗ ██████╗████████╗
+                 ██╔══██╗██╔══██╗╚══██╔══╝██╔══██╗    ██╔══██╗██║██╔════╝╚══██╔══╝
+                 ██║  ██║███████║   ██║   ███████║    ██║  ██║██║██║        ██║
+                 ██║  ██║██╔══██║   ██║   ██╔══██║    ██║  ██║██║██║        ██║
+                 ██████╔╝██║  ██║   ██║   ██║  ██║    ██████╔╝██║╚██████╗   ██║
+                 ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝    ╚═════╝ ╚═╝ ╚═════╝   ╚═╝
+        
+        ───────────────────────────────────────────────────────────────────────────────────
+
+        > extração, curadoria e documentação versionável de bancos relacionais | [v1.0.0] <
+                        :: Construído por ThiagoLimaC // [ 6/8/2026 ] ::
+                                [ github.com/ThiagoLimaC/ddf ]
 """
+
+_BOAS_VINDAS = (
+    "\n"
+    "\n"
+    "Bem-vindo ao ddf. As próximas etapas conectam a uma fonte de dados, extraem e curam a\n"
+    "estrutura das tabelas e geram os artefatos de documentação escolhidos."
+)
 
 
 def _configurar_logging() -> None:
@@ -59,45 +79,73 @@ def _sair_se_vazio(itens: Sequence[object], mensagem: str) -> None:
 
 @click.command()
 def executar() -> None:
-    """Executa o wizard interativo do ddf, da conexão aos artefatos gerados."""
-    _configurar_logging()
+    """Executa o wizard interativo do ddf, da conexão aos artefatos gerados.
+
+    Descoberta de plugins roda uma única vez; as etapas 1-11 repetem a cada
+    "Executar novamente?" confirmado, sem precisar reiniciar o processo.
+    """
     prompts.imprimir_destacado(_BANNER, prompts.COR_DESTAQUE)
+    prompts.imprimir_destacado(_BOAS_VINDAS, prompts.COR_SECUNDARIA, negrito=False)
     avisos.exibir_avisos(
         descoberta.descobrir_extratores() + descoberta.descobrir_geradores()
     )
-    extrator, configuracao, escopos_disponiveis = extracao.conectar()
-    escopos = prompts.escolher_multiplos(
-        "Escolha um ou mais escopos:", escopos_disponiveis
-    )
-    extracao.configurar_amostragem(configuracao)
+    while True:
+        prompts.cabecalho_etapa(1, _TOTAL_ETAPAS, "Escolher fonte e conectar")
+        extrator, configuracao, escopos_disponiveis = extracao.conectar()
 
-    orquestrador = OrquestradorParalelo()
-    tabelas = extracao.extrair(orquestrador, extrator, escopos)
-    _sair_se_vazio(tabelas, "Nenhuma tabela extraída com sucesso.")
-
-    diretorio_overrides = Path(
-        prompts.texto(
-            "Diretório de overrides:", default="overrides", dica_limpar=True
+        prompts.cabecalho_etapa(2, _TOTAL_ETAPAS, "Escolher escopos")
+        escopos = prompts.escolher_multiplos(
+            "Escolha um ou mais escopos:", escopos_disponiveis
         )
-    ).expanduser()
-    sobrescrita = curadoria.curar(orquestrador, diretorio_overrides, tabelas)
 
-    banco_curado = curadoria.aplicar_sobrescritas(orquestrador, sobrescrita, tabelas)
-    _sair_se_vazio(banco_curado.tabelas, "Nenhuma tabela curada com sucesso.")
+        prompts.cabecalho_etapa(3, _TOTAL_ETAPAS, "Escolher estratégia de amostragem")
+        extracao.configurar_amostragem(configuracao)
 
-    nomes_geradores = analise.escolher_geradores()
-    analisadores_ordenados = analise.validar_selecao(nomes_geradores)
-    banco_analisado = analise.analisar(analisadores_ordenados, banco_curado)
+        prompts.cabecalho_etapa(4, _TOTAL_ETAPAS, "Extrair tabelas")
+        orquestrador = OrquestradorParalelo()
+        tabelas = extracao.extrair(orquestrador, extrator, escopos)
+        _sair_se_vazio(tabelas, "Nenhuma tabela extraída com sucesso.")
 
-    destino = Path(
-        prompts.texto(
-            "Diretório de destino dos artefatos:",
-            default="artefatos",
-            dica_limpar=True,
+        prompts.cabecalho_etapa(
+            5, _TOTAL_ETAPAS, "Gerar skeletons e pausar para curadoria"
         )
-    ).expanduser()
-    geracao.confirmar_execucao(nomes_geradores, destino)
-    geracao.executar_geradores(nomes_geradores, banco_analisado, destino)
+        diretorio_overrides = Path(
+            prompts.texto(
+                "Diretório de overrides:", default="overrides", dica_limpar=True
+            )
+        ).expanduser()
+        sobrescrita = curadoria.curar(orquestrador, diretorio_overrides, tabelas)
+
+        prompts.cabecalho_etapa(6, _TOTAL_ETAPAS, "Aplicar sobrescritas")
+        banco_curado = curadoria.aplicar_sobrescritas(
+            orquestrador, sobrescrita, tabelas
+        )
+        _sair_se_vazio(banco_curado.tabelas, "Nenhuma tabela curada com sucesso.")
+
+        prompts.cabecalho_etapa(7, _TOTAL_ETAPAS, "Escolher geradores")
+        nomes_geradores = analise.escolher_geradores()
+        analisadores_ordenados = analise.validar_selecao(nomes_geradores)
+
+        prompts.cabecalho_etapa(8, _TOTAL_ETAPAS, "Analisar")
+        banco_analisado = analise.analisar(analisadores_ordenados, banco_curado)
+
+        prompts.cabecalho_etapa(9, _TOTAL_ETAPAS, "Escolher destino")
+        destino = Path(
+            prompts.texto(
+                "Diretório de destino dos artefatos:",
+                default="artefatos",
+                dica_limpar=True,
+            )
+        ).expanduser()
+
+        prompts.cabecalho_etapa(10, _TOTAL_ETAPAS, "Confirmar execução")
+        geracao.confirmar_execucao(nomes_geradores, destino)
+
+        prompts.cabecalho_etapa(11, _TOTAL_ETAPAS, "Executar geradores")
+        geracao.executar_geradores(nomes_geradores, banco_analisado, destino)
+
+        if not prompts.confirmar("Executar novamente?", default=False):
+            break
 
 
 if __name__ == "__main__":

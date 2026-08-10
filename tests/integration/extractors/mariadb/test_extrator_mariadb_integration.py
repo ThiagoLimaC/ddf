@@ -331,10 +331,10 @@ def test_extrair_tabela_com_fk_polimorfica_mantem_as_duas_referencias(
             nome_escopo="polimorfismo", nome_tabela="fornecedores", nome_coluna="id"
         ),
     ]
-    # Único Aviso é o de varredura completa da AmostragemProbabilistica
-    # (fixture `configuracao`) — nenhum Aviso de FK descartada.
-    assert len(resultado.avisos) == 1
-    assert "varredura sequencial completa" in resultado.avisos[0].mensagem
+    # Nenhum Aviso de FK descartada — nem de varredura completa: a
+    # AmostragemProbabilistica avisa isso uma vez na escolha da estratégia,
+    # não por tabela.
+    assert resultado.avisos == []
 
 
 def test_extrair_tabela_com_constraint_de_mesmo_nome_em_outra_tabela_nao_confunde(
@@ -602,8 +602,9 @@ def test_amostragem_por_faixa_com_pk_integra_usa_uniao_de_faixas(
     assert resultado.valor.total_linhas == 500
     assert resultado.valor.metadados_amostra.estrategia == "amostragem_por_faixa"
     assert resultado.valor.metadados_amostra.tamanho_amostra > 0
-    assert len(resultado.avisos) == 1
-    assert "faixas contíguas de chave primária" in resultado.avisos[0].mensagem
+    # Sem Aviso de viés por tabela (saiu na #116) — sai uma vez, na escolha
+    # da estratégia no wizard.
+    assert resultado.avisos == []
 
     ids_amostrados = resultado.valor.amostra["id"].to_list()
     quartis_presentes = {min(3, (id_ - 1) // 125) for id_ in ids_amostrados}
