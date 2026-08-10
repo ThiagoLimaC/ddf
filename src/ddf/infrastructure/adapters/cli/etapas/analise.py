@@ -15,9 +15,11 @@ from ddf.pipeline.compor import compor
 
 def escolher_geradores() -> list[str]:
     """Etapa 9: escolhe um ou mais Geradores entre os registrados."""
-    return prompts.escolher_multiplos(
+    nomes_geradores = prompts.escolher_multiplos(
         "Escolha um ou mais geradores:", list(GERADORES_REGISTRADOS.keys())
     )
+    prompts.linha_de_decisao("Geradores", ", ".join(nomes_geradores))
+    return nomes_geradores
 
 
 def validar_selecao(nomes_geradores_escolhidos: list[str]) -> list[Analisador]:

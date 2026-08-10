@@ -41,7 +41,7 @@ def _gerar_skeletons(
     o usuário editar os YAMLs.
     """
     progresso, _definir_total = prompts.progresso_paralelo(
-        "Gerando skeletons de sobrescrita...", len(tabelas)
+        "Skeletons gerados", len(tabelas)
     )
     resultado = orquestrador.aplicar_sobrescritas(tabelas, sobrescrita, progresso)
     print()
@@ -62,7 +62,7 @@ def aplicar_sobrescritas(
 ) -> BancoCurado:
     """Etapa 8: reaplica a sobrescrita (já editada) em paralelo, gera o BancoCurado."""
     progresso, _definir_total = prompts.progresso_paralelo(
-        "Aplicando sobrescritas...", len(tabelas)
+        "Sobrescritas aplicadas", len(tabelas)
     )
     resultado = orquestrador.aplicar_sobrescritas(tabelas, sobrescrita, progresso)
     print()
