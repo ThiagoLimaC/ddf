@@ -1,5 +1,7 @@
 """Testes de ou_sair, exibir_avisos e _tipo_de_aviso."""
 
+from typing import Any
+
 import pytest
 
 from ddf.domain.shared.aviso import Aviso
@@ -24,15 +26,15 @@ class TestFeliz:
 
     def test_exibir_avisos_com_lista_vazia_nao_imprime_nada(
         self,
-        capsys: pytest.CaptureFixture[str],
+        interceptar_print: list[dict[str, Any]],
     ) -> None:
         """Lista vazia de Avisos não produz nenhuma saída."""
         exibir_avisos([])
 
-        assert capsys.readouterr().out == ""
+        assert interceptar_print == []
 
     def test_exibir_avisos_agrupa_por_origem(
-        self, capsys: pytest.CaptureFixture[str]
+        self, interceptar_print: list[dict[str, Any]]
     ) -> None:
         """Avisos de origens diferentes aparecem em grupos separados."""
         exibir_avisos(
@@ -44,9 +46,9 @@ class TestFeliz:
             ]
         )
 
-        saida = capsys.readouterr().out
-        assert "[SobrescritaDeTabela] 1 aviso(s):" in saida
-        assert "[AnalisadorDeColuna] 1 aviso(s):" in saida
+        textos = [chamada["texto"] for chamada in interceptar_print]
+        assert any("[SobrescritaDeTabela] 1 aviso(s):" in texto for texto in textos)
+        assert any("[AnalisadorDeColuna] 1 aviso(s):" in texto for texto in textos)
 
     def test_tipo_de_aviso_normaliza_identificador_e_numero(
         self,
@@ -62,14 +64,17 @@ class TestErro:
 
     def test_ou_sair_com_falha_imprime_erro_e_sai_com_codigo_1(
         self,
-        capsys: pytest.CaptureFixture[str],
+        interceptar_print: list[dict[str, Any]],
     ) -> None:
         """Falha imprime a mensagem de erro e sai com código 1."""
         with pytest.raises(SystemExit) as excinfo:
             ou_sair(Falha(erro="Não foi possível conectar"))
 
         assert excinfo.value.code == 1
-        assert "Não foi possível conectar" in capsys.readouterr().out
+        assert any(
+            "Não foi possível conectar" in chamada["texto"]
+            for chamada in interceptar_print
+        )
 
 
 class TestBorda:
@@ -77,7 +82,7 @@ class TestBorda:
 
     def test_ou_sair_com_sucesso_e_avisos_exibe_os_avisos_antes_de_devolver(
         self,
-        capsys: pytest.CaptureFixture[str],
+        interceptar_print: list[dict[str, Any]],
     ) -> None:
         """Sucesso com Avisos os exibe, mas ainda devolve o valor normalmente."""
         resultado = ou_sair(
@@ -85,11 +90,13 @@ class TestBorda:
         )
 
         assert resultado == "ok"
-        assert "amostra pequena" in capsys.readouterr().out
+        assert any(
+            "amostra pequena" in chamada["texto"] for chamada in interceptar_print
+        )
 
     def test_exibir_avisos_ate_o_limite_mostra_cada_mensagem_na_integra(
         self,
-        capsys: pytest.CaptureFixture[str],
+        interceptar_print: list[dict[str, Any]],
     ) -> None:
         """até 3 ocorrências do mesmo tipo, cada mensagem aparece por completo."""
         avisos = [
@@ -99,14 +106,14 @@ class TestBorda:
 
         exibir_avisos(avisos)
 
-        saida = capsys.readouterr().out
+        textos = [chamada["texto"] for chamada in interceptar_print]
         for i in range(3):
-            assert f"skeleton criado para 't{i}'" in saida
-        assert "(x3)" not in saida
+            assert any(f"skeleton criado para 't{i}'" in texto for texto in textos)
+        assert not any("(x3)" in texto for texto in textos)
 
     def test_exibir_avisos_acima_do_limite_condensa_com_contagem_total(
         self,
-        capsys: pytest.CaptureFixture[str],
+        interceptar_print: list[dict[str, Any]],
     ) -> None:
         """Acima do limite, condensa numa linha com a contagem total."""
         avisos = [
@@ -116,10 +123,10 @@ class TestBorda:
 
         exibir_avisos(avisos)
 
-        saida = capsys.readouterr().out
-        assert "skeleton criado para 't0'" in saida
-        assert "skeleton criado para 't3'" not in saida
-        assert "(x5)" in saida
+        textos = [chamada["texto"] for chamada in interceptar_print]
+        assert any("skeleton criado para 't0'" in texto for texto in textos)
+        assert not any("skeleton criado para 't3'" in texto for texto in textos)
+        assert any("(x5)" in texto for texto in textos)
 
     def test_tipo_de_aviso_preserva_mensagens_genuinamente_diferentes(
         self,

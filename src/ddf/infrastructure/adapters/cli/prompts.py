@@ -17,6 +17,13 @@ _QUADROS_AMPULHETA = ("⏳", "⌛")
 COR_DESTAQUE = "#00d7ff"
 COR_SUCESSO = "#00d700"
 
+# Vermelho/âmbar do mesmo cubo xterm 256 usado no resto da paleta (steps
+# 0x00/0x87/0xd7/0xff) — erro é sempre fatal para o passo atual (sys.exit ou
+# retry obrigatório); aviso é informativo, não interrompe o fluxo. Cores
+# distintas para não confundir as duas categorias visualmente.
+COR_ERRO = "#ff5f5f"
+COR_AVISO = "#d7af00"
+
 # Cinza fosco/dimmed para texto de contexto (ex.: mensagem de boas-vindas),
 # em segundo plano deliberado perante COR_DESTAQUE/COR_SUCESSO. Mesmo tom
 # usado por `gh` para texto secundário (`Gray()`, ANSI 256 cor 242 ≈ RGB
@@ -79,7 +86,9 @@ def numero(
         try:
             return conversor(resposta)
         except ValueError:
-            print(f"Erro: valor inválido ({resposta!r}). Tente novamente.")
+            imprimir_destacado(
+                f"Erro: valor inválido ({resposta!r}). Tente novamente.", COR_ERRO
+            )
 
 
 def numero_opcional(
@@ -99,7 +108,9 @@ def numero_opcional(
         try:
             return conversor(resposta)
         except ValueError:
-            print(f"Erro: valor inválido ({resposta!r}). Tente novamente.")
+            imprimir_destacado(
+                f"Erro: valor inválido ({resposta!r}). Tente novamente.", COR_ERRO
+            )
 
 
 def senha(mensagem: str) -> str:
@@ -503,3 +514,52 @@ def progresso_paralelo(mensagem_base: str, total: int | None = None) -> Progress
         _desenhar()
 
     return Progresso(callback=_callback, definir_total=_definir_total)
+
+
+_LARGURA_BARRA_INDETERMINADA = 12
+_TAMANHO_BLOCO_INDETERMINADO = 3
+
+
+@contextmanager
+def barra_indeterminada(mensagem: str) -> Generator[None, None, None]:
+    r"""Anima um trecho de retângulos "correndo" ao lado da mensagem, sem N/total.
+
+    Mesma estrutura de `ampulheta` (thread separada, `\r\x1b[K` redesenha a
+    linha) — a diferença é só visual: usa a mesma textura de retângulos
+    (`▮`/`▯`, `COR_DESTAQUE`) de `progresso_paralelo`, em vez do ícone de
+    ampulheta, para operações sem um total real por item a contar (ex.:
+    `analise.py::analisar`, que roda `compor()` numa única chamada opaca,
+    sem callback por Analisador — ver `ddf/pipeline/compor.py`). Uma fração
+    "N/total" ali mentiria um progresso que o código não tem como medir;
+    esta barra corre sem prometer conclusão, só sinaliza "ainda vivo".
+
+    Args:
+        mensagem: texto exibido ao lado da barra.
+    """
+    print()
+    parar = threading.Event()
+
+    def _quadro(posicao: int) -> str:
+        segmentos = [_BLOCO_VAZIO] * _LARGURA_BARRA_INDETERMINADA
+        for deslocamento in range(_TAMANHO_BLOCO_INDETERMINADO):
+            indice = (posicao + deslocamento) % _LARGURA_BARRA_INDETERMINADA
+            segmentos[indice] = _BLOCO_CHEIO
+        return "".join(segmentos)
+
+    def _animar() -> None:
+        posicao = 0
+        while not parar.is_set():
+            barra = (
+                f"{_cor_ansi_truecolor(COR_DESTAQUE)}{_quadro(posicao)}{_ANSI_RESET}"
+            )
+            print(f"\r\x1b[K{barra} {mensagem}", end="", flush=True)
+            posicao = (posicao + 1) % _LARGURA_BARRA_INDETERMINADA
+            time.sleep(0.08)
+
+    thread = threading.Thread(target=_animar, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        parar.set()
+        thread.join()

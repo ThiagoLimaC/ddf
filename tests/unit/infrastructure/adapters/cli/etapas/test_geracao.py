@@ -1,6 +1,7 @@
 """Testes das etapas 12-14 do wizard: destino, confirmação e execução dos Geradores."""
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -47,7 +48,7 @@ class TestFeliz:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
+        interceptar_print: list[dict[str, Any]],
     ) -> None:
         """Todos os Geradores escolhidos rodam com sucesso."""
         gerador_fake = GeradorFake(Sucesso(valor=None))
@@ -58,7 +59,10 @@ class TestFeliz:
 
         geracao.executar_geradores(["Markdown"], banco_analisado, tmp_path)
 
-        assert "'Markdown': artefato(s) escrito(s)" in capsys.readouterr().out
+        assert any(
+            "'Markdown': artefato escrito" in chamada["texto"]
+            for chamada in interceptar_print
+        )
         assert gerador_fake.destino_recebido == tmp_path / "markdown"
 
     def test_executar_geradores_escreve_cada_gerador_em_subpasta_propria(
@@ -105,7 +109,7 @@ class TestErro:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
+        interceptar_print: list[dict[str, Any]],
     ) -> None:
         """Falha de um Gerador é reportada e sai com código 1."""
         monkeypatch.setattr(
@@ -119,7 +123,10 @@ class TestErro:
             geracao.executar_geradores(["Dbt"], banco_analisado, tmp_path)
 
         assert excinfo.value.code == 1
-        assert "Falha em 'Dbt': permissão negada" in capsys.readouterr().out
+        assert any(
+            "Falha em 'Dbt': permissão negada" in chamada["texto"]
+            for chamada in interceptar_print
+        )
 
 
 class TestBorda:
@@ -129,7 +136,7 @@ class TestBorda:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
+        interceptar_print: list[dict[str, Any]],
     ) -> None:
         """Falha de um Gerador não impede os demais de rodar."""
         monkeypatch.setattr(
@@ -145,9 +152,9 @@ class TestBorda:
         with pytest.raises(SystemExit):
             geracao.executar_geradores(["Dbt", "Markdown"], banco_analisado, tmp_path)
 
-        saida = capsys.readouterr().out
-        assert "Falha em 'Dbt'" in saida
-        assert "'Markdown': artefato(s) escrito(s)" in saida
+        textos = [chamada["texto"] for chamada in interceptar_print]
+        assert any("Falha em 'Dbt'" in texto for texto in textos)
+        assert any("'Markdown': artefato escrito" in texto for texto in textos)
 
     def test_executar_geradores_converte_nome_camel_case_em_slug_snake_case(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

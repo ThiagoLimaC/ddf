@@ -13,7 +13,7 @@ from ddf.infrastructure.adapters.orchestrator.orquestrador_paralelo import (
     OrquestradorParalelo,
 )
 
-_TOTAL_ETAPAS = 12
+_TOTAL_ETAPAS = 11
 
 _BANNER = r"""
 
@@ -109,14 +109,12 @@ def executar() -> None:
 
     prompts.cabecalho_etapa(7, _TOTAL_ETAPAS, "Escolher geradores")
     nomes_geradores = analise.escolher_geradores()
-
-    prompts.cabecalho_etapa(8, _TOTAL_ETAPAS, "Validar analisadores e geradores")
     analisadores_ordenados = analise.validar_selecao(nomes_geradores)
 
-    prompts.cabecalho_etapa(9, _TOTAL_ETAPAS, "Analisar")
+    prompts.cabecalho_etapa(8, _TOTAL_ETAPAS, "Analisar")
     banco_analisado = analise.analisar(analisadores_ordenados, banco_curado)
 
-    prompts.cabecalho_etapa(10, _TOTAL_ETAPAS, "Escolher destino")
+    prompts.cabecalho_etapa(9, _TOTAL_ETAPAS, "Escolher destino")
     destino = Path(
         prompts.texto(
             "Diretório de destino dos artefatos:",
@@ -124,12 +122,11 @@ def executar() -> None:
             dica_limpar=True,
         )
     ).expanduser()
-    prompts.linha_de_decisao("Destino", str(destino))
 
-    prompts.cabecalho_etapa(11, _TOTAL_ETAPAS, "Confirmar execução")
+    prompts.cabecalho_etapa(10, _TOTAL_ETAPAS, "Confirmar execução")
     geracao.confirmar_execucao(nomes_geradores, destino)
 
-    prompts.cabecalho_etapa(12, _TOTAL_ETAPAS, "Executar geradores")
+    prompts.cabecalho_etapa(11, _TOTAL_ETAPAS, "Executar geradores")
     geracao.executar_geradores(nomes_geradores, banco_analisado, destino)
 
 

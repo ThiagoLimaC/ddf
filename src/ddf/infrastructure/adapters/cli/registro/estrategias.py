@@ -72,7 +72,9 @@ def _construir_percentual_de_linhas() -> EstrategiaDeAmostragem:
     try:
         return PercentualDeLinhas(percentual=percentual, seed=seed)
     except ValidationError:
-        print(f"Erro: percentual deve estar em (0, 100] ({percentual}).")
+        prompts.imprimir_destacado(
+            f"Erro: percentual deve estar em (0, 100] ({percentual}).", prompts.COR_ERRO
+        )
         sys.exit(1)
 
 
@@ -86,9 +88,7 @@ def _construir_tabela_inteira() -> EstrategiaDeAmostragem:
     nunca ser silenciosa.
     """
     prosseguir = prompts.confirmar(
-        "Tabela inteira carrega tudo em memória de uma vez "
-        "(sem limite de tamanho) — pode causar falta de memória em tabelas "
-        "muito grandes. Continuar?",
+        "Tabela inteira carrega tudo em memória, sem limite. Continuar?",
         default=True,
     )
     if not prosseguir:
@@ -124,7 +124,9 @@ def _construir_amostragem_por_faixa() -> EstrategiaDeAmostragem:
     try:
         return AmostragemPorFaixa(percentual=percentual, seed=seed)
     except ValidationError:
-        print(f"Erro: percentual deve estar em (0, 100] ({percentual}).")
+        prompts.imprimir_destacado(
+            f"Erro: percentual deve estar em (0, 100] ({percentual}).", prompts.COR_ERRO
+        )
         sys.exit(1)
 
 

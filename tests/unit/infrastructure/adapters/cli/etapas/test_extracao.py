@@ -165,13 +165,18 @@ class TestErro:
                 Falha(erro="senha incorreta"),
             ]
         )
+        registro = {
+            "Fake": ExtratorRegistrado(
+                classe_extrator=type(extrator_fake), construir=lambda cfg: extrator_fake
+            )
+        }
+        monkeypatch.setattr(extracao, "EXTRATORES_REGISTRADOS", registro)
         monkeypatch.setattr(
-            "ddf.infrastructure.adapters.cli.prompts.selecionar",
-            lambda *a: "Tentar novamente",
+            "ddf.infrastructure.adapters.cli.prompts.confirmar", lambda *a: True
         )
 
         with pytest.raises(SystemExit) as excinfo:
-            extracao._testar_conexao(extrator_fake)  # type: ignore[arg-type]
+            extracao._testar_conexao("Fake", ConfiguracaoDeExtracao())
 
         assert excinfo.value.code == 1
 
@@ -193,18 +198,53 @@ class TestErro:
 class TestBorda:
     """Bordas."""
 
-    def test_testar_conexao_usuario_escolhe_sair_antes_do_limite(
+    def test_testar_conexao_reconstroi_extrator_a_cada_tentativa(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """usuário escolhe 'Sair' após 1 falha, sem esperar as 3 tentativas."""
-        extrator_fake = ExtratorFake([Falha(erro="conexão recusada")])
+        """Falha não reusa a mesma credencial — reconstrói o Extrator no retry."""
+        extrator_falho = ExtratorFake([Falha(erro="senha incorreta")])
+        extrator_certo = ExtratorFake([Sucesso(valor=["public"])])
+        respostas_construir = iter([extrator_falho, extrator_certo])
         monkeypatch.setattr(
-            "ddf.infrastructure.adapters.cli.prompts.selecionar", lambda *a: "Sair"
+            extracao,
+            "EXTRATORES_REGISTRADOS",
+            {
+                "Fake": ExtratorRegistrado(
+                    classe_extrator=ExtratorFake,
+                    construir=lambda cfg: next(respostas_construir),
+                )
+            },
+        )
+        monkeypatch.setattr(
+            "ddf.infrastructure.adapters.cli.prompts.confirmar", lambda *a: True
+        )
+
+        extrator, escopos = extracao._testar_conexao(
+            "Fake", ConfiguracaoDeExtracao()
+        )
+
+        assert extrator is extrator_certo
+        assert escopos == ["public"]
+
+    def test_testar_conexao_usuario_recusa_tentar_novamente_antes_do_limite(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """usuário recusa tentar de novo após 1 falha, sem esperar as 3 tentativas."""
+        extrator_fake = ExtratorFake([Falha(erro="conexão recusada")])
+        registro = {
+            "Fake": ExtratorRegistrado(
+                classe_extrator=type(extrator_fake), construir=lambda cfg: extrator_fake
+            )
+        }
+        monkeypatch.setattr(extracao, "EXTRATORES_REGISTRADOS", registro)
+        monkeypatch.setattr(
+            "ddf.infrastructure.adapters.cli.prompts.confirmar", lambda *a: False
         )
 
         with pytest.raises(SystemExit) as excinfo:
-            extracao._testar_conexao(extrator_fake)  # type: ignore[arg-type]
+            extracao._testar_conexao("Fake", ConfiguracaoDeExtracao())
 
         assert excinfo.value.code == 1
 
