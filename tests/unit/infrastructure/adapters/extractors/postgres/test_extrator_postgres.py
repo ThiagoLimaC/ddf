@@ -72,6 +72,20 @@ class TestFeliz:
             minconn=1, maxconn=8, dsn="postgresql://fake", connect_timeout=50
         )
 
+    def test_max_conexoes_por_tabela_padrao_e_min_de_quatro_e_max_conexoes(
+        self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
+    ) -> None:
+        """Sem max_conexoes_por_tabela explícito, usa min(4, max_conexoes)."""
+        extrator_com_folga = ExtratorPostgres(
+            dsn="postgresql://fake", configuracao=configuracao, max_conexoes=8
+        )
+        extrator_apertado = ExtratorPostgres(
+            dsn="postgresql://fake", configuracao=configuracao, max_conexoes=2
+        )
+
+        assert extrator_com_folga._max_conexoes_por_tabela == 4
+        assert extrator_apertado._max_conexoes_por_tabela == 2
+
     def test_pool_e_reutilizado_entre_chamadas(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
     ) -> None:
@@ -147,6 +161,7 @@ class TestFeliz:
             [("pedidos", 1000.0)],  # total_linhas (schema inteiro)
             [("pedidos", 200)],  # largura_media (schema inteiro)
             [("pedidos",)],  # colunas comprimíveis (schema inteiro) — "nome"
+            [],  # tabelas particionadas — nenhuma
             [(1, "ana", 10), (2, "bia", 20)],  # amostra (só desta tabela)
         ]
         # "nome" é varchar (TOAST-ável) — extrair_tabela sonda a largura real
@@ -215,6 +230,7 @@ class TestFeliz:
             [("pedidos", 10.0), ("clientes", 5.0)],  # total_linhas
             [("pedidos", 200), ("clientes", 200)],  # largura_media (schema inteiro)
             [],  # colunas comprimíveis (schema inteiro) — nenhuma
+            [],  # tabelas particionadas — nenhuma
             [],  # amostra de "pedidos"
             [],  # amostra de "clientes"
         ]
@@ -229,8 +245,8 @@ class TestFeliz:
         assert isinstance(segunda, Sucesso)
         assert primeira.valor.total_linhas == 10
         assert segunda.valor.total_linhas == 5
-        # 7 queries de metadado (rodadas 1x só) + 1 amostra por tabela = 9.
-        assert cursor_fake.fetchall.call_count == 9
+        # 8 queries de metadado (rodadas 1x só) + 1 amostra por tabela = 10.
+        assert cursor_fake.fetchall.call_count == 10
         # 1 conexão pro cache de metadado (só na 1ª chamada) + 1 amostra por
         # tabela (2) = 3 — não 4, que seria o caso sem o cache reaproveitado.
         assert pool_classe_fake.return_value.putconn.call_count == 3
@@ -252,6 +268,7 @@ class TestFeliz:
             [("grande", 200_000.0)],  # total_linhas — acima de 100_000
             [("grande", 200)],  # largura_media
             [],  # colunas comprimíveis — nenhuma ("id" é int4)
+            [],  # tabelas particionadas — nenhuma
         ]
         cursor_fake.description = [("id",)]
         cursor_fake.fetchmany.side_effect = [[(1,), (2,)], []]
@@ -266,8 +283,8 @@ class TestFeliz:
         conexao_fake.cursor.assert_called_with(name="amostra_public_grande")
         assert cursor_fake.itersize == 50_000  # calcular_tamanho_lote(200)
         conexao_fake.commit.assert_called_once()
-        # 7 queries de metadado (fetchall) + amostra via fetchmany, não fetchall.
-        assert cursor_fake.fetchall.call_count == 7
+        # 8 queries de metadado (fetchall) + amostra via fetchmany, não fetchall.
+        assert cursor_fake.fetchall.call_count == 8
         assert "streaming ativado" in caplog.text
         assert "public.grande" in caplog.text
 
@@ -297,6 +314,7 @@ class TestErro:
             [("grande", 200_000.0)],  # total_linhas — acima do limiar
             [("grande", 200)],  # largura_media
             [],  # colunas comprimíveis — nenhuma ("id" é int4)
+            [],  # tabelas particionadas — nenhuma
         ]
         cursor_fake.description = [("id",)]
         cursor_fake.fetchmany.side_effect = OperationalError("conexão perdida")
@@ -322,6 +340,31 @@ class TestErro:
         with pytest.raises(ValueError, match="max_conexoes"):
             ExtratorPostgres(
                 dsn="postgresql://fake", configuracao=configuracao, max_conexoes=0
+            )
+
+    def test_max_conexoes_por_tabela_zero_levanta_value_error(
+        self,
+        configuracao: ConfiguracaoDeExtracao,
+    ) -> None:
+        """max_conexoes_por_tabela=0 não faz sentido — rejeitado cedo."""
+        with pytest.raises(ValueError, match="max_conexoes_por_tabela"):
+            ExtratorPostgres(
+                dsn="postgresql://fake",
+                configuracao=configuracao,
+                max_conexoes_por_tabela=0,
+            )
+
+    def test_max_conexoes_por_tabela_maior_que_max_conexoes_levanta_value_error(
+        self,
+        configuracao: ConfiguracaoDeExtracao,
+    ) -> None:
+        """Reservar mais que o orçamento total nunca seria satisfeito."""
+        with pytest.raises(ValueError, match="max_conexoes_por_tabela"):
+            ExtratorPostgres(
+                dsn="postgresql://fake",
+                configuracao=configuracao,
+                max_conexoes=4,
+                max_conexoes_por_tabela=5,
             )
 
     def test_extrair_tabela_sem_estrategia_configurada_retorna_falha(
@@ -441,6 +484,7 @@ class TestBorda:
             [("tabela", 100_000.0)],  # total_linhas — exatamente no limiar
             [("tabela", 200)],  # largura_media
             [],  # colunas comprimíveis — nenhuma ("id" é int4)
+            [],  # tabelas particionadas — nenhuma
             [(1,)],  # amostra
         ]
         cursor_fake.description = [("id",)]
@@ -453,6 +497,53 @@ class TestBorda:
         conexao_fake.cursor.assert_called_with()
         cursor_fake.fetchmany.assert_not_called()
         conexao_fake.commit.assert_not_called()
+
+    def test_tabela_particionada_nunca_ativa_paralelismo_mesmo_grande(
+        self,
+        pool_classe_fake: MagicMock,
+        configuracao_integral: ConfiguracaoDeExtracao,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """AmostragemIntegral + tabela grande não paraleliza se particionada.
+
+        `pg_relation_size`/`ctid` sobre a tabela-mãe não mapeia pra nada
+        físico coerente — mesmo com todos os outros critérios de
+        elegibilidade satisfeitos (estrategia certa, tabela grande o
+        bastante), a leitura paralela nunca é tentada.
+        """
+        conexao_fake = MagicMock()
+        cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
+        cursor_fake.fetchall.side_effect = [
+            [("tabela_grande", "id", "int4", None, None, None, "NO")],  # colunas
+            [("tabela_grande", "id")],  # PK
+            [],  # FK
+            [],  # UNIQUE
+            [("tabela_grande", 600_000.0)],  # total_linhas — acima do limiar
+            [("tabela_grande", 200)],  # largura_media
+            [],  # colunas comprimíveis — nenhuma ("id" é int4)
+            [("tabela_grande",)],  # tabelas particionadas — esta mesma
+        ]
+        cursor_fake.description = [("id",)]
+        cursor_fake.fetchmany.side_effect = [[(1,), (2,)], []]
+        pool_classe_fake.return_value.getconn.return_value = conexao_fake
+
+        extrator = ExtratorPostgres(
+            dsn="postgresql://fake", configuracao=configuracao_integral
+        )
+        chamou_paralelo = False
+
+        def _falha_se_chamado(*args: object, **kwargs: object) -> None:
+            nonlocal chamou_paralelo
+            chamou_paralelo = True
+
+        monkeypatch.setattr(extrator, "_ler_tabela_em_paralelo", _falha_se_chamado)
+
+        resultado = extrator.extrair_tabela("public", "tabela_grande")
+
+        assert isinstance(resultado, Sucesso)
+        assert chamou_paralelo is False
+        # Caiu no caminho sequencial/streaming normal (cursor nomeado).
+        conexao_fake.cursor.assert_called_with(name="amostra_public_tabela_grande")
 
     def test_connect_timeout_customizado_e_repassado_ao_pool(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao
@@ -508,6 +599,7 @@ class TestBorda:
             [("movimentos", 0.0)],  # total_linhas
             [("movimentos", 200)],  # largura_media (schema inteiro)
             [],  # colunas comprimíveis — nenhuma ("entidade_id" é int4)
+            [],  # tabelas particionadas — nenhuma
             [],  # amostra
         ]
         cursor_fake.description = [("entidade_id",)]
@@ -558,6 +650,7 @@ class TestBorda:
             [("enderecos", 0.0)],  # total_linhas
             [("enderecos", 200)],  # largura_media (schema inteiro)
             [("enderecos",)],  # colunas comprimíveis — as 3 são varchar
+            [],  # tabelas particionadas — nenhuma
             [],  # amostra
         ]
         cursor_fake.description = [
@@ -607,6 +700,7 @@ class TestBorda:
             [("pedidos", 0.0)],  # total_linhas
             [("pedidos", 200)],  # largura_media (schema inteiro)
             [],  # colunas comprimíveis — nenhuma (todas int4)
+            [],  # tabelas particionadas — nenhuma
             [],  # amostra
         ]
         cursor_fake.description = [
@@ -717,6 +811,7 @@ class TestBorda:
                 [("pedidos", 10.0)],  # total_linhas
                 [("pedidos", 200)],  # largura_media (schema inteiro)
                 [],  # colunas comprimíveis — nenhuma ("id" é int4)
+                [],  # tabelas particionadas — nenhuma
             ]
         )
 
@@ -745,7 +840,7 @@ class TestBorda:
         pode_prosseguir.set()
         thread_lenta.join(timeout=1)
 
-        assert cursor_fake.fetchall.call_count == 7
+        assert cursor_fake.fetchall.call_count == 8
         assert isinstance(resultado_concorrente, Sucesso)
         assert extrator._cache_schemas["public"] is resultado_concorrente.valor
 
@@ -777,6 +872,7 @@ class TestBorda:
             [("tabela_nova", -1.0)],  # total_linhas
             [("tabela_nova", 200)],  # largura_media (schema inteiro)
             [],  # colunas comprimíveis — nenhuma ("id" é int4)
+            [],  # tabelas particionadas — nenhuma
             [],  # amostra
         ]
         cursor_fake.description = [("id",)]
@@ -803,6 +899,7 @@ class TestBorda:
             [("tabela", 10.0)],  # total_linhas
             [],  # largura_media — sem linha nenhuma pra "tabela"
             [],  # colunas comprimíveis — nenhuma ("id" é int4)
+            [],  # tabelas particionadas — nenhuma
         ]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
@@ -826,6 +923,7 @@ class TestBorda:
             [("tabela", 10.0)],  # total_linhas
             [("tabela", 57)],  # largura_media — soma real de avg_width
             [],  # colunas comprimíveis — nenhuma ("id" é int4)
+            [],  # tabelas particionadas — nenhuma
         ]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
@@ -855,6 +953,7 @@ class TestBorda:
             [("tabela_recem_carregada", 1.0)],  # total_linhas desatualizado
             [("tabela_recem_carregada", 200)],  # largura_media (schema inteiro)
             [],  # colunas comprimíveis — nenhuma ("id" é int4)
+            [],  # tabelas particionadas — nenhuma
             [(1,), (2,)],  # amostra — 2 linhas
         ]
         cursor_fake.description = [("id",)]
@@ -890,6 +989,7 @@ class TestBorda:
             [("tabela", 3.0)],  # total_linhas de catálogo, desatualizado de propósito
             [("tabela", 200)],  # largura_media (schema inteiro)
             [],  # colunas comprimíveis — nenhuma ("id" é int4)
+            [],  # tabelas particionadas — nenhuma
             [(1,), (2,), (3,), (4,), (5,)],  # amostra — 5 linhas, a tabela inteira
         ]
         cursor_fake.description = [("id",)]
@@ -928,6 +1028,7 @@ class TestBorda:
             [("tabela", 100.0)],  # total_linhas
             [("tabela", 200)],  # largura_media (schema inteiro)
             [],  # colunas comprimíveis — nenhuma ("id" é int4)
+            [],  # tabelas particionadas — nenhuma
             [(1,)],  # amostra
         ]
         cursor_fake.description = [("id",)]
@@ -962,6 +1063,7 @@ class TestBorda:
             [("tabela", 100.0)],  # total_linhas
             [("tabela", 200)],  # largura_media (schema inteiro)
             [],  # colunas comprimíveis — nenhuma ("id" é int4)
+            [],  # tabelas particionadas — nenhuma
             [(1,)],  # amostra
         ]
         cursor_fake.description = [("id",)]
