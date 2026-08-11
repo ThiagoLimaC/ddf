@@ -482,24 +482,33 @@ class ExtratorPostgres:
         deste Extrator), que importa o mesmo snapshot via
         `pre_execution_query` (`SET TRANSACTION SNAPSHOT`). Preserva a
         mesma consistência entre faixas que o desenho anterior garantia.
+
+        `n` é o total de permits reservados do semáforo — a conexão líder
+        consome 1 deles (via `_conexao_ja_reservada`, que empresta do pool
+        sem tocar o semáforo de novo, assumindo que esse permit já está
+        contado aqui). Os `n - 1` restantes vão pro `connectorx`, senão o
+        uso real de conexões (`n` faixas + 1 líder) excederia o orçamento
+        que `reservar_conexoes` efetivamente reservou.
         """
+        n_faixas = n - 1
         resultado_blocos = self._total_blocos(schema, tabela)
         if isinstance(resultado_blocos, Falha):
             return resultado_blocos
         total_blocos = resultado_blocos.valor
-        faixas = particoes_de_blocos(total_blocos, n)
+        faixas = particoes_de_blocos(total_blocos, n_faixas)
         _logger.info(
             "'%s.%s': dividindo em %d faixas de blocos (%d blocos no "
             "total, ~%d blocos/faixa) para leitura paralela via "
-            "connectorx — todas as faixas competem pelo mesmo storage "
-            "físico; se o gargalo real for I/O sequencial de disco (não "
-            "CPU de decodificação), o ganho de paralelizar aqui é "
-            "limitado, mesmo com múltiplas conexões.",
+            "connectorx (+ 1 conexão líder pro snapshot) — todas as "
+            "faixas competem pelo mesmo storage físico; se o gargalo "
+            "real for I/O sequencial de disco (não CPU de decodificação), "
+            "o ganho de paralelizar aqui é limitado, mesmo com múltiplas "
+            "conexões.",
             schema,
             tabela,
-            n,
+            n_faixas,
             total_blocos,
-            total_blocos // n if n else total_blocos,
+            total_blocos // n_faixas if n_faixas else total_blocos,
         )
 
         with self._conexao_ja_reservada(autocommit=False) as resultado_lider:
