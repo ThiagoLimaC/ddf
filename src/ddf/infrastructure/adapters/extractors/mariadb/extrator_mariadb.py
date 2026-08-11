@@ -393,19 +393,19 @@ class ExtratorMariaDB:
             )
         )
 
-    def _ler_tabela_em_paralelo(
-        self, escopo: str, tabela: str, nome_pk: str, n: int
-    ) -> Resultado[pl.DataFrame]:
-        """Lê a tabela inteira via `connectorx`, uma faixa contígua de PK por conexão.
+    def _dominio_de_pk(
+        self, escopo: str, tabela: str, nome_pk: str
+    ) -> Resultado[tuple[int, int]]:
+        """Sonda `MIN`/`MAX` do PK via conexão normal, fora de qualquer reserva.
 
-        Sem conexão líder nem snapshot: diferente do `ExtratorPostgres`,
-        não há mecanismo de consistência entre faixas a coordenar aqui —
-        cada faixa de `connectorx` é só uma query independente contra o
-        mesmo `nome_pk` (risco aceito, ver
-        `_emitir_aviso_paralelismo_se_necessario`). `MIN`/`MAX` do PK
-        define o domínio a particionar; `particionar_faixas_exaustivas`
-        gera as faixas (mesmo algoritmo de `ctid` do Postgres, aplicado a
-        valor de PK em vez de bloco físico).
+        Chamado por `extrair_tabela` **antes** de `reservar_conexoes` —
+        nesse ponto o semáforo ainda não tem nenhum permit desta tabela
+        retido, então o `acquire`/`release` normal de `_conexao()` não
+        compete com nada que a própria call-stack já segure. Chamar isso
+        de dentro de `_ler_tabela_em_paralelo` (depois da reserva) causava
+        um self-deadlock real quando `n_reservado` esgotava o semáforo:
+        `_conexao()` ficava bloqueada esperando um permit que só a própria
+        thread, já travada, poderia devolver.
         """
         identificador_tabela = (
             f"{_quotar_identificador(escopo)}.{_quotar_identificador(tabela)}"
@@ -427,7 +427,34 @@ class ExtratorMariaDB:
                 f"'{escopo}.{tabela}': tabela vazia, não elegível a "
                 "paralelismo intra-tabela."
             )
+        return Sucesso((minimo, maximo))
 
+    def _ler_tabela_em_paralelo(
+        self,
+        escopo: str,
+        tabela: str,
+        nome_pk: str,
+        minimo: int,
+        maximo: int,
+        n: int,
+    ) -> Resultado[pl.DataFrame]:
+        """Lê a tabela inteira via `connectorx`, uma faixa contígua de PK por conexão.
+
+        Sem conexão líder nem snapshot: diferente do `ExtratorPostgres`,
+        não há mecanismo de consistência entre faixas a coordenar aqui —
+        cada faixa de `connectorx` é só uma query independente contra o
+        mesmo `nome_pk` (risco aceito, ver
+        `_emitir_aviso_paralelismo_se_necessario`). `minimo`/`maximo`
+        (domínio do PK) já vêm calculados por `_dominio_de_pk`, chamado
+        antes da reserva de conexões — ver docstring de lá.
+        `particionar_faixas_exaustivas` gera as faixas (mesmo algoritmo de
+        `ctid` do Postgres, aplicado a valor de PK em vez de bloco
+        físico).
+        """
+        identificador_tabela = (
+            f"{_quotar_identificador(escopo)}.{_quotar_identificador(tabela)}"
+        )
+        identificador_pk = _quotar_identificador(nome_pk)
         faixas = particionar_faixas_exaustivas(minimo, maximo, n)
         _logger.info(
             "'%s.%s': dividindo em %d faixas de PK '%s' (%d..%d) para "
@@ -536,6 +563,20 @@ class ExtratorMariaDB:
             else:
                 elegivel_paralelo = False
 
+        # Sonda MIN/MAX antes de reservar_conexoes, de propósito: fora da
+        # janela em que o semáforo tem permits desta tabela retidos, pra
+        # não arriscar self-deadlock (ver docstring de _dominio_de_pk).
+        dominio_pk: tuple[int, int] | None = None
+        if elegivel_paralelo:
+            assert pk_elegivel is not None
+            resultado_dominio = self._dominio_de_pk(
+                escopo, tabela, pk_elegivel.nome_coluna
+            )
+            if isinstance(resultado_dominio, Sucesso):
+                dominio_pk = resultado_dominio.valor
+            else:
+                elegivel_paralelo = False
+
         n_reservado = 0
         if elegivel_paralelo:
             n_reservado = reservar_conexoes(
@@ -545,6 +586,7 @@ class ExtratorMariaDB:
             )
         if n_reservado >= MINIMO_CONEXOES_PARALELISMO:
             assert pk_elegivel is not None
+            assert dominio_pk is not None
             _logger.info(
                 "'%s.%s': paralelismo intra-tabela ativado (~%d linhas, "
                 "%d conexões).",
@@ -554,9 +596,15 @@ class ExtratorMariaDB:
                 n_reservado,
             )
             self._emitir_aviso_paralelismo_se_necessario(avisos)
+            minimo, maximo = dominio_pk
             try:
                 resultado_leitura = self._ler_tabela_em_paralelo(
-                    escopo, tabela, pk_elegivel.nome_coluna, n_reservado
+                    escopo,
+                    tabela,
+                    pk_elegivel.nome_coluna,
+                    minimo,
+                    maximo,
+                    n_reservado,
                 )
             finally:
                 liberar_conexoes(self._semaforo, n_reservado)
