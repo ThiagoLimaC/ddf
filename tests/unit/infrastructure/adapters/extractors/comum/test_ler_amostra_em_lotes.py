@@ -6,6 +6,7 @@ import pytest
 
 from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
     calcular_tamanho_lote,
+    concatenar_particoes,
     ler_amostra_em_lotes,
 )
 
@@ -84,6 +85,25 @@ class TestFeliz:
 
         assert amostra.columns == ["id", "valor"]
 
+    def test_concatena_particoes_de_leitura_paralela(self) -> None:
+        """Mesmo merge de ler_amostra_em_lotes, mas com origem independente.
+
+        Simula o caso de uso novo (partições de uma leitura paralela
+        intra-tabela, não lotes de um único cursor sequencial) — mesma
+        função, DataFrames vindos de fontes diferentes.
+        """
+        particao_a = pl.DataFrame({"id": [1, 2], "valor": ["a", "b"]})
+        particao_b = pl.DataFrame({"id": [3, 4], "valor": ["c", "d"]})
+
+        amostra = concatenar_particoes([particao_a, particao_b])
+
+        assert amostra.to_dicts() == [
+            {"id": 1, "valor": "a"},
+            {"id": 2, "valor": "b"},
+            {"id": 3, "valor": "c"},
+            {"id": 4, "valor": "d"},
+        ]
+
 
 class TestBorda:
     """Casos de borda."""
@@ -159,6 +179,31 @@ class TestBorda:
 
         assert amostra["empresa_id"].to_list() == [None, None, 42]
 
+    def test_particoes_vazia_usa_schema_se_vazio(self) -> None:
+        """Nenhuma partição lida — cai no fallback de schema explícito."""
+        amostra = concatenar_particoes([], schema_se_vazio=["id", "valor"])
+
+        assert amostra.is_empty()
+        assert amostra.schema.names() == ["id", "valor"]
+
+    def test_particao_toda_nula_seguida_de_valor_real_nao_quebra_concat(self) -> None:
+        """Mesma tolerância de `Null` vs. tipo real, agora fora do streaming.
+
+        Uma partição de leitura paralela pode calhar de não ter nenhuma
+        linha com valor não-nulo numa coluna nulável (faixa "azarada") —
+        mesmo risco de schema já coberto pra lotes de streaming, agora
+        também precisa valer pra partições.
+        """
+        particao_so_nulos = pl.DataFrame(
+            {"id": [1, 2], "empresa_id": [None, None]},
+            schema={"id": pl.Int64, "empresa_id": pl.Null},
+        )
+        particao_com_valor = pl.DataFrame({"id": [3], "empresa_id": [42]})
+
+        amostra = concatenar_particoes([particao_so_nulos, particao_com_valor])
+
+        assert amostra["empresa_id"].to_list() == [None, None, 42]
+
 
 class TestErro:
     """Divergência de schema entre lotes que não envolve `Null`."""
@@ -177,3 +222,13 @@ class TestErro:
 
         with pytest.raises(pl.exceptions.SchemaError):
             ler_amostra_em_lotes(cursor, tamanho_lote=1)
+
+    def test_dtypes_incompativeis_entre_particoes_propaga_erro(self) -> None:
+        """Mesma checagem de `test_dtypes_incompativeis_entre_lotes_propaga_erro`,
+        agora chamando `concatenar_particoes` diretamente.
+        """  # noqa: D205
+        particao_a = pl.DataFrame({"id": [1], "valor": [42]})
+        particao_b = pl.DataFrame({"id": [2], "valor": ["texto"]})
+
+        with pytest.raises(pl.exceptions.SchemaError):
+            concatenar_particoes([particao_a, particao_b])
