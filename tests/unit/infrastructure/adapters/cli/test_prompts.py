@@ -383,6 +383,30 @@ class TestBorda:
 
         assert excinfo.value.code == 0
 
+    def test_escolher_multiplos_permite_vazio_devolve_lista_vazia(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """permite_vazio=True devolve [] em vez de sair, para o chamador decidir."""
+        _substituir(monkeypatch, "checkbox", [])
+
+        assert (
+            prompts.escolher_multiplos("Escolha:", ["Markdown"], permite_vazio=True)
+            == []
+        )
+
+    def test_escolher_multiplos_permite_vazio_cancelado_ainda_sai(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Cancelamento (None) sai limpo mesmo com permite_vazio=True."""
+        _substituir(monkeypatch, "checkbox", None)
+
+        with pytest.raises(SystemExit) as excinfo:
+            prompts.escolher_multiplos("Escolha:", ["Markdown"], permite_vazio=True)
+
+        assert excinfo.value.code == 0
+
     def test_linha_de_decisao_usa_o_mesmo_conector_por_padrao_mesmo_na_ultima_chamada(
         self,
         interceptar_print: list[dict[str, Any]],

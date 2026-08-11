@@ -15,7 +15,7 @@ from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.model.curation import BancoCurado, ColunaCurada, TabelaCurada
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
 from ddf.domain.shared.aviso import Aviso
-from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
+from ddf.domain.shared.resultado import Resultado, Sucesso
 from ddf.infrastructure.adapters.orchestrator.orquestrador_paralelo import (
     OrquestradorParalelo,
 )
@@ -49,20 +49,18 @@ def _tabela_com_colunas(
 class TestFeliz:
     """Caminho feliz."""
 
-    def test_extrair_lista_e_extrai_tabelas_ordenadas(
+    def test_extrair_extrai_tabelas_ordenadas(
         self,
         construir_extrator_fake: Callable[..., ExtratorFake],
     ) -> None:
-        """Extrai tabelas de múltiplos escopos, resultado ordenado."""
-        extrator = construir_extrator_fake(
-            {
-                "vendas": Sucesso([("vendas", "pedidos"), ("vendas", "clientes")]),
-                "estoque": Sucesso([("estoque", "produtos")]),
-            }
-        )
+        """Extrai os pares informados, resultado ordenado por (escopo, tabela)."""
+        extrator = construir_extrator_fake({})
         orquestrador = OrquestradorParalelo(max_trabalhadores=4)
 
-        resultado = orquestrador.extrair(["vendas", "estoque"], extrator)
+        resultado = orquestrador.extrair(
+            [("vendas", "pedidos"), ("vendas", "clientes"), ("estoque", "produtos")],
+            extrator,
+        )
 
         assert isinstance(resultado, Sucesso)
         assert resultado.avisos == []
@@ -178,7 +176,7 @@ class TestFeliz:
             ],
         )
         extrator = construir_extrator_fake(
-            {"vendas": Sucesso([("vendas", "pedidos"), ("vendas", "estados")])},
+            {},
             tabelas_customizadas={
                 ("vendas", "pedidos"): pedidos,
                 ("vendas", "estados"): estados,
@@ -186,7 +184,9 @@ class TestFeliz:
         )
         orquestrador = OrquestradorParalelo(max_trabalhadores=4)
 
-        resultado = orquestrador.extrair(["vendas"], extrator)
+        resultado = orquestrador.extrair(
+            [("vendas", "pedidos"), ("vendas", "estados")], extrator
+        )
 
         assert isinstance(resultado, Sucesso)
         assert resultado.avisos == []
@@ -208,12 +208,14 @@ class TestErro:
     ) -> None:
         """Uma tabela falha entre várias — sucesso parcial com Aviso."""
         extrator = construir_extrator_fake(
-            {"vendas": Sucesso([("vendas", "pedidos"), ("vendas", "clientes")])},
+            {},
             {("vendas", "clientes"): "conexão perdida"},
         )
         orquestrador = OrquestradorParalelo(max_trabalhadores=4)
 
-        resultado = orquestrador.extrair(["vendas"], extrator)
+        resultado = orquestrador.extrair(
+            [("vendas", "pedidos"), ("vendas", "clientes")], extrator
+        )
 
         assert isinstance(resultado, Sucesso)
         identificadores = [(t.nome_escopo, t.nome_tabela) for t in resultado.valor]
@@ -237,14 +239,16 @@ class TestErro:
         demais tabelas seguindo extraídas normalmente.
         """
         extrator = construir_extrator_fake(
-            {"vendas": Sucesso([("vendas", "pedidos"), ("vendas", "clientes")])},
+            {},
             excecoes_de_extracao={
                 ("vendas", "clientes"): ValueError("dtype não suportado")
             },
         )
         orquestrador = OrquestradorParalelo(max_trabalhadores=4)
 
-        resultado = orquestrador.extrair(["vendas"], extrator)
+        resultado = orquestrador.extrair(
+            [("vendas", "pedidos"), ("vendas", "clientes")], extrator
+        )
 
         assert isinstance(resultado, Sucesso)
         identificadores = [(t.nome_escopo, t.nome_tabela) for t in resultado.valor]
@@ -254,34 +258,6 @@ class TestErro:
         assert "vendas.clientes" in mensagem
         assert "ValueError" in mensagem
         assert "dtype não suportado" in mensagem
-
-    def test_extrair_com_falha_de_listagem_de_escopo_acumula_como_aviso(
-        self,
-        construir_extrator_fake: Callable[..., ExtratorFake],
-    ) -> None:
-        """Escopo com erro de listagem acumula, não aborta os demais."""
-        extrator = construir_extrator_fake(
-            {
-                "vendas": Sucesso([("vendas", "pedidos")]),
-                "financeiro_typo": Falha("Escopo 'financeiro_typo' não encontrado."),
-            }
-        )
-        orquestrador = OrquestradorParalelo(max_trabalhadores=4)
-
-        resultado = orquestrador.extrair(["vendas", "financeiro_typo"], extrator)
-
-        assert isinstance(resultado, Sucesso)
-        identificadores = [(t.nome_escopo, t.nome_tabela) for t in resultado.valor]
-        assert identificadores == [("vendas", "pedidos")]
-        assert resultado.avisos == [
-            Aviso(
-                mensagem=(
-                    "Falha ao listar tabelas de 'financeiro_typo': "
-                    "Escopo 'financeiro_typo' não encontrado."
-                ),
-                origem="OrquestradorParalelo",
-            )
-        ]
 
     def test_aplicar_sobrescritas_com_falha_devolve_sucesso_parcial(
         self,
@@ -318,11 +294,11 @@ class TestErro:
 class TestBorda:
     """Bordas."""
 
-    def test_extrair_lista_de_escopos_vazia_retorna_sucesso_vazio(
+    def test_extrair_pares_vazio_retorna_sucesso_vazio(
         self,
         construir_extrator_fake: Callable[..., ExtratorFake],
     ) -> None:
-        """Lista de escopos vazia retorna Sucesso com lista vazia."""
+        """Lista de pares vazia retorna Sucesso com lista vazia."""
         extrator = construir_extrator_fake({})
         orquestrador = OrquestradorParalelo(max_trabalhadores=4)
 
@@ -348,39 +324,19 @@ class TestBorda:
     ) -> None:
         """Progresso é chamado uma vez por tabela, sucesso ou falha."""
         extrator = construir_extrator_fake(
-            {"vendas": Sucesso([("vendas", "pedidos"), ("vendas", "clientes")])},
+            {},
             {("vendas", "clientes"): "conexão perdida"},
         )
         orquestrador = OrquestradorParalelo(max_trabalhadores=4)
         chamadas: list[str] = []
 
-        orquestrador.extrair(["vendas"], extrator, progresso=chamadas.append)
+        orquestrador.extrair(
+            [("vendas", "pedidos"), ("vendas", "clientes")],
+            extrator,
+            progresso=chamadas.append,
+        )
 
         assert sorted(chamadas) == ["vendas.clientes", "vendas.pedidos"]
-
-    def test_extrair_chama_ao_conhecer_total_com_o_total_real_a_extrair(
-        self,
-        construir_extrator_fake: Callable[..., ExtratorFake],
-    ) -> None:
-        """ao_conhecer_total recebe o nº de pares após a listagem interna.
-
-        Escopo com falha de listagem não entra na contagem — só os pares que
-        de fato serão extraídos (issue #75, elimina listagem duplicada na CLI).
-        """
-        extrator = construir_extrator_fake(
-            {
-                "vendas": Sucesso([("vendas", "pedidos"), ("vendas", "clientes")]),
-                "financeiro_typo": Falha("Escopo 'financeiro_typo' não encontrado."),
-            }
-        )
-        orquestrador = OrquestradorParalelo(max_trabalhadores=4)
-        totais: list[int] = []
-
-        orquestrador.extrair(
-            ["vendas", "financeiro_typo"], extrator, ao_conhecer_total=totais.append
-        )
-
-        assert totais == [2]
 
     def test_aplicar_sobrescritas_chama_progresso_uma_vez_por_tabela_concluida(
         self,
@@ -437,7 +393,7 @@ class TestBorda:
             ],
         )
         extrator = construir_extrator_fake(
-            {"vendas": Sucesso([("vendas", "pedidos"), ("vendas", "estados")])},
+            {},
             tabelas_customizadas={
                 ("vendas", "pedidos"): pedidos,
                 ("vendas", "estados"): estados,
@@ -445,7 +401,9 @@ class TestBorda:
         )
         orquestrador = OrquestradorParalelo(max_trabalhadores=4)
 
-        resultado = orquestrador.extrair(["vendas"], extrator)
+        resultado = orquestrador.extrair(
+            [("vendas", "pedidos"), ("vendas", "estados")], extrator
+        )
 
         assert isinstance(resultado, Sucesso)
         assert len(resultado.avisos) == 1
@@ -483,12 +441,12 @@ class TestBorda:
             ],
         )
         extrator = construir_extrator_fake(
-            {"vendas": Sucesso([("vendas", "pedidos")])},
+            {},
             tabelas_customizadas={("vendas", "pedidos"): pedidos},
         )
         orquestrador = OrquestradorParalelo(max_trabalhadores=4)
 
-        resultado = orquestrador.extrair(["vendas"], extrator)
+        resultado = orquestrador.extrair([("vendas", "pedidos")], extrator)
 
         assert isinstance(resultado, Sucesso)
         assert len(resultado.avisos) == 1
