@@ -676,11 +676,10 @@ class Gerador(Protocol):
 class OrquestradorDeTabelas(Protocol):
     def extrair(
         self,
-        escopos: list[str],
+        pares: list[tuple[str, str]],
         extrator: Extrator,
         /,
         progresso: Callable[[str], None] | None = None,
-        ao_conhecer_total: Callable[[int], None] | None = None,
     ) -> Resultado[list[TabelaExtraida]]: ...
 
     def aplicar_sobrescritas(
@@ -692,21 +691,20 @@ class OrquestradorDeTabelas(Protocol):
 ```
 
 **Comportamento esperado de `extrair`:**
-- Lista tabelas via `extrator.listar_tabelas()` para cada escopo.
+- Recebe `pares` (escopo, tabela) já prontos — não lista nada por conta
+  própria; quem chama (`cli/etapas/extracao.py::listar_pares`) já listou e
+  decidiu o subconjunto antes de chamar `extrair`.
 - Distribui `extrair_tabela()` em workers paralelos.
-- **Sucesso parcial (issue #16):** falha ao listar um escopo ou extrair uma
-  tabela nunca aborta o lote inteiro — vira `Aviso` no `Sucesso` devolvido,
-  junto das tabelas que deram certo. O método nunca devolve `Falha`; o
-  chamador decide o que fazer com uma lista vazia (ver `wizard.py`, que sai
-  com código 1 se nenhuma tabela foi extraída).
+- **Sucesso parcial (issue #16):** falha ao extrair uma tabela nunca aborta
+  o lote inteiro — vira `Aviso` no `Sucesso` devolvido, junto das tabelas
+  que deram certo. O método nunca devolve `Falha`; o chamador decide o que
+  fazer com uma lista vazia (ver `wizard.py`, que sai com código 1 se
+  nenhuma tabela foi extraída).
 - `progresso`, se informado, é chamado uma vez por item concluído (sucesso
   ou falha) com o identificador `"<escopo>.<tabela>"` — alimenta a barra de
-  progresso do wizard sem acoplar o Port a `questionary`.
-- `ao_conhecer_total`, se informado, é chamado uma única vez, logo após a
-  listagem interna terminar e antes da extração paralela começar, com o nº
-  de pares a extrair — elimina a necessidade do chamador listar as tabelas
-  de novo por fora só para saber o total (issue #75; antes `cli/etapas/
-  extracao.py` tinha um `_contar_tabelas` que duplicava essa listagem).
+  progresso do wizard sem acoplar o Port a `questionary`. O total já é
+  conhecido pelo chamador (`len(pares)`) antes de chamar `extrair` — sem
+  callback de total.
 
 **Comportamento esperado de `aplicar_sobrescritas`:**
 - Distribui `sobrescrita()` em workers paralelos sobre a lista recebida.
@@ -1729,11 +1727,10 @@ class OrquestradorParalelo:
 
     def extrair(
         self,
-        escopos: list[str],
+        pares: list[tuple[str, str]],
         extrator: Extrator,
         /,
         progresso: Callable[[str], None] | None = None,
-        ao_conhecer_total: Callable[[int], None] | None = None,
     ) -> Resultado[list[TabelaExtraida]]: ...
 
     def aplicar_sobrescritas(
@@ -1753,15 +1750,15 @@ a fonte. Cada `Extrator` concreto já garante isso internamente (ver
 métodos do Port.
 
 **Comportamento de `extrair`:**
-1. Lista tabelas por escopo — sequencial (operação leve). Falha de listagem
-   de um escopo vira `Aviso`, não aborta os demais escopos.
+1. Recebe `pares` (escopo, tabela) já prontos — não lista nada por conta
+   própria; a listagem é responsabilidade de quem chama
+   (`cli/etapas/extracao.py::listar_pares`).
 2. Distribui `extrair_tabela(escopo, tabela)` em `ThreadPoolExecutor(max_trabalhadores)`
-   para todos os pares `(escopo, tabela)` listados com sucesso.
-3. **Sucesso parcial (issue #16):** cada falha — de listagem ou de extração —
-   vira um `Aviso` (`"Falha ao extrair '<escopo.tabela>': <erro>"`), nunca
-   aborta o lote. O método sempre devolve `Sucesso`, mesmo que nenhuma
-   tabela tenha sido extraída (lista vazia) — o chamador decide o que fazer
-   com isso.
+   para todos os pares recebidos.
+3. **Sucesso parcial (issue #16):** cada falha de extração vira um `Aviso`
+   (`"Falha ao extrair '<escopo.tabela>': <erro>"`), nunca aborta o lote. O
+   método sempre devolve `Sucesso`, mesmo que nenhuma tabela tenha sido
+   extraída (lista vazia) — o chamador decide o que fazer com isso.
 4. `Sucesso` com `list[TabelaExtraida]` ordenada por `(nome_escopo,
    nome_tabela)` (`ThreadPoolExecutor` não garante ordem de conclusão) e os
    `Aviso`s acumulados.
@@ -2316,7 +2313,7 @@ exceção formal à Restrição 5 do PRD e fica para issue separada.
 
 ```
 cli/
-├── wizard.py          # @click.command executar() — só orquestra as 14 etapas
+├── wizard.py          # @click.command executar() — só orquestra as 15 etapas
 ├── prompts.py          # único módulo que importa questionary
 ├── avisos.py           # ou_sair, exibir_avisos — cross-cutting, sem estado
 ├── validacao.py        # validar_dependencias (produz/requer)
@@ -2395,29 +2392,36 @@ Decisão 13 do `system_design_doc.md`):
    nunca automático com a mesma credencial (risco de lockout de conta).
 3. Escolher escopo(s) — reaproveita a lista de `listar_escopos()` (etapa 2),
    sem 2ª chamada de rede.
-4. Escolher estratégia de amostragem (`ESTRATEGIAS_REGISTRADAS`) — escolha
+4. Escolher tabelas — `listar_pares` lista as tabelas de cada escopo
+   escolhido (`Extrator.listar_tabelas`), agregadas em pares
+   `(escopo, tabela)`; `escolher_tabelas` pergunta se o usuário quer
+   restringir a extração (`default=False`, extração completa do escopo) e,
+   só se sim, mostra a lista para seleção manual — reperguntando se nada
+   for marcado. Compartilha o checkpoint da etapa 3, sem cabeçalho próprio.
+5. Escolher estratégia de amostragem (`ESTRATEGIAS_REGISTRADAS`) — escolha
    explícita mesmo havendo só `PercentualDeLinhas` hoje; atribuída à mesma
    `ConfiguracaoDeExtracao` construída na etapa 1 (`configuracao.estrategia
    = ...`), já em uso pelo `Extrator`.
-5. Extrair em paralelo via `OrquestradorParalelo` — spinner de progresso +
-   avisos de sucesso parcial. Total exibido na barra de progresso vem de
-   `ao_conhecer_total` (issue #75), não de uma listagem prévia por fora.
-6. Gerar/atualizar skeletons de sobrescrita em disco — conta criados/
+6. Extrair em paralelo via `OrquestradorParalelo` — spinner de progresso +
+   avisos de sucesso parcial. Total exibido na barra de progresso já é
+   conhecido de antemão (`len(pares)`, etapa 4), sem callback nem listagem
+   prévia por fora.
+7. Gerar/atualizar skeletons de sobrescrita em disco — conta criados/
    atualizados vs. preservados sem mudança.
-7. **Pausa:** `prompts.pausar(...)` — usuário edita os YAMLs de overrides
+8. **Pausa:** `prompts.pausar(...)` — usuário edita os YAMLs de overrides
    manualmente antes de continuar.
-8. Aplicar sobrescritas (2ª passada, já com a curadoria manual) — gera o
+9. Aplicar sobrescritas (2ª passada, já com a curadoria manual) — gera o
    `BancoCurado`.
-9. Escolher Geradores entre os registrados.
-10. **Validar dependências** de todos os Analisadores registrados (sempre
+10. Escolher Geradores entre os registrados.
+11. **Validar dependências** de todos os Analisadores registrados (sempre
     rodam todos, sem seleção do usuário) contra só os Geradores escolhidos
-    na etapa 9 — `validar_dependencias` devolve os Analisadores já na ordem
-    de execução. Não existe etapa de "escolher Analisadores".
-11. Analisar via `compor(*analisadores_ordenados)` sobre `ContextoDeAnalise`
+    na etapa 10 — `validar_dependencias` devolve os Analisadores já na
+    ordem de execução. Não existe etapa de "escolher Analisadores".
+12. Analisar via `compor(*analisadores_ordenados)` sobre `ContextoDeAnalise`
     — spinner + avisos.
-12. Escolher destino — diretório raiz, sugestão genérica (`artefatos`).
-13. Confirmar — resumo do que será gerado.
-14. Executar Geradores — cada um protegido por `executar_com_seguranca`,
+13. Escolher destino — diretório raiz, sugestão genérica (`artefatos`).
+14. Confirmar — resumo do que será gerado.
+15. Executar Geradores — cada um protegido por `executar_com_seguranca`,
     escrevendo sempre na sua própria subpasta (`destino/<slug>`, via
     `_slugificar`), mesmo quando só um Gerador foi escolhido — evita
     misturar artefatos de Geradores diferentes no mesmo diretório quando
@@ -2430,10 +2434,10 @@ primeiras ocorrências de cada tipo aparecem na íntegra, o restante condensa
 numa linha com contagem total. Nunca esconde um tipo diferente.
 
 **Boundary de exceção (issue #56, Decisão 12 do `system_design_doc.md`):**
-a etapa 14 é obrigada a envolver cada chamada de Gerador com
+a etapa 15 é obrigada a envolver cada chamada de Gerador com
 `executar_com_seguranca` (`pipeline/seguranca.py`) — mesmo padrão já
-aplicado em `compor()` (etapa 11) e no worker de `OrquestradorParalelo`
-(etapas 5 e 8). Sem isso, uma exceção não prevista dentro de um Gerador
+aplicado em `compor()` (etapa 12) e no worker de `OrquestradorParalelo`
+(etapas 6 e 9). Sem isso, uma exceção não prevista dentro de um Gerador
 propagaria crua pro usuário final do wizard, violando a NFR4/RF7 do PRD —
 exatamente o risco que motivou a issue #56.
 

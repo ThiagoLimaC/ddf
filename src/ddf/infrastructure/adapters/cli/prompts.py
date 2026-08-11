@@ -324,9 +324,10 @@ class Progresso(NamedTuple):
     """Par de callbacks devolvido por `progresso_paralelo`.
 
     `NamedTuple`, não uma tupla posicional crua — os dois campos têm
-    papéis bem diferentes (um alimenta `progresso=`, o outro
-    `ao_conhecer_total=`); nomear evita que um 3º callback futuro precise
-    de desempacotamento por posição em `tuple[Callable, Callable, Callable]`.
+    papéis bem diferentes (um alimenta o progresso item a item, o outro
+    define o total quando só é conhecido depois de iniciada a chamada);
+    nomear evita que um 3º campo futuro precise de desempacotamento por
+    posição em `tuple[Callable, Callable, Callable]`.
     """
 
     callback: Callable[[str], None]
