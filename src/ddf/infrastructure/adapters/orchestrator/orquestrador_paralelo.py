@@ -212,59 +212,37 @@ class OrquestradorParalelo:
 
     def extrair(
         self,
-        escopos: list[str],
+        pares: list[tuple[str, str]],
         extrator: Extrator,
         /,
         progresso: Callable[[str], None] | None = None,
-        ao_conhecer_total: Callable[[int], None] | None = None,
     ) -> Resultado[list[TabelaExtraida]]:
-        """Lista e extrai, em paralelo, todas as tabelas dos escopos informados.
+        """Extrai, em paralelo, as tabelas identificadas pelos pares informados.
 
-        Falha ao listar um escopo ou extrair uma tabela nunca aborta o lote
-        inteiro — vira Aviso, e as demais tabelas seguem sendo processadas.
+        `pares` já vem pronto — o chamador lista e decide o subconjunto
+        antes de chamar `extrair`, já sabendo o total sem precisar de
+        callback.
+
+        Falha ao extrair uma tabela nunca aborta o lote inteiro — vira
+        Aviso, e as demais tabelas seguem sendo processadas.
 
         Args:
-            escopos: escopos cujas tabelas serão listadas e extraídas.
-            extrator: Extrator concreto usado para listar/extrair cada tabela.
+            pares: pares (escopo, tabela) a extrair.
+            extrator: Extrator concreto usado para extrair cada tabela.
             progresso: callback opcional invocado com "<escopo>.<tabela>" a
                 cada tabela concluída (sucesso ou falha).
-            ao_conhecer_total: callback opcional invocado uma vez, logo após
-                a listagem interna terminar, com o nº de pares (escopo,
-                tabela) que de fato serão extraídos.
 
         Returns:
             Sucesso com list[TabelaExtraida] ordenada por (nome_escopo,
             nome_tabela) — pode ser menor que o total pedido — e um Aviso
-            por escopo/tabela que falhou, mais um Aviso por
-            RestricaoDeFkComposta cujo lado referenciado (se presente no
-            lote) não corresponde a nenhuma PK/UNIQUE conhecida — checagem
-            cross-table, só possível aqui, depois que todas as tabelas do
-            lote já foram extraídas.
+            por tabela que falhou, mais um Aviso por RestricaoDeFkComposta
+            cujo lado referenciado (se presente no lote) não corresponde a
+            nenhuma PK/UNIQUE conhecida — checagem cross-table, só possível
+            aqui, depois que todas as tabelas do lote já foram extraídas.
         """
-        pares_a_extrair: list[tuple[str, str]] = []
-        avisos_listagem: list[Aviso] = []
-
-        for escopo in escopos:
-            resultado_listagem = extrator.listar_tabelas(escopo)
-            if isinstance(resultado_listagem, Falha):
-                avisos_listagem.append(
-                    Aviso(
-                        mensagem=(
-                            f"Falha ao listar tabelas de '{escopo}': "
-                            f"{resultado_listagem.erro}"
-                        ),
-                        origem=_ORIGEM,
-                    )
-                )
-                continue
-            pares_a_extrair.extend(resultado_listagem.valor)
-
-        if ao_conhecer_total is not None:
-            ao_conhecer_total(len(pares_a_extrair))
-
         tabelas, avisos_extracao, falhas_extracao = self._executar_em_paralelo(
             "Extrator",
-            pares_a_extrair,
+            pares,
             lambda par: extrator.extrair_tabela(*par),
             lambda par: f"{par[0]}.{par[1]}",
             progresso,
@@ -272,8 +250,7 @@ class OrquestradorParalelo:
 
         tabelas.sort(key=lambda tabela: (tabela.nome_escopo, tabela.nome_tabela))
         avisos = (
-            avisos_listagem
-            + avisos_extracao
+            avisos_extracao
             + _avisos_de_falhas("extrair", falhas_extracao)
             + _avisos_de_fk_composta_sem_chave_candidata(tabelas)
         )
