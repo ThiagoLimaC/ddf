@@ -4,10 +4,10 @@ import logging
 import threading
 from collections import defaultdict
 from collections.abc import Generator
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from typing import assert_never
 
+import connectorx as cx
 import polars as pl
 from psycopg2 import OperationalError, sql
 from psycopg2.extensions import connection as conexao_postgres
@@ -43,7 +43,6 @@ from ddf.infrastructure.adapters.extractors.comum.leitura_paralela_intra_tabela 
 from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
     LARGURA_MEDIA_PADRAO_BYTES,
     calcular_tamanho_lote,
-    concatenar_particoes,
     deve_usar_streaming,
     ler_amostra_em_lotes,
     ler_amostra_fetchall,
@@ -434,22 +433,20 @@ class ExtratorPostgres:
         total_blocos = int(linha[0]) if linha and linha[0] is not None else 0
         return Sucesso(total_blocos)
 
-    def _ler_particao_em_conexao(
+    def _query_particao_ctid(
         self,
         conexao: conexao_postgres,
         schema: str,
         tabela: str,
         inicio: int,
         fim: int | None,
-        linhas_estimadas: int,
-        largura_media_bytes: int,
-    ) -> pl.DataFrame:
-        """Lê uma faixa de `ctid` numa conexão/transação já aberta.
+    ) -> str:
+        """Monta o texto SQL de uma faixa de `ctid`, com quoting seguro.
 
-        `linhas_estimadas` (tipicamente `total_linhas` dividido pelo nº de
-        faixas) decide streaming por faixa — uma faixa de uma tabela grande
-        ainda pode justificar `fetchmany` em lotes, mesmo que a decisão de
-        paralelizar já tenha sido tomada no nível da tabela inteira.
+        `connectorx` recebe uma lista de strings SQL prontas (modo de
+        particionamento manual), não um cursor — por isso a query é
+        renderizada aqui via `sql.Composed.as_string`, em vez de executada
+        diretamente como nos outros métodos deste Adapter.
         """
         condicao = sql.SQL("ctid >= {}::tid").format(sql.Literal(f"({inicio},0)"))
         if fim is not None:
@@ -459,54 +456,7 @@ class ExtratorPostgres:
         consulta = sql.SQL("SELECT * FROM {}.{} WHERE {}").format(
             sql.Identifier(schema), sql.Identifier(tabela), condicao
         )
-        usa_streaming = deve_usar_streaming(linhas_estimadas, largura_media_bytes)
-        if usa_streaming:
-            tamanho_lote = calcular_tamanho_lote(largura_media_bytes)
-            with conexao.cursor(name=f"particao_{schema}_{tabela}_{inicio}") as cursor:
-                cursor.itersize = tamanho_lote
-                cursor.execute(consulta)
-                return ler_amostra_em_lotes(cursor, tamanho_lote)
-        with conexao.cursor() as cursor:
-            cursor.execute(consulta)
-            return ler_amostra_fetchall(cursor)
-
-    def _ler_particao_com_snapshot(
-        self,
-        schema: str,
-        tabela: str,
-        inicio: int,
-        fim: int | None,
-        snapshot_id: str,
-        linhas_estimadas: int,
-        largura_media_bytes: int,
-    ) -> Resultado[pl.DataFrame]:
-        """Lê uma faixa numa conexão nova, sob o mesmo snapshot da líder.
-
-        Cada worker abre sua própria transação `REPEATABLE READ` e importa
-        o snapshot exportado pela conexão líder (`SET TRANSACTION
-        SNAPSHOT`) — enxerga exatamente o mesmo estado congelado da tabela
-        que ela, mesmo mecanismo usado pelo `pg_dump --jobs`. Comita assim
-        que termina de ler a própria faixa — só a líder precisa manter a
-        transação aberta até todas as faixas concluírem.
-        """
-        with self._conexao_ja_reservada(autocommit=False) as resultado_conexao:
-            if isinstance(resultado_conexao, Falha):
-                return resultado_conexao
-            conexao = resultado_conexao.valor
-            with conexao.cursor() as cursor:
-                cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-                cursor.execute("SET TRANSACTION SNAPSHOT %s", (snapshot_id,))
-            amostra = self._ler_particao_em_conexao(
-                conexao,
-                schema,
-                tabela,
-                inicio,
-                fim,
-                linhas_estimadas,
-                largura_media_bytes,
-            )
-            conexao.commit()
-            return Sucesso(amostra)
+        return consulta.as_string(conexao)
 
     def _ler_tabela_em_paralelo(
         self,
@@ -516,29 +466,35 @@ class ExtratorPostgres:
         total_linhas: int,
         largura_media_bytes: int,
     ) -> Resultado[pl.DataFrame]:
-        """Lê a tabela inteira via `n` conexões, cada uma numa faixa de `ctid`.
+        """Lê a tabela inteira via `connectorx`, uma faixa de `ctid` por conexão.
 
-        A conexão líder exporta um snapshot (`pg_export_snapshot`) antes de
-        qualquer faixa ser lida, e mantém a própria transação aberta até
-        todas as outras faixas terminarem — é o que sustenta o snapshot
-        vivo pras conexões seguintes importarem. A líder também lê uma
-        faixa própria (a primeira), em vez de só coordenar — com `n` no
-        mínimo `MINIMO_CONEXOES_PARALELISMO`, isso garante paralelismo real
-        mesmo no caso mínimo (líder + 1 worker).
+        `connectorx` decodifica direto do driver pra Arrow/Polars fora do
+        GIL (`py.allow_threads` durante a decodificação) — substitui o
+        desenho anterior (`ThreadPoolExecutor` + cursor `psycopg2` +
+        `pl.DataFrame(orient="row")`), que media só ~15-20% de ganho real
+        contra até 4x teórico porque o GIL serializava a decodificação
+        (ver `plan/registry-plan/issue-126-paralelismo-intra-tabela.md`).
+
+        A conexão líder exporta um snapshot (`pg_export_snapshot`) e
+        mantém a própria transação `REPEATABLE READ` aberta enquanto o
+        `connectorx` lê todas as faixas — cada uma numa conexão própria,
+        gerenciada pela própria lib (não pelo `ThreadedConnectionPool`
+        deste Extrator), que importa o mesmo snapshot via
+        `pre_execution_query` (`SET TRANSACTION SNAPSHOT`). Preserva a
+        mesma consistência entre faixas que o desenho anterior garantia.
         """
         resultado_blocos = self._total_blocos(schema, tabela)
         if isinstance(resultado_blocos, Falha):
             return resultado_blocos
         total_blocos = resultado_blocos.valor
         faixas = particoes_de_blocos(total_blocos, n)
-        linhas_estimadas_por_faixa = max(1, total_linhas // n)
         _logger.warning(
             "'%s.%s': dividindo em %d faixas de blocos (%d blocos no "
-            "total, ~%d blocos/faixa) para leitura paralela — todas as "
-            "faixas competem pelo mesmo storage físico; se o gargalo real "
-            "for I/O sequencial de disco (não CPU de decodificação), o "
-            "ganho de paralelizar aqui é limitado, mesmo com múltiplas "
-            "conexões.",
+            "total, ~%d blocos/faixa) para leitura paralela via "
+            "connectorx — todas as faixas competem pelo mesmo storage "
+            "físico; se o gargalo real for I/O sequencial de disco (não "
+            "CPU de decodificação), o ganho de paralelizar aqui é "
+            "limitado, mesmo com múltiplas conexões.",
             schema,
             tabela,
             n,
@@ -560,54 +516,33 @@ class ExtratorPostgres:
                     assert linha_snapshot is not None
                     snapshot_id = str(linha_snapshot[0])
 
-                resultados: dict[int, Resultado[pl.DataFrame]] = {}
-                inicio_lider, fim_lider = faixas[0]
-                resultados[0] = Sucesso(
-                    self._ler_particao_em_conexao(
-                        conexao_lider,
-                        schema,
-                        tabela,
-                        inicio_lider,
-                        fim_lider,
-                        linhas_estimadas_por_faixa,
-                        largura_media_bytes,
+                queries = [
+                    self._query_particao_ctid(
+                        conexao_lider, schema, tabela, inicio, fim
                     )
-                )
-
-                if n > 1:
-                    with ThreadPoolExecutor(max_workers=n - 1) as executor:
-                        futuros = {
-                            executor.submit(
-                                self._ler_particao_com_snapshot,
-                                schema,
-                                tabela,
-                                inicio,
-                                fim,
-                                snapshot_id,
-                                linhas_estimadas_por_faixa,
-                                largura_media_bytes,
-                            ): indice
-                            for indice, (inicio, fim) in enumerate(faixas[1:], start=1)
-                        }
-                        for futuro in as_completed(futuros):
-                            indice = futuros[futuro]
-                            try:
-                                resultados[indice] = futuro.result()
-                            except Exception as erro:  # noqa: BLE001
-                                resultados[indice] = Falha(
-                                    f"Falha ao ler partição {indice} de "
-                                    f"'{schema}.{tabela}': {erro}"
-                                )
+                    for inicio, fim in faixas
+                ]
+                try:
+                    amostra = cx.read_sql(
+                        self._dsn,
+                        queries,
+                        return_type="polars",
+                        pre_execution_query=[
+                            "BEGIN ISOLATION LEVEL REPEATABLE READ",
+                            f"SET TRANSACTION SNAPSHOT '{snapshot_id}'",
+                        ],
+                    )
+                except Exception as erro:  # noqa: BLE001 — crash conhecido do connectorx
+                    # (ex.: NUMERIC sem precisão/escala fixa) precisa virar Falha, não
+                    # propagar como exceção não tratada pro chamador do Extrator.
+                    return Falha(
+                        f"Falha ao ler '{schema}.{tabela}' em paralelo via "
+                        f"connectorx: {erro}"
+                    )
             finally:
                 conexao_lider.commit()
 
-        falha = next(
-            (resultados[i] for i in range(n) if isinstance(resultados[i], Falha)), None
-        )
-        if falha is not None:
-            return falha
-        particoes = [resultados[i].valor for i in range(n)]  # type: ignore[union-attr]
-        return Sucesso(concatenar_particoes(particoes))
+        return Sucesso(amostra)
 
     def extrair_tabela(self, schema: str, tabela: str) -> Resultado[TabelaExtraida]:
         """Extrai estrutura, amostra e metadados de uma tabela específica."""
