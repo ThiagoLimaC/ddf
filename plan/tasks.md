@@ -336,13 +336,35 @@
     Postgres, `particionar_faixas_exaustivas` MariaDB, feliz/borda/erro)
     + testes de integração via `testcontainers` (Postgres 16 e MariaDB
     11 reais) confirmando conjunto de `id`s idêntico entre paralelo e
-    sequencial, sem overlap nem gap. `ruff`/`mypy --strict` limpos, 662
-    testes unitários passando.
+    sequencial, sem overlap nem gap. `ruff`/`mypy --strict` limpos, 665
+    testes unitários+integração passando.
+  - **Banca de revisão multi-agente pós-implementação** (arquiteto-de-
+    software + engenheiro-de-dados + po-revisor, achados convergentes de
+    2+ revisores independentes) — veredito inicial bloqueante, 4 achados
+    corrigidos: (1) wizard não dava a mesma folga de `max_conexoes` ao
+    MariaDB que já dava ao Postgres, paralelismo nunca ativava de verdade
+    sob carga real; (2) sonda `MIN`/`MAX` do MariaDB reabria o semáforo
+    depois da reserva, risco real de self-deadlock sem timeout — corrigido
+    sondando antes de `reservar_conexoes`; (3) conexão líder do Postgres
+    consumia 1 conexão real além do orçamento reservado — corrigido
+    particionando em `n - 1` faixas; (4) crash do `connectorx` (ex.:
+    `NUMERIC`) derrubava a tabela inteira em vez de cair pro sequencial —
+    corrigido com fallback + `Aviso` legível. Achados importantes também
+    corrigidos: `connect_timeout` não chegava às conexões do `connectorx`
+    (corrigido no Postgres; testado empiricamente que o driver MySQL do
+    `connectorx` rejeita esse parâmetro, risco aceito no MariaDB); teste
+    de integração novo prova consistência da leitura paralela do Postgres
+    sob escrita concorrente real (thread separada escrevendo durante toda
+    a extração).
   - Fora de escopo, registrado como follow-up: `PercentualDeLinhas`/
     `AmostragemPorFaixa` com percentual alto (candidato a tratar como
     `AmostragemIntegral` pra elegibilidade), detecção de tabela
     particionada nativa do MariaDB, calibração final dos limiares,
-    benchmark versionado (item 8 do registry-plan, ainda pendente).
+    benchmark versionado (item 8 do registry-plan, ainda pendente),
+    detecção prévia de `NUMERIC` sem escala fixa antes de tentar o
+    caminho paralelo, sugestões de refatoração da banca (duplicação de
+    `particionar_faixas_exaustivas`/`particoes_de_blocos`, unificação
+    `_conexao`/`_conexao_ja_reservada`).
 
 ## 4. Sobrescrita (ACL Extraction → Curation) e OrquestradorParalelo
 

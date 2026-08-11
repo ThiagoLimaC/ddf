@@ -1487,6 +1487,15 @@ conexões que a lib abre por conta própria contam contra o mesmo
 teste unitário — cobertura do caminho paralelo é só via `testcontainers`
 (Postgres 16 e MariaDB 11 reais), não mock de `cursor.fetchall`.
 
+**Achado da banca de revisão pós-implementação (bloqueante, corrigido):**
+no wizard, `_construir_extrator_mariadb` não passava a mesma folga de
+`max_conexoes` que `_construir_extrator_postgres` já usava sobre o
+`max_trabalhadores` do `OrquestradorParalelo` — o paralelismo intra-tabela
+do MariaDB nunca ativava de verdade sob carga concorrente real (degradação
+graciosa pro sequencial, sem erro, mas silenciosamente inútil). Corrigido
+com o mesmo `_MAX_CONEXOES_MARIADB = 12` do Postgres
+(`cli/registro/extratores.py`).
+
 ### `ExtratorPostgres._ler_tabela_em_paralelo`
 
 Preserva o mecanismo de consistência entre faixas que a implementação
@@ -1503,7 +1512,7 @@ chamada:
 
 ```python
 cx.read_sql(
-    self._dsn, queries, return_type="polars",
+    self._dsn_connectorx, queries, return_type="polars",
     pre_execution_query=[
         "BEGIN ISOLATION LEVEL REPEATABLE READ",
         f"SET TRANSACTION SNAPSHOT '{snapshot_id}'",
@@ -1516,8 +1525,38 @@ documentado** pela lib, validado empiricamente (sem o `BEGIN` explícito
 antes, falha com "must have isolation level SERIALIZABLE or REPEATABLE
 READ"; confirmado que uma partição não vê linha inserida após o
 `pg_export_snapshot`). `connectorx` já devolve um único `pl.DataFrame`
-concatenado — sem merge manual de faixas. Falha do `connectorx` (ex.: o
-risco de `NUMERIC` abaixo) vira `Falha`, não exceção não tratada.
+concatenado — sem merge manual de faixas.
+
+`self._dsn_connectorx` (não `self._dsn`) — achado da banca: `connect_timeout`
+só chegava às conexões do `ThreadedConnectionPool`, não às que o
+`connectorx` abre por conta própria; sem isso, um host inacessível por
+firewall voltava a travar no timeout de TCP do SO que o parâmetro existe
+pra evitar. Corrigido embutindo `connect_timeout` como query param na DSN
+usada só pra `connectorx`, calculada uma vez no `__init__`.
+
+**Achado da banca (bloqueante, corrigido): orçamento de conexões da
+conexão líder.** `n` (permits reservados por `reservar_conexoes`) incluía
+só as conexões do `connectorx`, não a conexão líder do
+`pg_export_snapshot` (`_conexao_ja_reservada`) — uso real era `n + 1`,
+excedendo o orçamento reservado. `_ler_tabela_em_paralelo` agora particiona
+em `n - 1` faixas: a conexão líder ocupa 1 dos `n` permits, o `connectorx`
+usa os `n - 1` restantes.
+
+**Achado da banca (bloqueante, corrigido): crash do `connectorx` não
+derruba mais a tabela inteira.** Antes, qualquer exceção de `cx.read_sql`
+(ex.: `NUMERIC` sem precisão/escala fixa, ver abaixo) virava `Falha` e
+`extrair_tabela` propagava direto — regressão em relação ao caminho
+sequencial, que sempre soube ler essa mesma tabela. Agora loga o erro
+técnico bruto (nível `WARNING`), acrescenta um `Aviso` legível (sem o
+texto técnico da lib) e cai pro caminho sequencial/streaming já existente
+logo abaixo, em vez de retornar a `Falha`. Testado com escrita concorrente
+real via `testcontainers`
+(`test_leitura_paralela_preserva_consistencia_sob_escrita_concorrente`):
+uma thread separada incrementa uma coluna sem parar durante toda a
+extração paralela — a asserção é que todas as faixas enxergam a mesma
+versão (snapshot único), não uma versão específica, já que não dá pra
+garantir o timing exato entre `pg_export_snapshot` e os commits da escrita
+concorrente.
 
 Tabela particionada declarativamente (`pg_class.relkind = 'p'`,
 `_TABELAS_PARTICIONADAS_SCHEMA_SQL`) nunca ativa paralelismo —
@@ -1528,17 +1567,20 @@ coerente. Cai no caminho sequencial/streaming existente, sem erro.
 fixa crasha `connectorx` de forma detectável (`RuntimeError: decimal
 scale is not equal to expected scale`) quando linhas têm escalas
 diferentes — pior que o truncamento silencioso originalmente temido, mas
-ainda não tratado com validação explícita antes da leitura paralela.
+ainda não tratado com validação explícita antes da leitura paralela. O
+crash não derruba mais a extração inteira (ver fallback pro sequencial
+acima), mas ainda não há detecção prévia (checar `precisao`/`escala` nulas
+no catálogo antes de tentar o caminho paralelo) nem `Aviso` específico
+sobre esse caso — fica pra uma iteração futura.
 
 ### `ExtratorMariaDB._ler_tabela_em_paralelo`
 
 Sem conexão líder nem snapshot — MariaDB não tem equivalente ao
 `pg_export_snapshot`/`SET TRANSACTION SNAPSHOT` do Postgres (`FLUSH
 TABLES WITH READ LOCK` trava o servidor inteiro, rejeitado desde a
-investigação original). `MIN(pk)`/`MAX(pk)` (numa conexão comum,
-`_conexao()`) definem o domínio a particionar;
-`particionar_faixas_exaustivas` (`mariadb/_construcao.py`, mesmo
-algoritmo de `particoes_de_blocos`, aplicado a valor de PK em vez de
+investigação original). `MIN(pk)`/`MAX(pk)` definem o domínio a
+particionar; `particionar_faixas_exaustivas` (`mariadb/_construcao.py`,
+mesmo algoritmo de `particoes_de_blocos`, aplicado a valor de PK em vez de
 bloco físico) gera as faixas. Elegibilidade reaproveita
 `_elegibilidade_de_pk_para_faixa` (já existia pra `RequisicaoPorFaixa`) —
 só PK de coluna única e tipo inteiro serve pra virar faixa contígua;
@@ -1554,6 +1596,29 @@ driver dedicado ao dialeto — `ENUM`/`SET` nativos do MariaDB validados
 contra MariaDB 11 real: chegam como string, idêntico ao que `pymysql` já
 lê hoje.
 
+**Achado da banca (bloqueante, corrigido): risco de self-deadlock na
+sonda `MIN`/`MAX`.** A sonda de domínio do PK rodava dentro de
+`_ler_tabela_em_paralelo`, via `self._conexao()` — mas isso acontecia
+**depois** que `extrair_tabela` já tinha reservado `n_reservado` permits
+via `reservar_conexoes`. Se `n_reservado` esgotasse o semáforo (ex.:
+`max_conexoes_por_tabela == max_conexoes`, ou outra tabela grande
+concorrente já tivesse consumido o resto), esse `acquire()` ficava
+bloqueado esperando um permit que só a própria thread — já travada —
+poderia devolver. Corrigido extraindo a sonda pra `_dominio_de_pk`,
+chamada em `extrair_tabela` **antes** de `reservar_conexoes`: nesse ponto
+o semáforo ainda não tem nenhum permit desta tabela retido, então o
+`acquire`/`release` normal não compete com nada que a própria call-stack
+já segure.
+
+**Achado da banca: `connect_timeout` não propagável pro DSN do
+`connectorx` neste motor.** Testado empiricamente (`connect_timeout`,
+`connect-timeout`, `timeout`, `connectTimeout`) — o driver MySQL do
+`connectorx` rejeita todas as variações com `RuntimeError: Unknown URL
+parameter`, diferente do driver Postgres (baseado em libpq/
+tokio-postgres, aceita `connect_timeout` de verdade — ver acima). Risco
+aceito: host inacessível nas conexões que o `connectorx` abre aqui
+continua sem essa proteção, sem alternativa de baixo custo encontrada.
+
 **Risco aceito e documentado, não resolvido pela troca de lib:** sem
 mecanismo de consistência entre faixas, escritas concorrentes durante a
 extração podem produzir uma amostra combinada de estados diferentes da
@@ -1562,7 +1627,10 @@ tabela — mesma classe de trade-off já aceita pro viés de cluster de
 `Aviso` uma única vez por execução (flag de instância protegida por
 lock), não uma vez por tabela elegível — mesmo tratamento de ruído do
 achado B4 da banca de revisão original (#116 já tinha corrigido esse
-padrão pro viés de cluster).
+padrão pro viés de cluster). Chamado só depois que a leitura paralela
+teve sucesso (não antes de tentar) — se o `connectorx` falhar e cair pro
+fallback sequencial, esse `Aviso` de risco não faz sentido emitir, já que
+o risco que ele descreve não chegou a se materializar.
 
 **`_conexao()` do `ExtratorMariaDB` passou a usar `self._semaforo`** —
 antes dependia só do `blocking=True` do `PooledDB`. Necessário porque as

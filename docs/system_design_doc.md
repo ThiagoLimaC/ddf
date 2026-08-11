@@ -455,3 +455,23 @@ Exibe `Aviso`s em streaming por etapa concluída, agrupados por origem e por
     motores nesta rodada — `PercentualDeLinhas`/`AmostragemPorFaixa` com
     percentual alto fica para uma iteração futura. Detalhes completos em
     `plan/registry-plan/issue-126-paralelismo-intra-tabela.md`.
+
+    **Correções da banca de revisão pós-implementação** (arquiteto-de-
+    software + engenheiro-de-dados + po-revisor, achados bloqueantes):
+    a conexão líder do Postgres (`pg_export_snapshot`) consome 1 dos `n`
+    permits reservados — `_ler_tabela_em_paralelo` particiona em `n - 1`
+    faixas para o `connectorx`, não `n`, senão o uso real de conexões
+    excedia o orçamento reservado. No MariaDB, `_construir_extrator_
+    mariadb` (wizard) não tinha a mesma folga de `max_conexoes` já
+    aplicada ao Postgres — o paralelismo intra-tabela nunca ativava de
+    verdade sob carga concorrente real; e a sonda `MIN`/`MAX` de PK
+    reabria o semáforo depois que a reserva já tinha tomado os permits
+    disponíveis, com risco real de self-deadlock sem timeout — corrigido
+    sondando o domínio do PK antes de `reservar_conexoes`. Nos dois
+    motores, um crash conhecido do `connectorx` (ex.: `NUMERIC` sem
+    precisão/escala fixa) agora cai para o caminho sequencial em vez de
+    derrubar a tabela inteira — regressão que existia antes desta
+    correção. `connect_timeout` passa a chegar às conexões do `connectorx`
+    via DSN no Postgres; testado empiricamente que o driver MySQL do
+    `connectorx` rejeita esse parâmetro em qualquer variação de nome —
+    risco aceito no MariaDB, sem alternativa de baixo custo encontrada.
