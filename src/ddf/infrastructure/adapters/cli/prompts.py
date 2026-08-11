@@ -6,7 +6,7 @@ import threading
 import time
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import NamedTuple, TypeVar, cast
+from typing import TypeVar, cast
 
 import questionary
 
@@ -251,16 +251,23 @@ def confirmar(mensagem: str, default: bool = True) -> bool:
     return resposta
 
 
-def escolher_multiplos(mensagem: str, escolhas: list[str]) -> list[str]:
+def escolher_multiplos(
+    mensagem: str, escolhas: list[str], permite_vazio: bool = False
+) -> list[str]:
     """Checkbox com filtro por digitação — permite escolher um ou vários.
 
     Listas longas ficam difíceis de rolar em terminais pequenos; a forma
     rápida de achar um item é digitar parte do nome pra filtrar em vez de
-    navegar pelas setas. Sai limpo se o usuário cancelar ou não marcar nada.
+    navegar pelas setas. Cancelamento (Ctrl+C/Esc) sempre sai limpo,
+    independente de `permite_vazio`.
 
     Args:
         mensagem: pergunta exibida ao usuário.
         escolhas: opções disponíveis para seleção.
+        permite_vazio: `False` (padrão) trata "nenhum item marcado" como
+            cancelamento, saindo limpo — mesmo comportamento de sempre.
+            `True` devolve a lista vazia para o chamador decidir o que
+            fazer (ex.: reperguntar), em vez de sair do processo.
     """
     print()
     selecionados = cast(
@@ -276,7 +283,9 @@ def escolher_multiplos(mensagem: str, escolhas: list[str]) -> list[str]:
             instruction="(digite para filtrar, espaço marca, enter confirma)\n",
         ).ask(),
     )
-    if not selecionados:
+    if selecionados is None:
+        sys.exit(0)
+    if not selecionados and not permite_vazio:
         sys.exit(0)
     return selecionados
 
@@ -311,19 +320,6 @@ def ampulheta(mensagem: str) -> Generator[None, None, None]:
         thread.join()
 
 
-class Progresso(NamedTuple):
-    """Par de callbacks devolvido por `progresso_paralelo`.
-
-    `NamedTuple`, não uma tupla posicional crua — os dois campos têm
-    papéis bem diferentes (um alimenta `progresso=`, o outro
-    `ao_conhecer_total=`); nomear evita que um 3º callback futuro precise
-    de desempacotamento por posição em `tuple[Callable, Callable, Callable]`.
-    """
-
-    callback: Callable[[str], None]
-    definir_total: Callable[[int], None]
-
-
 # Retângulo vertical cheio/vazio (U+25AE/U+25AF) — `▯` já é um contorno (só
 # a borda desenhada, o miolo é o glifo "vazio" do próprio terminal), então
 # o segmento não-concluído nunca pinta um fundo sólido por cima do
@@ -348,12 +344,14 @@ def _cor_ansi_truecolor(cor_hex: str) -> str:
     return f"\x1b[38;2;{r};{g};{b}m"
 
 
-def progresso_paralelo(mensagem_base: str, total: int | None = None) -> Progresso:
-    r"""Devolve (callback de progresso, callback para definir o total depois).
+def progresso_paralelo(
+    mensagem_base: str, total: int | None = None
+) -> Callable[[str], None]:
+    r"""Devolve o callback de progresso, chamado uma vez por item concluído.
 
-    Pensado para `.callback` ser passado como `progresso=` a
-    `OrquestradorDeTabelas.extrair`/`aplicar_sobrescritas` — cada chamada já
-    chega serializada pela thread principal, sem necessidade de lock aqui.
+    Pensado para ser passado como `progresso=` a `OrquestradorDeTabelas.
+    extrair`/`aplicar_sobrescritas` — cada chamada já chega serializada pela
+    thread principal, sem necessidade de lock aqui.
 
     Desenha 3 linhas fixas — "mensagem (N/total)", uma linha em branco e uma
     barra de retângulos (`▮▮▮▯▯▯`) — sempre subindo até a 1ª linha antes de
@@ -366,16 +364,10 @@ def progresso_paralelo(mensagem_base: str, total: int | None = None) -> Progress
     Preenchido em `COR_DESTAQUE` (progresso em andamento, não `COR_SUCESSO`)
     e vazio em `COR_SECUNDARIA`.
 
-    `.definir_total` existe para quando o total só é conhecido depois de
-    iniciada a chamada (ex.: `extrair`, que lista as tabelas de cada escopo
-    internamente) — a barra é desenhada assim que ele for chamado. Chamadores
-    que já sabem o total (ex.: `aplicar_sobrescritas`) não precisam dele; a
-    barra inicial (0/total) já é desenhada aqui.
-
     Args:
         mensagem_base: texto fixo exibido antes da contagem.
         total: número total de itens esperados, exibido como fração
-            "N/total". Omitido quando ainda não é conhecido na criação.
+            "N/total". Omitido para mostrar uma contagem corrida sem fração.
     """
     print()
     concluidas = 0
@@ -406,11 +398,6 @@ def progresso_paralelo(mensagem_base: str, total: int | None = None) -> Progress
         print(f"\r\x1b[K{_barra(len(linha_contagem))}", end="", flush=True)
         ja_desenhou = True
 
-    def _definir_total(novo_total: int) -> None:
-        nonlocal total_atual
-        total_atual = novo_total
-        _desenhar()
-
     def _callback(identificador: str) -> None:
         nonlocal concluidas
         concluidas += 1
@@ -419,7 +406,7 @@ def progresso_paralelo(mensagem_base: str, total: int | None = None) -> Progress
     if total_atual is not None:
         _desenhar()
 
-    return Progresso(callback=_callback, definir_total=_definir_total)
+    return _callback
 
 
 _LARGURA_BARRA_INDETERMINADA = 12

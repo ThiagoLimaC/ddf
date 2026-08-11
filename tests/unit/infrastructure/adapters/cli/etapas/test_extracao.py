@@ -1,6 +1,7 @@
 """Testes das etapas 1-5 do wizard: conexão, escopos, amostragem e extração."""
 
 from collections.abc import Callable
+from typing import Any
 
 import pytest
 
@@ -55,23 +56,20 @@ class OrquestradorFake:
 
     def extrair(
         self,
-        escopos: list[str],
+        pares: list[tuple[str, str]],
         extrator: object,
         progresso: Callable[[str], None] | None = None,
-        ao_conhecer_total: Callable[[int], None] | None = None,
     ) -> Resultado[list[TabelaExtraida]]:
-        """Devolve o Resultado configurado, chamando ao_conhecer_total/progresso.
+        """Devolve o Resultado configurado, chamando progresso por item.
 
-        Simula o comportamento real de OrquestradorParalelo: informa o total
-        antes de "processar" cada item da lista de sucesso configurada.
+        Simula o comportamento real de OrquestradorParalelo, "processando"
+        cada item da lista de sucesso configurada.
         """
         tabelas = (
             self._resultado_extrair.valor
             if isinstance(self._resultado_extrair, Sucesso)
             else []
         )
-        if ao_conhecer_total is not None:
-            ao_conhecer_total(len(tabelas))
         if progresso is not None:
             for tabela in tabelas:
                 progresso(f"{tabela.nome_escopo}.{tabela.nome_tabela}")
@@ -141,13 +139,63 @@ class TestFeliz:
         """Devolve as tabelas extraídas pelo orquestrador."""
         tabela = fabrica_tabela_extraida("public", "clientes")
         orquestrador = OrquestradorFake(Sucesso(valor=[tabela]))
-        extrator_fake = ExtratorFake(
-            respostas_escopos=[], respostas_tabelas={"public": Sucesso(valor=[])}
+        extrator_fake = ExtratorFake(respostas_escopos=[])
+
+        tabelas = extracao.extrair(  # type: ignore[arg-type]
+            orquestrador, extrator_fake, [("public", "clientes")]
         )
 
-        tabelas = extracao.extrair(orquestrador, extrator_fake, ["public"])  # type: ignore[arg-type]
-
         assert tabelas == [tabela]
+
+    def test_listar_pares_agrega_tabelas_de_multiplos_escopos(self) -> None:
+        """Agrega as tabelas de todos os escopos informados, em pares."""
+        extrator_fake = ExtratorFake(
+            respostas_escopos=[],
+            respostas_tabelas={
+                "public": Sucesso(valor=[("public", "clientes")]),
+                "vendas": Sucesso(
+                    valor=[("vendas", "pedidos"), ("vendas", "itens")]
+                ),
+            },
+        )
+
+        pares = extracao.listar_pares(extrator_fake, ["public", "vendas"])  # type: ignore[arg-type]
+
+        assert pares == [
+            ("public", "clientes"),
+            ("vendas", "pedidos"),
+            ("vendas", "itens"),
+        ]
+
+    def test_escolher_tabelas_recusando_restringir_devolve_todas(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Resposta padrão (não restringir) devolve os pares disponíveis intactos."""
+        monkeypatch.setattr(
+            "ddf.infrastructure.adapters.cli.prompts.confirmar", lambda *a, **k: False
+        )
+        pares_disponiveis = [("public", "clientes"), ("vendas", "pedidos")]
+
+        pares = extracao.escolher_tabelas(pares_disponiveis)
+
+        assert pares == pares_disponiveis
+
+    def test_escolher_tabelas_restringindo_devolve_apenas_o_subconjunto(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Restringindo, devolve só os pares cujo rótulo foi escolhido."""
+        monkeypatch.setattr(
+            "ddf.infrastructure.adapters.cli.prompts.confirmar", lambda *a, **k: True
+        )
+        monkeypatch.setattr(
+            "ddf.infrastructure.adapters.cli.prompts.escolher_multiplos",
+            lambda *a, **k: ["vendas › pedidos"],
+        )
+        pares_disponiveis = [("public", "clientes"), ("vendas", "pedidos")]
+
+        pares = extracao.escolher_tabelas(pares_disponiveis)
+
+        assert pares == [("vendas", "pedidos")]
 
 
 class TestErro:
@@ -185,14 +233,37 @@ class TestErro:
     ) -> None:
         """Falha do orquestrador sai com código 1."""
         orquestrador = OrquestradorFake(Falha(erro="nenhuma tabela extraída"))
-        extrator_fake = ExtratorFake(
-            respostas_escopos=[], respostas_tabelas={"public": Sucesso(valor=[])}
-        )
+        extrator_fake = ExtratorFake(respostas_escopos=[])
 
         with pytest.raises(SystemExit) as excinfo:
-            extracao.extrair(orquestrador, extrator_fake, ["public"])  # type: ignore[arg-type]
+            extracao.extrair(  # type: ignore[arg-type]
+                orquestrador, extrator_fake, [("public", "clientes")]
+            )
 
         assert excinfo.value.code == 1
+
+    def test_listar_pares_escopo_com_falha_de_listagem_vira_aviso(
+        self, interceptar_print: list[dict[str, Any]]
+    ) -> None:
+        """Escopo que falha ao listar vira Aviso, não impede os demais."""
+        extrator_fake = ExtratorFake(
+            respostas_escopos=[],
+            respostas_tabelas={
+                "public": Sucesso(valor=[("public", "clientes")]),
+                "financeiro_typo": Falha("Escopo 'financeiro_typo' não encontrado."),
+            },
+        )
+
+        pares = extracao.listar_pares(  # type: ignore[arg-type]
+            extrator_fake, ["public", "financeiro_typo"]
+        )
+
+        assert pares == [("public", "clientes")]
+        textos = [chamada["texto"] for chamada in interceptar_print]
+        assert any("financeiro_typo" in texto for texto in textos)
+        assert any(
+            "Escopo 'financeiro_typo' não encontrado." in texto for texto in textos
+        )
 
 
 class TestBorda:
@@ -248,16 +319,36 @@ class TestBorda:
 
         assert excinfo.value.code == 1
 
-    def test_extrair_usa_total_do_orquestrador_na_barra_de_progresso(
+    def test_extrair_usa_o_total_de_pares_na_barra_de_progresso(
         self,
         fabrica_tabela_extraida: Callable[[str, str], TabelaExtraida],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """Total exibido vem de ao_conhecer_total, sem listar tabelas por fora."""
+        """Total exibido vem de len(pares), já conhecido antes de chamar extrair."""
         tabela = fabrica_tabela_extraida("public", "clientes")
         orquestrador = OrquestradorFake(Sucesso(valor=[tabela]))
-        extrator_fake = ExtratorFake(respostas_escopos=[], respostas_tabelas={})
+        extrator_fake = ExtratorFake(respostas_escopos=[])
 
-        extracao.extrair(orquestrador, extrator_fake, ["public"])  # type: ignore[arg-type]
+        extracao.extrair(  # type: ignore[arg-type]
+            orquestrador, extrator_fake, [("public", "clientes")]
+        )
 
         assert "(1/1)" in capsys.readouterr().out
+
+    def test_escolher_tabelas_selecao_vazia_repergunta_ate_marcar_algo(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Seleção vazia não sai do wizard — repergunta até marcar ao menos uma."""
+        monkeypatch.setattr(
+            "ddf.infrastructure.adapters.cli.prompts.confirmar", lambda *a, **k: True
+        )
+        respostas = iter([[], ["public › clientes"]])
+        monkeypatch.setattr(
+            "ddf.infrastructure.adapters.cli.prompts.escolher_multiplos",
+            lambda *a, **k: next(respostas),
+        )
+        pares_disponiveis = [("public", "clientes")]
+
+        pares = extracao.escolher_tabelas(pares_disponiveis)
+
+        assert pares == [("public", "clientes")]

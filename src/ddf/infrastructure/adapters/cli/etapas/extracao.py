@@ -7,9 +7,10 @@ from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtra
 from ddf.domain.model.extraction import TabelaExtraida
 from ddf.domain.ports.extrator import Extrator
 from ddf.domain.ports.orquestrador_de_tabelas import OrquestradorDeTabelas
+from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha
 from ddf.infrastructure.adapters.cli import prompts
-from ddf.infrastructure.adapters.cli.avisos import ou_sair
+from ddf.infrastructure.adapters.cli.avisos import exibir_avisos, ou_sair
 from ddf.infrastructure.adapters.cli.registro.estrategias import (
     ESTRATEGIAS_REGISTRADAS,
 )
@@ -18,6 +19,7 @@ from ddf.infrastructure.adapters.cli.registro.extratores import (
 )
 
 _MAXIMO_TENTATIVAS_CONEXAO = 3
+_ORIGEM = "Extracao"
 
 
 def conectar() -> tuple[Extrator, ConfiguracaoDeExtracao, list[str]]:
@@ -90,20 +92,79 @@ def _testar_conexao(
         tentativa += 1
 
 
-def extrair(
-    orquestrador: OrquestradorDeTabelas, extrator: Extrator, escopos: list[str]
-) -> list[TabelaExtraida]:
-    """Etapa 5: extrai, em paralelo, todas as tabelas dos escopos escolhidos.
+def listar_pares(extrator: Extrator, escopos: list[str]) -> list[tuple[str, str]]:
+    """Lista as tabelas dos escopos escolhidos, agregadas em pares (escopo, tabela).
 
-    Total exibido na barra de progresso vem do próprio `orquestrador.extrair`
-    (`ao_conhecer_total`), assim que ele termina de listar as tabelas
-    internamente — sem uma 2ª listagem só para saber a contagem.
+    Falha ao listar um escopo vira Aviso e não impede a listagem dos
+    demais — mesma política de sucesso parcial usada no restante do
+    wizard.
     """
-    progresso, definir_total = prompts.progresso_paralelo("Tabelas extraídas")
+    pares: list[tuple[str, str]] = []
+    avisos_listagem: list[Aviso] = []
+    for escopo in escopos:
+        resultado = extrator.listar_tabelas(escopo)
+        if isinstance(resultado, Falha):
+            avisos_listagem.append(
+                Aviso(
+                    mensagem=(
+                        f"Falha ao listar tabelas de '{escopo}': {resultado.erro}"
+                    ),
+                    origem=_ORIGEM,
+                )
+            )
+            continue
+        pares.extend(resultado.valor)
+    exibir_avisos(avisos_listagem)
+    return pares
+
+
+def escolher_tabelas(pares_disponiveis: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Etapa opcional: extração completa do escopo ou seleção manual de tabelas.
+
+    "Extração completa" é o default (`confirmar` com `default=False` na
+    pergunta de restringir) — quem só aperta Enter mantém o comportamento
+    de sempre, sem nunca ver a lista de tabelas. Quem restringe escolhe a
+    partir de uma lista vazia (não pré-marcada) e é reperguntado até marcar
+    ao menos uma, em vez de o wizard sair em silêncio.
+    """
+    if not prompts.confirmar("Restringir tabelas extraídas?", default=False):
+        return pares_disponiveis
+
+    # "›", não "." — "." é caractere válido em identificador citado do
+    # Postgres/MySQL; usá-lo colidiria dois pares distintos no mesmo rótulo
+    # (ex.: ("a.b", "c") e ("a", "b.c")) e marcaria os dois juntos.
+    rotulos = [f"{escopo} › {tabela}" for escopo, tabela in pares_disponiveis]
+    while True:
+        rotulos_escolhidos = prompts.escolher_multiplos(
+            "Escolha uma ou mais tabelas:", rotulos, permite_vazio=True
+        )
+        if rotulos_escolhidos:
+            break
+        prompts.imprimir_destacado(
+            "Nenhuma tabela selecionada — marque ao menos uma.", prompts.COR_ERRO
+        )
+
+    escolhidos = set(rotulos_escolhidos)
+    return [
+        par
+        for par, rotulo in zip(pares_disponiveis, rotulos, strict=True)
+        if rotulo in escolhidos
+    ]
+
+
+def extrair(
+    orquestrador: OrquestradorDeTabelas,
+    extrator: Extrator,
+    pares: list[tuple[str, str]],
+) -> list[TabelaExtraida]:
+    """Etapa 5: extrai, em paralelo, as tabelas selecionadas.
+
+    O total exibido na barra de progresso já é conhecido de antemão
+    (`len(pares)`) — a listagem acontece antes, em `listar_pares`.
+    """
+    progresso = prompts.progresso_paralelo("Tabelas extraídas", total=len(pares))
     inicio = time.monotonic()
-    resultado = orquestrador.extrair(
-        escopos, extrator, progresso=progresso, ao_conhecer_total=definir_total
-    )
+    resultado = orquestrador.extrair(pares, extrator, progresso=progresso)
     print()
     print()
     print(f"duração: {time.monotonic() - inicio:.0f}s")
