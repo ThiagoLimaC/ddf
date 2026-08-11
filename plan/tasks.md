@@ -742,3 +742,27 @@
     11 (decisão do especialista-ux-terminal, precedente de `conectar()`,
     que já agrupa várias perguntas sob um único cabeçalho por serem a
     mesma decisão sendo detalhada, não fases distintas do pipeline)
+  - **Banca de revisão multi-agente pós-implementação** (Arquiteto de
+    Software + Engenheiro de Dados + PO, sobre o diff real, não o plano)
+    — aprovação com ressalvas dos 3, sem bloqueio; achados convergentes
+    corrigidos:
+    - Teste de integração faltante: os 3 revisores notaram que a
+      recomendação do engenheiro de dados (cobrir FK apontando para
+      tabela do mesmo escopo deliberadamente excluída da seleção) tinha
+      ficado só no plano. Corrigido com
+      `test_wizard_restringindo_tabelas_avisa_fk_composta_fora_da_selecao`
+      (`tests/integration/cli/test_wizard_end_to_end.py`) — prova que o
+      Aviso de FK composta fora do lote (mecanismo já existente,
+      `_avisos_de_fk_composta_sem_chave_candidata`) chega mesmo quando a
+      exclusão vem do checkbox de tabelas, não de um escopo inteiro
+    - `Progresso.definir_total`/`prompts.py` (arquiteto + engenheiro de
+      dados): ficou órfão — único caller real (`extracao.py::extrair`)
+      já sempre conhece o total de antemão desde a mudança acima.
+      Removido (`Progresso` NamedTuple inteiro; `progresso_paralelo`
+      devolve o callback direto), docstring corrigida (não cita mais
+      `extrair`/`aplicar_sobrescritas` como exemplos desatualizados)
+    - Colisão de rótulo em `escolher_tabelas` (arquiteto + engenheiro de
+      dados): rótulo do checkbox era `f"{escopo}.{tabela}"` — `.` é
+      caractere válido em identificador citado no Postgres/MySQL, dois
+      pares distintos podiam colidir no mesmo rótulo. Trocado para
+      `f"{escopo} › {tabela}"`

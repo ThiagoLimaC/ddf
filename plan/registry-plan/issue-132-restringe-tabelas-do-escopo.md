@@ -49,33 +49,71 @@ não versionado).
 
 ## Decisões de desenho fechadas
 
-- [ ] `OrquestradorDeTabelas.extrair`: `escopos: list[str]` → `pares:
+- [x] `OrquestradorDeTabelas.extrair`: `escopos: list[str]` → `pares:
       list[tuple[str, str]]`; `ao_conhecer_total` removido.
       `OrquestradorParalelo.extrair` para de listar internamente.
-- [ ] `cli/etapas/extracao.py`: `listar_pares(extrator, escopos)` (agrega
+- [x] `cli/etapas/extracao.py`: `listar_pares(extrator, escopos)` (agrega
       com sucesso parcial, mesma semântica que saía do Orquestrador) +
       `escolher_tabelas(pares_disponiveis)` (pergunta binária "extração
       completa do escopo" vs. "escolher tabelas específicas"; checkbox
       vazio + loop até marcar ao menos uma). `extrair` passa a receber
       `pares` e usa `progresso_paralelo(total=len(pares))` direto.
-- [ ] `prompts.escolher_multiplos` ganha `permite_vazio: bool = False` —
+- [x] `prompts.escolher_multiplos` ganha `permite_vazio: bool = False` —
       só quando `True` uma submissão vazia (não cancelamento) devolve `[]`
       em vez de `sys.exit(0)`; todos os demais call sites inalterados.
-- [ ] `wizard.py`: nova etapa sob o cabeçalho "Escolher escopos" (checkpoint
+- [x] `wizard.py`: nova etapa sob o cabeçalho "Escolher escopos" (checkpoint
       2), sem novo `cabecalho_etapa`, `_TOTAL_ETAPAS` continua 11.
       `_sair_se_vazio` (já existente) reusado se a listagem falhar para
       todos os escopos.
-- [ ] Docs: `system_design_doc.md` (prosa "14 etapas" → "15 etapas", nº de
+- [x] Docs: `system_design_doc.md` (prosa "14 etapas" → "15 etapas", nº de
       checkpoints do wizard não muda), `low_level_design.md` (assinatura do
       Port + lista numerada de etapas), `plan/tasks.md` (reabertura de
       escopo na Task 7, mencionando explicitamente a remoção de
       `ao_conhecer_total`).
-- [ ] Testes: `test_orquestrador_paralelo.py` (pares em vez de escopos, sem
+- [x] Testes: `test_orquestrador_paralelo.py` (pares em vez de escopos, sem
       `ao_conhecer_total`), `test_extracao.py` (`listar_pares`/
       `escolher_tabelas`, feliz/borda/default), `test_prompts.py`
       (`permite_vazio`), `test_wizard_end_to_end.py` (nova pergunta no
       fluxo), integração nova de FK apontando para tabela excluída da
       seleção.
+
+## Banca de revisão pós-implementação (sobre o diff real, não o plano)
+
+Arquiteto de Software + Engenheiro de Dados + PO revisaram os 6 commits
+(`48037b0`..`d3cde2d`) já prontos, `mypy --strict`/`ruff`/`pytest` (671
+testes) limpos — mesmo padrão da #126. Aprovação com ressalvas dos 3, sem
+bloqueio. Nenhum achado de arquitetura/contrato/escopo — o diff bateu com o
+plano aprovado. 3 achados de qualidade, todos corrigidos:
+
+- **Teste de integração de FK ausente (os 3 revisores, convergente):** a
+  recomendação do engenheiro de dados na rodada de planejamento (cobrir FK
+  apontando para tabela do mesmo escopo deliberadamente excluída) tinha
+  ficado só no plano, não no código. Corrigido:
+  `test_wizard_restringindo_tabelas_avisa_fk_composta_fora_da_selecao`
+  (`tests/integration/cli/test_wizard_end_to_end.py`) — `ExtratorFake` com
+  FK composta de "pedidos" para "estados" (mesmo escopo), usuário exclui
+  "estados" via checkbox, Aviso de "não verificada" confirmado no output
+  real do wizard (via `questionary.print` interceptado, não `capsys` —
+  mesma técnica de `interceptar_print`). Prova o *wiring* ponta a ponta que
+  faltava; o *mecanismo* (`_avisos_de_fk_composta_sem_chave_candidata`) já
+  era coberto por um teste unitário pré-existente da #95.
+- **`Progresso.definir_total` órfão (arquiteto + engenheiro de dados):**
+  sem nenhum caller real em `src/` depois da mudança do Port (o único
+  chamador, `extracao.py::extrair`, sempre conhece o total de antemão
+  agora). Removido por completo (`Progresso` NamedTuple; `progresso_
+  paralelo` devolve o callback direto, não mais um par) — YAGNI, sem
+  generalidade especulativa mantida só por existir. Docstring de
+  `progresso_paralelo` corrigida (não cita mais `extrair`/`aplicar_
+  sobrescritas` como exemplos, que já estavam desatualizados).
+- **Colisão de rótulo em `escolher_tabelas` (arquiteto + engenheiro de
+  dados, mesma raiz):** rótulo do checkbox era `f"{escopo}.{tabela}"` — `.`
+  é identificador válido citado no Postgres/MySQL, então dois pares
+  distintos (ex.: `("a.b","c")` e `("a","b.c")`) podiam colidir no mesmo
+  texto e marcar os dois juntos. Trocado para `f"{escopo} › {tabela}"`,
+  comentário no código explicando o porquê.
+
+Decisão do usuário sobre as 3 opções (implementar agora vs. adiar como
+follow-up): implementar agora, nas 3.
 
 ## Fora de escopo (registrado, não implementado nesta issue)
 
