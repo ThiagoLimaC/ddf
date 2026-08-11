@@ -225,6 +225,11 @@ class TestErro:
         extrator = _construir_extrator_mariadb(configuracao)
 
         assert isinstance(extrator, ExtratorMariaDB)
+        # Mesma folga do Postgres sobre o max_trabalhadores=8 do
+        # OrquestradorParalelo do wizard (ver extratores.py) — sem isso, o
+        # paralelismo intra-tabela do MariaDB nunca ativa de verdade sob
+        # carga concorrente.
+        assert extrator._max_conexoes == 12
 
 
 class TestBorda:
