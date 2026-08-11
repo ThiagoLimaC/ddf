@@ -112,6 +112,10 @@ class TestFeliz:
 
         assert isinstance(extrator, ExtratorPostgres)
         assert extrator._dsn == "postgresql://user1:senha1@host1:5433/banco1"
+        # Folga sobre o max_trabalhadores=8 do OrquestradorParalelo do
+        # wizard — sem isso, o paralelismo intra-tabela nunca acha conexão
+        # livre pra reservar sob carga concorrente (ver extratores.py).
+        assert extrator._max_conexoes == 12
 
     def test_construir_extrator_postgres_imprime_arvore_de_decisao_no_final(
         self,

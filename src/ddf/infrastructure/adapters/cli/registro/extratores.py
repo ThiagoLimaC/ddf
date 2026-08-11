@@ -28,6 +28,17 @@ EXTRATORES_REGISTRADOS: dict[str, ExtratorRegistrado] = {}
 # "*" * len(senha_conexao), que denunciaria o tamanho real da senha.
 _MASCARA_SENHA = "****"
 
+# OrquestradorParalelo() no wizard usa max_trabalhadores=8 (default, não
+# exposto — ver wizard.py). Se max_conexoes do ExtratorPostgres também
+# fosse 8, as 8 conexões já estariam em uso por outras tabelas no instante
+# em que uma tabela grande tenta reservar as suas pro paralelismo
+# intra-tabela — reservar_conexoes nunca acharia as 2 mínimas livres, e o
+# caminho paralelo nunca ativaria de verdade sob carga concorrente
+# (degradação graciosa pro sequencial, sem erro, mas silenciosamente
+# inútil). +4 dá folga pro caso pior (todos os 8 trabalhadores ocupados ao
+# mesmo tempo) ainda conseguir o `max_conexoes_por_tabela` padrão inteiro.
+_MAX_CONEXOES_POSTGRES = 12
+
 
 def registrar_extrator(
     nome: str,
@@ -111,7 +122,9 @@ def _construir_extrator_postgres(configuracao: ConfiguracaoDeExtracao) -> Extrat
     prompts.linha_de_decisao("Banco", banco)
     prompts.linha_de_decisao("Usuário", usuario)
     prompts.linha_de_decisao("Senha", _MASCARA_SENHA, ultimo=True)
-    return ExtratorPostgres(dsn=dsn, configuracao=configuracao)
+    return ExtratorPostgres(
+        dsn=dsn, configuracao=configuracao, max_conexoes=_MAX_CONEXOES_POSTGRES
+    )
 
 
 def _construir_extrator_mariadb(configuracao: ConfiguracaoDeExtracao) -> Extrator:
