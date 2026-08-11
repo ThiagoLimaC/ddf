@@ -267,6 +267,46 @@ def _elegibilidade_de_pk_para_faixa(
     return _PkElegivel(nome_coluna=nome_pk)
 
 
+def particionar_faixas_exaustivas(
+    minimo: int, maximo: int, n: int
+) -> list[tuple[int, int | None]]:
+    """Divide `[minimo, maximo]` em `n` faixas contíguas de valor de PK.
+
+    Mesmo algoritmo de `postgres/_construcao.py::particoes_de_blocos`
+    (determinístico, disjunto, exaustivo — sem faixa `[min,max]` física
+    comum aos dois motores para compartilhar via um módulo único), aplicado
+    a valor de chave primária em vez de bloco físico: não há equivalente a
+    `ctid` no MariaDB, então a faixa é lógica (`pk >= x AND pk < y`), não
+    física — não garante blocos tocados, só cobertura exaustiva do domínio
+    de PK. A última faixa não tem teto (`None`): `maximo` foi lido antes da
+    leitura de verdade começar, um teto fechado excluiria silenciosamente
+    linhas inseridas com PK maior nesse meio-tempo.
+
+    Args:
+        minimo: menor valor de PK presente na tabela (`MIN(pk)`).
+        maximo: maior valor de PK presente na tabela (`MAX(pk)`).
+        n: número de faixas a gerar — tipicamente o nº de conexões
+            reservadas para a leitura paralela.
+
+    Returns:
+        Lista de `n` tuplas `(inicio_inclusive, fim_exclusivo | None)`.
+    """
+    if n <= 0:
+        return []
+    largura_dominio = max(1, maximo - minimo + 1)
+    tamanho_faixa = max(1, largura_dominio // n)
+    faixas: list[tuple[int, int | None]] = []
+    inicio = minimo
+    for indice in range(n):
+        if indice == n - 1:
+            faixas.append((inicio, None))
+        else:
+            fim = inicio + tamanho_faixa
+            faixas.append((inicio, fim))
+            inicio = fim
+    return faixas
+
+
 def _promover_booleanos_pela_amostra(
     colunas: list[ColunaExtraida],
     amostra: pl.DataFrame,

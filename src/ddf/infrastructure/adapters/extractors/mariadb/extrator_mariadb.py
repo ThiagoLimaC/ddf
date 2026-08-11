@@ -7,7 +7,10 @@ from collections import defaultdict
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any, assert_never
+from urllib.parse import quote
 
+import connectorx as cx
+import polars as pl
 import pymysql
 from dbutils.pooled_db import PooledDB
 
@@ -31,6 +34,12 @@ from ddf.infrastructure.adapters.extractors.comum.construir_metadados_de_amostra
 from ddf.infrastructure.adapters.extractors.comum.construir_restricoes_fk_compostas import (  # noqa: E501
     construir_restricoes_fk_compostas,
 )
+from ddf.infrastructure.adapters.extractors.comum.leitura_paralela_intra_tabela import (  # noqa: E501
+    MINIMO_CONEXOES_PARALELISMO,
+    deve_paralelizar_leitura,
+    liberar_conexoes,
+    reservar_conexoes,
+)
 from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
     LARGURA_MEDIA_PADRAO_BYTES,
     calcular_tamanho_lote,
@@ -51,6 +60,7 @@ from ddf.infrastructure.adapters.extractors.mariadb._construcao import (
     _PkNaoElegivel,
     _promover_booleanos_pela_amostra,
     _quotar_identificador,
+    particionar_faixas_exaustivas,
 )
 from ddf.infrastructure.adapters.extractors.mariadb._queries import (
     _CHAVES_ESTRANGEIRAS_SQL,
@@ -104,6 +114,7 @@ class ExtratorMariaDB:
         port: int = 3306,
         max_conexoes: int = 8,
         connect_timeout: int = 10,
+        max_conexoes_por_tabela: int | None = None,
     ) -> None:
         """Guarda os parâmetros de conexão — o pool só é criado no primeiro uso.
 
@@ -121,12 +132,25 @@ class ExtratorMariaDB:
                 não pode travar indefinidamente) — o valor já era o default
                 do `pymysql`, então isso não muda o comportamento atual, só
                 deixa de depender implicitamente do driver.
+            max_conexoes_por_tabela: teto de conexões que uma única tabela
+                grande tenta reservar pra ler em paralelo internamente via
+                `connectorx` — mesmo parâmetro/default (`min(4,
+                max_conexoes)`) do `ExtratorPostgres`.
 
         Raises:
-            ValueError: se `max_conexoes` não for positivo.
+            ValueError: se `max_conexoes` não for positivo, ou se
+                `max_conexoes_por_tabela` for explicitado e não for
+                positivo ou exceder `max_conexoes`.
         """
         if max_conexoes <= 0:
             raise ValueError(f"max_conexoes deve ser positivo ({max_conexoes}).")
+        if max_conexoes_por_tabela is None:
+            max_conexoes_por_tabela = min(4, max_conexoes)
+        elif max_conexoes_por_tabela <= 0 or max_conexoes_por_tabela > max_conexoes:
+            raise ValueError(
+                "max_conexoes_por_tabela deve ser positivo e não exceder "
+                f"max_conexoes ({max_conexoes_por_tabela} vs. {max_conexoes})."
+            )
         self._host = host
         self._user = user
         self._password = password
@@ -134,10 +158,15 @@ class ExtratorMariaDB:
         self._port = port
         self._max_conexoes = max_conexoes
         self._connect_timeout = connect_timeout
+        self._max_conexoes_por_tabela = max_conexoes_por_tabela
         self._pool: PooledDB | None = None
         self._lock_pool = threading.Lock()
         self._cache_schemas: dict[str, _MetadadosDoSchema] = {}
         self._lock_cache_schemas = threading.Lock()
+        self._semaforo = threading.Semaphore(max_conexoes)
+        self._lock_reserva_paralelismo = threading.Lock()
+        self._aviso_paralelismo_emitido = False
+        self._lock_aviso_paralelismo = threading.Lock()
 
     def _obter_pool(self) -> Resultado[PooledDB]:
         """Cria o pool sob demanda, pra falha de conexão virar Falha, não exceção."""
@@ -166,32 +195,40 @@ class ExtratorMariaDB:
     def _conexao(self) -> Generator[Resultado[Any], None, None]:
         """Empresta uma conexão do pool, com devolução (`close`) garantida.
 
-        Sem semáforo próprio — diferente do `ExtratorPostgres`, o `PooledDB`
-        já foi criado com `blocking=True` (`_obter_pool`), então
-        `pool.connection()` bloqueia internamente quando o pool está
+        `PooledDB` foi criado com `blocking=True` (`_obter_pool`), então
+        `pool.connection()` já bloqueia internamente quando o pool está
         saturado, em vez de levantar erro como o `ThreadedConnectionPool`
-        do psycopg2 faria.
+        do psycopg2 faria — mas isso sozinho não basta mais desde que o
+        paralelismo intra-tabela passou a reservar conexões via
+        `reservar_conexoes`: as conexões que o `connectorx` abre por conta
+        própria (fora deste `PooledDB`) também precisam contar contra o
+        mesmo orçamento `max_conexoes`, senão o total real de conexões no
+        servidor pode passar do configurado. `self._semaforo` (mesmo
+        padrão do `ExtratorPostgres`) cobre as duas fontes.
 
         `yield`a um `Falha` cedo, sem entrar no `try`/`finally` de conexão,
         quando o pool não pode ser obtido ou `pool.connection()` falha —
-        nesses casos não há conexão a devolver. Tipo `Any` porque
-        `dbutils.pooled_db` não tem stubs (`ignore_missing_imports` em
-        `pyproject.toml`).
+        nesses casos não há conexão nem posse do semáforo a devolver. Tipo
+        `Any` porque `dbutils.pooled_db` não tem stubs
+        (`ignore_missing_imports` em `pyproject.toml`).
         """
         resultado_pool = self._obter_pool()
         if isinstance(resultado_pool, Falha):
             yield resultado_pool
             return
         pool = resultado_pool.valor
+        self._semaforo.acquire()
         try:
             conexao = pool.connection()
         except pymysql.err.OperationalError as erro:
+            self._semaforo.release()
             yield Falha(f"Não foi possível conectar: {erro}")
             return
         try:
             yield Sucesso(conexao)
         finally:
             conexao.close()
+            self._semaforo.release()
 
     def listar_escopos(self) -> Resultado[list[str]]:
         """Lista os escopos (databases) disponíveis, ordenados por nome."""
@@ -325,6 +362,103 @@ class ExtratorMariaDB:
             self._cache_schemas[escopo] = metadados
             return Sucesso(metadados)
 
+    def _emitir_aviso_paralelismo_se_necessario(self, avisos: list[Aviso]) -> None:
+        """Emite o Aviso de risco de consistência uma única vez por execução.
+
+        MariaDB não tem equivalente ao `pg_export_snapshot`/`SET
+        TRANSACTION SNAPSHOT` do Postgres (`FLUSH TABLES WITH READ LOCK`
+        trava o servidor inteiro, rejeitado) — cada faixa paralela lê sob
+        sua própria transação, sem garantia de consistência entre elas.
+        Flag de instância protegida por lock evita repetir o mesmo texto
+        uma vez por tabela elegível (mesmo ruído que a #116 já corrigiu
+        pro viés de cluster de `AmostragemPorFaixa`) — não dá pra mover
+        pro wizard porque a ativação depende do tamanho real da tabela, só
+        conhecido em runtime.
+        """
+        with self._lock_aviso_paralelismo:
+            if self._aviso_paralelismo_emitido:
+                return
+            self._aviso_paralelismo_emitido = True
+        avisos.append(
+            Aviso(
+                mensagem=(
+                    "Paralelismo intra-tabela ativado neste MariaDB sem "
+                    "garantia de consistência entre faixas — o motor não "
+                    "tem equivalente ao SET TRANSACTION SNAPSHOT do "
+                    "Postgres. Escritas concorrentes durante a extração "
+                    "podem produzir uma amostra combinada de estados "
+                    "diferentes da tabela."
+                ),
+                origem="ExtratorMariaDB",
+            )
+        )
+
+    def _ler_tabela_em_paralelo(
+        self, escopo: str, tabela: str, nome_pk: str, n: int
+    ) -> Resultado[pl.DataFrame]:
+        """Lê a tabela inteira via `connectorx`, uma faixa contígua de PK por conexão.
+
+        Sem conexão líder nem snapshot: diferente do `ExtratorPostgres`,
+        não há mecanismo de consistência entre faixas a coordenar aqui —
+        cada faixa de `connectorx` é só uma query independente contra o
+        mesmo `nome_pk` (risco aceito, ver
+        `_emitir_aviso_paralelismo_se_necessario`). `MIN`/`MAX` do PK
+        define o domínio a particionar; `particionar_faixas_exaustivas`
+        gera as faixas (mesmo algoritmo de `ctid` do Postgres, aplicado a
+        valor de PK em vez de bloco físico).
+        """
+        identificador_tabela = (
+            f"{_quotar_identificador(escopo)}.{_quotar_identificador(tabela)}"
+        )
+        identificador_pk = _quotar_identificador(nome_pk)
+        with self._conexao() as resultado_conexao:
+            if isinstance(resultado_conexao, Falha):
+                return resultado_conexao
+            conexao = resultado_conexao.valor
+            with conexao.cursor() as cursor:
+                cursor.execute(
+                    f"SELECT MIN({identificador_pk}), MAX({identificador_pk}) "
+                    f"FROM {identificador_tabela}"
+                )
+                linha_dominio = cursor.fetchone()
+        minimo, maximo = linha_dominio if linha_dominio else (None, None)
+        if minimo is None or maximo is None:
+            return Falha(
+                f"'{escopo}.{tabela}': tabela vazia, não elegível a "
+                "paralelismo intra-tabela."
+            )
+
+        faixas = particionar_faixas_exaustivas(minimo, maximo, n)
+        _logger.info(
+            "'%s.%s': dividindo em %d faixas de PK '%s' (%d..%d) para "
+            "leitura paralela via connectorx.",
+            escopo,
+            tabela,
+            n,
+            nome_pk,
+            minimo,
+            maximo,
+        )
+        queries: list[str] = []
+        for inicio, fim in faixas:
+            condicao = f"{identificador_pk} >= {inicio}"
+            if fim is not None:
+                condicao += f" AND {identificador_pk} < {fim}"
+            queries.append(f"SELECT * FROM {identificador_tabela} WHERE {condicao}")
+
+        dsn = (
+            f"mysql://{quote(self._user, safe='')}:"
+            f"{quote(self._password, safe='')}@{self._host}:{self._port}/"
+            f"{quote(escopo, safe='')}"
+        )
+        try:
+            amostra = cx.read_sql(dsn, queries, return_type="polars")
+        except Exception as erro:  # noqa: BLE001 — crash conhecido do connectorx
+            return Falha(
+                f"Falha ao ler '{escopo}.{tabela}' em paralelo via connectorx: {erro}"
+            )
+        return Sucesso(amostra)
+
     def extrair_tabela(self, escopo: str, tabela: str) -> Resultado[TabelaExtraida]:
         """Extrai estrutura, amostra e metadados de uma tabela específica."""
         resultado_estrategia = self._configuracao.estrategia_obrigatoria()
@@ -381,6 +515,81 @@ class ExtratorMariaDB:
         largura_media_bytes = metadados.largura_media_por_tabela.get(
             tabela, LARGURA_MEDIA_PADRAO_BYTES
         )
+
+        # Paralelismo intra-tabela: só AmostragemIntegral por enquanto,
+        # mesmo escopo fatiado do ExtratorPostgres (item 4a/4b da #126) —
+        # e só quando a PK é elegível para virar faixa contígua
+        # (_elegibilidade_de_pk_para_faixa, mesma checagem que
+        # RequisicaoPorFaixa já usa). Sem detecção de tabela particionada
+        # nativa do MariaDB — fora do escopo desta rodada.
+        requisicao = estrategia.requisicao
+        pk_elegivel: _PkElegivel | None = None
+        elegivel_paralelo = isinstance(
+            requisicao, AmostragemIntegral
+        ) and deve_paralelizar_leitura(total_linhas, largura_media_bytes)
+        if elegivel_paralelo:
+            elegibilidade_pk = _elegibilidade_de_pk_para_faixa(
+                colunas_pk, linhas_colunas
+            )
+            if isinstance(elegibilidade_pk, _PkElegivel):
+                pk_elegivel = elegibilidade_pk
+            else:
+                elegivel_paralelo = False
+
+        n_reservado = 0
+        if elegivel_paralelo:
+            n_reservado = reservar_conexoes(
+                self._semaforo,
+                self._lock_reserva_paralelismo,
+                self._max_conexoes_por_tabela,
+            )
+        if n_reservado >= MINIMO_CONEXOES_PARALELISMO:
+            assert pk_elegivel is not None
+            _logger.info(
+                "'%s.%s': paralelismo intra-tabela ativado (~%d linhas, "
+                "%d conexões).",
+                escopo,
+                tabela,
+                total_linhas,
+                n_reservado,
+            )
+            self._emitir_aviso_paralelismo_se_necessario(avisos)
+            try:
+                resultado_leitura = self._ler_tabela_em_paralelo(
+                    escopo, tabela, pk_elegivel.nome_coluna, n_reservado
+                )
+            finally:
+                liberar_conexoes(self._semaforo, n_reservado)
+            if isinstance(resultado_leitura, Falha):
+                return resultado_leitura
+            amostra_paralela = resultado_leitura.valor
+            colunas = _promover_booleanos_pela_amostra(
+                colunas, amostra_paralela, candidatos_booleanos
+            )
+            metadados_amostra, avisos_amostra = construir_metadados_de_amostra(
+                nome="tabela_inteira",
+                requisicao=requisicao,
+                tamanho_amostra=len(amostra_paralela),
+                total_linhas=len(amostra_paralela),
+                origem="ExtratorMariaDB",
+                causa_provavel="sem ANALYZE TABLE recente",
+                identificador_tabela=f"{escopo}.{tabela}",
+            )
+            avisos.extend(avisos_amostra)
+            return Sucesso(
+                TabelaExtraida(
+                    nome_tabela=tabela,
+                    nome_escopo=escopo,
+                    colunas=colunas,
+                    total_linhas=len(amostra_paralela),
+                    amostra=amostra_paralela,
+                    metadados_amostra=metadados_amostra,
+                    restricoes_unicas=restricoes_unicas,
+                    restricoes_fk_compostas=restricoes_fk_compostas,
+                ),
+                avisos=avisos,
+            )
+
         usa_streaming = deve_usar_streaming(total_linhas, largura_media_bytes)
         if usa_streaming:
             _logger.info(
@@ -406,7 +615,6 @@ class ExtratorMariaDB:
             # silenciosamente engolido (achado do engenheiro de dados),
             # mascarando a causa raiz real do erro.
             with cursor_bruto as cursor:
-                requisicao = estrategia.requisicao
                 requisicao_efetiva: RequisicaoDeAmostragem
                 identificador_tabela = (
                     f"{_quotar_identificador(escopo)}.{_quotar_identificador(tabela)}"
