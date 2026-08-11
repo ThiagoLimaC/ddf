@@ -488,7 +488,7 @@ class ExtratorPostgres:
             return resultado_blocos
         total_blocos = resultado_blocos.valor
         faixas = particoes_de_blocos(total_blocos, n)
-        _logger.warning(
+        _logger.info(
             "'%s.%s': dividindo em %d faixas de blocos (%d blocos no "
             "total, ~%d blocos/faixa) para leitura paralela via "
             "connectorx — todas as faixas competem pelo mesmo storage "
