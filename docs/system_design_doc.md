@@ -417,3 +417,41 @@ Exibe `Aviso`s em streaming por etapa concluída, agrupados por origem e por
     `Falha` explícita se ainda `None`, em vez de cada Adapter concreto
     (Postgres, MariaDB, e futuros plugins de terceiro) reimplementar o
     mesmo `if estrategia is None` manualmente.
+14. **Paralelismo intra-tabela via `connectorx`, não `ThreadPoolExecutor`
+    dentro do próprio Extrator** — issue #126: uma tabela outlier (milhões
+    de linhas) domina o tempo de parede do lote inteiro mesmo com o
+    paralelismo entre tabelas (`OrquestradorParalelo`) já extraindo 100%
+    do valor possível nesse nível (medido: isolar a tabela grande fora do
+    lote não ganha nada, +0,4% de diferença). Uma primeira tentativa
+    reaproveitou o `ThreadPoolExecutor` já usado no `OrquestradorParalelo`
+    — várias conexões `psycopg2`, uma por faixa física de `ctid`, snapshot
+    compartilhado via `pg_export_snapshot`/`SET TRANSACTION SNAPSHOT` —
+    mas testada contra uma tabela real de ~4M linhas rendeu só ~15-20% de
+    ganho (teto teórico 4x com 4 conexões). Medição por thread confirmou o
+    **GIL do Python** como gargalo: a decodificação de `pl.DataFrame` a
+    partir de tuplas do driver serializa as threads, threads não liberam o
+    GIL durante esse trabalho. `connectorx` (lib Rust, decodifica direto
+    pra Arrow/Polars fora do GIL via `py.allow_threads`) ataca a causa
+    raiz — spike validado contra Postgres 16/MariaDB 11 reais confirmou
+    2.7-4x de ganho real (mesma tabela de 4M linhas). `connectorx` não
+    aceita um pool de conexões externo nem expõe cursor Python — abre e
+    gerencia as próprias conexões, o que muda a forma da camada de
+    execução física (`_ler_tabela_em_paralelo` de cada Extrator concreto),
+    mas não a camada de decisão/particionamento: `deve_paralelizar_leitura`/
+    `reservar_conexoes`/`liberar_conexoes`
+    (`extractors/comum/leitura_paralela_intra_tabela.py`) continuam
+    motor-agnósticas e reservam o orçamento de conexões do semáforo do
+    Extrator antes de chamar `connectorx` — as conexões abertas pela lib
+    fora do pool também contam contra esse orçamento. Postgres preserva
+    consistência entre faixas via `pg_export_snapshot` (conexão líder
+    dedicada, fora do `connectorx`) mais `pre_execution_query=["BEGIN
+    ISOLATION LEVEL REPEATABLE READ", "SET TRANSACTION SNAPSHOT '<id>'"]`
+    por partição — modo não documentado pela lib, validado empiricamente.
+    MariaDB não tem equivalente (`FLUSH TABLES WITH READ LOCK` é lock
+    global, rejeitado) — risco de leitura inconsistente entre faixas
+    aceito e documentado via `Aviso` emitido uma vez por execução, mesma
+    classe de trade-off já aceita para o viés de cluster de
+    `AmostragemPorFaixa`. Escopo restrito a `AmostragemIntegral` nos dois
+    motores nesta rodada — `PercentualDeLinhas`/`AmostragemPorFaixa` com
+    percentual alto fica para uma iteração futura. Detalhes completos em
+    `plan/registry-plan/issue-126-paralelismo-intra-tabela.md`.

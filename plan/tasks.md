@@ -291,6 +291,58 @@
     limiares de streaming/`K` faixas (depende da correção de largura
     acima ter sido feita primeiro), checagem de PK monotônica na
     elegibilidade de faixa, teste de carga concorrente de escrita.
+- [x] Paralelismo intra-tabela via `connectorx` (issue #126) — só
+      `AmostragemIntegral`, nos dois motores. Checklist completo (achados
+      da banca, resultado do spike de validação, decisões fechadas com o
+      usuário) em
+      `plan/registry-plan/issue-126-paralelismo-intra-tabela.md`. Resumo:
+  - `extractors/comum/leitura_paralela_intra_tabela.py`
+    (motor-agnóstico): `deve_paralelizar_leitura` (limiares candidatos:
+    500.000 linhas / 500MB), `reservar_conexoes`/`liberar_conexoes`
+    (reserva atômica sob `Lock` dedicado — resolve deadlock hold-and-wait
+    entre líder e workers reservando do mesmo semáforo; reduz
+    progressivamente até `MINIMO_CONEXOES_PARALELISMO=2`).
+  - **Pivô de arquitetura em produção, não só planejamento:** uma
+    primeira implementação (`ThreadPoolExecutor` + conexão `psycopg2` por
+    faixa, snapshot via `pg_export_snapshot`/`SET TRANSACTION SNAPSHOT`)
+    testada contra tabela real de ~4M linhas rendeu só ~15-20% de ganho
+    (teto teórico 4x) — medição por thread confirmou o GIL do Python
+    como gargalo estrutural na decodificação de `pl.DataFrame`. Spike de
+    validação (`connectorx`, lib Rust que decodifica direto pra
+    Arrow/Polars fora do GIL) confirmou 2.7-4x de ganho real na mesma
+    tabela — decisão de refatorar a implementação existente pra
+    `connectorx`, não abrir issue nova.
+  - `ExtratorPostgres._ler_tabela_em_paralelo`: conexão líder exporta
+    snapshot e mantém transação aberta; `n` faixas de `ctid`
+    (`particoes_de_blocos`) viram uma lista de queries entregues numa
+    única chamada `cx.read_sql(..., pre_execution_query=["BEGIN
+    ISOLATION LEVEL REPEATABLE READ", "SET TRANSACTION SNAPSHOT
+    '<id>'"])` — modo não documentado pela lib, validado empiricamente.
+    Tabela particionada declarativamente cai no sequencial sem erro.
+  - `ExtratorMariaDB._ler_tabela_em_paralelo`: sem conexão líder nem
+    snapshot (sem equivalente no motor) — `MIN`/`MAX` de PK definem o
+    domínio, `particionar_faixas_exaustivas` gera as faixas, elegível só
+    com PK de coluna única e tipo inteiro (reusa
+    `_elegibilidade_de_pk_para_faixa`, já existia pra
+    `AmostragemPorFaixa`). Risco de inconsistência entre faixas aceito e
+    documentado via `Aviso` único por execução (mesmo tratamento de
+    ruído do achado B4 da #126, que a #116 já tinha corrigido pro viés
+    de cluster).
+  - **Risco real encontrado no spike, não resolvido nesta rodada:**
+    `NUMERIC` sem precisão/escala fixa crasha `connectorx` de forma
+    detectável (não trunca silenciosamente) quando linhas têm escalas
+    diferentes.
+  - Testes: unitários de partição por motor (`particoes_de_blocos`
+    Postgres, `particionar_faixas_exaustivas` MariaDB, feliz/borda/erro)
+    + testes de integração via `testcontainers` (Postgres 16 e MariaDB
+    11 reais) confirmando conjunto de `id`s idêntico entre paralelo e
+    sequencial, sem overlap nem gap. `ruff`/`mypy --strict` limpos, 662
+    testes unitários passando.
+  - Fora de escopo, registrado como follow-up: `PercentualDeLinhas`/
+    `AmostragemPorFaixa` com percentual alto (candidato a tratar como
+    `AmostragemIntegral` pra elegibilidade), detecção de tabela
+    particionada nativa do MariaDB, calibração final dos limiares,
+    benchmark versionado (item 8 do registry-plan, ainda pendente).
 
 ## 4. Sobrescrita (ACL Extraction → Curation) e OrquestradorParalelo
 
