@@ -160,3 +160,29 @@ _COLUNAS_COMPRIMIVEIS_SCHEMA_SQL = """
         AND NOT a.attisdropped
         AND a.attstorage <> 'p'
 """
+
+# relkind = 'p': tabela particionada declarativamente (a tabela-mãe, sem
+# storage próprio — quem tem storage são as partições-filhas). Detectada à
+# parte porque `pg_relation_size(oid)`/`ctid` sobre a tabela-mãe não mapeia
+# pra nada físico coerente (mesmo `relkind` já tratado como caso especial
+# em _TOTAL_LINHAS_SCHEMA_SQL) — tabela particionada nunca é elegível a
+# leitura paralela intra-tabela.
+_TABELAS_PARTICIONADAS_SCHEMA_SQL = """
+    SELECT c.relname
+    FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = %s AND c.relkind = 'p'
+"""
+
+# format('%I.%I', ...) monta o identificador schema.tabela com quoting
+# seguro (maiúsculas, caracteres especiais) antes de virar regclass —
+# evita montar a string manualmente em Python. Só chamada quando a leitura
+# paralela intra-tabela já foi decidida como elegível (não faz parte do
+# round-trip de metadados por schema). %%I (não %I): psycopg2 já usa %s
+# pra parâmetro — um %I literal na query seria consumido pela própria
+# substituição de parâmetros do driver antes de chegar no Postgres;
+# %% escapa pro Postgres receber o %I de verdade.
+_TOTAL_BLOCOS_TABELA_SQL = """
+    SELECT pg_relation_size(to_regclass(format('%%I.%%I', %s, %s)))
+           / current_setting('block_size')::int
+"""

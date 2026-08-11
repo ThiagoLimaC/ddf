@@ -102,6 +102,43 @@ def _diverge_alem_de_null(lotes: list[pl.DataFrame]) -> bool:
     return any(len(dtypes) > 1 for dtypes in dtypes_por_coluna.values())
 
 
+def concatenar_particoes(
+    particoes: Sequence[pl.DataFrame],
+    schema_se_vazio: Sequence[str] = (),
+) -> pl.DataFrame:
+    """Funde DataFrames de leituras independentes num único, preservando tudo.
+
+    Duas origens de DataFrames independentes passam por aqui: os lotes de
+    `fetchmany` de `ler_amostra_em_lotes` (mesma coluna, lidos em sequência)
+    e as partições de uma leitura paralela intra-tabela (mesma coluna,
+    lidas por faixa/bloco em conexões diferentes) — a fusão é idêntica nos
+    dois casos, só muda de onde os DataFrames vêm.
+
+    Cada DataFrame infere seu próprio dtype por coluna, isolado dos
+    outros — um DataFrame inteiro `Null` numa coluna nulável (lote/faixa
+    sem nenhum valor não-nulo) funde com qualquer tipo real sem risco; um
+    DataFrame com valor real (`Int64` etc.) numa coluna que outro leu como
+    `Null` quebraria `pl.concat` estrito por divergência de schema entre
+    eles. A fusão só relaxa (`how="vertical_relaxed"`) quando a única
+    divergência é `Null` contra um tipo real — qualquer outra divergência
+    (ex.: `Int64` vs `Utf8`) propaga como erro explícito em vez de coagir
+    silenciosamente entre tipos incompatíveis.
+
+    Args:
+        particoes: DataFrames a fundir, já com o mesmo conjunto de colunas
+            entre si.
+        schema_se_vazio: nomes de coluna a usar quando `particoes` está
+            vazia (nada foi lido) — irrelevante quando `particoes` tem ao
+            menos um DataFrame, já que cada um já carrega o próprio schema.
+    """
+    if not particoes:
+        return pl.DataFrame(schema=list(schema_se_vazio))
+    lista = list(particoes)
+    if _diverge_alem_de_null(lista):
+        return pl.concat(lista, how="vertical")
+    return pl.concat(lista, how="vertical_relaxed")
+
+
 def ler_amostra_em_lotes(
     cursor: _CursorComFetchmany,
     tamanho_lote: int,
@@ -115,15 +152,9 @@ def ler_amostra_em_lotes(
     achado só contra Postgres real (testcontainers), não reproduzível com
     cursor mockado.
 
-    Cada lote infere seu próprio dtype por coluna, independente dos
-    outros (`infer_schema_length=None` só olha as linhas daquele lote) —
-    uma coluna nulável cujo 1º lote vem todo `NULL` infere `Null`, não o
-    tipo real; um lote seguinte com valor real (`Int64` etc.) quebraria
-    `pl.concat` estrito por divergência de schema entre lotes. A fusão só
-    relaxa (`how="vertical_relaxed"`) quando a única divergência entre
-    lotes é `Null` contra um tipo real — qualquer outra divergência
-    (ex.: `Int64` vs `Utf8`) propaga como erro explícito em vez de
-    coagir silenciosamente entre tipos incompatíveis.
+    A fusão dos lotes (`infer_schema_length=None` só olha as linhas de
+    cada lote isoladamente) é feita por `concatenar_particoes` — ver ali
+    o motivo de relaxar só divergência `Null` vs. tipo real.
 
     Args:
         cursor: cursor já com a query de amostra executada.
@@ -143,12 +174,9 @@ def ler_amostra_em_lotes(
                 infer_schema_length=None,
             )
         )
-    if not lotes:
+    if not nomes_colunas:
         nomes_colunas = [str(coluna[0]) for coluna in cursor.description or ()]
-        return pl.DataFrame(schema=nomes_colunas)
-    if _diverge_alem_de_null(lotes):
-        return pl.concat(lotes, how="vertical")
-    return pl.concat(lotes, how="vertical_relaxed")
+    return concatenar_particoes(lotes, schema_se_vazio=nomes_colunas)
 
 
 class _CursorComFetchall(Protocol):
