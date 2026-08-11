@@ -275,14 +275,19 @@ precisa para funcionar. A CLI valida antes de rodar.
 
 ### 8. CLI (wizard)
 
-Conduz: escolher fonte e conectar → escolher escopos → escolher estratégia
-de amostragem → extrair (paralelo) → gerar skeletons → **pausa para
+Conduz: escolher fonte e conectar → escolher escopos → escolher tabelas
+(opcional, default extração completa do escopo) → escolher estratégia de
+amostragem → extrair (paralelo) → gerar skeletons → **pausa para
 curadoria** → aplicar sobrescritas → escolher Geradores → validar
 Analisadores+Geradores → analisar → escolher destino → confirmar → executar.
-14 etapas ao todo, uma fase do pipeline por módulo em `cli/etapas/`
+15 etapas ao todo, uma fase do pipeline por módulo em `cli/etapas/`
 (`extracao.py`, `curadoria.py`, `analise.py`, `geracao.py`) — `wizard.py`
 só orquestra a sequência. Ordem revisada na issue #75 — antes a estratégia
 de amostragem era escolhida antes de conhecer fonte/escopo (ver Decisão 13).
+Escolher tabelas não ganhou checkpoint numerado próprio — fica sob o mesmo
+cabeçalho de "Escolher escopos", refinamento imediato da mesma decisão
+(mesmo padrão já usado em "escolher fonte" + "testar conexão", agrupados sob
+um único checkpoint).
 
 Fontes, Analisadores, Geradores e Estratégias de amostragem são pontos de
 extensão registrados em `cli/registro/` (`EXTRATORES_REGISTRADOS`,
@@ -298,7 +303,7 @@ Exibe `Aviso`s em streaming por etapa concluída, agrupados por origem e por
 | Estágio | Entrada | Saída |
 |---|---|---|
 | Extrator (por tabela) | credenciais + `ConfiguracaoDeExtracao` | `TabelaExtraida` |
-| OrquestradorParalelo.extrair | escopos + Extrator | `list[TabelaExtraida]` |
+| OrquestradorParalelo.extrair | pares (escopo, tabela) + Extrator | `list[TabelaExtraida]` |
 | [pausa para curadoria humana] | — | — |
 | Sobrescrita (por tabela) | `TabelaExtraida` | `TabelaCurada` |
 | OrquestradorParalelo.aplicar_sobrescritas | `list[TabelaExtraida]` | `BancoCurado` |

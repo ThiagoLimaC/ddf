@@ -97,13 +97,18 @@ def executar() -> None:
         escopos = prompts.escolher_multiplos(
             "Escolha um ou mais escopos:", escopos_disponiveis
         )
+        pares_disponiveis = extracao.listar_pares(extrator, escopos)
+        _sair_se_vazio(
+            pares_disponiveis, "Nenhuma tabela disponível nos escopos escolhidos."
+        )
+        pares = extracao.escolher_tabelas(pares_disponiveis)
 
         prompts.cabecalho_etapa(3, _TOTAL_ETAPAS, "Escolher estratégia de amostragem")
         extracao.configurar_amostragem(configuracao)
 
         prompts.cabecalho_etapa(4, _TOTAL_ETAPAS, "Extrair tabelas")
         orquestrador = OrquestradorParalelo()
-        tabelas = extracao.extrair(orquestrador, extrator, escopos)
+        tabelas = extracao.extrair(orquestrador, extrator, pares)
         _sair_se_vazio(tabelas, "Nenhuma tabela extraída com sucesso.")
 
         prompts.cabecalho_etapa(

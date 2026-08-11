@@ -493,7 +493,9 @@ def test_extracao_paralela_de_tabelas_do_mesmo_schema_via_orquestrador(
     extrator = ExtratorPostgres(dsn=dsn, configuracao=configuracao, max_conexoes=4)
     orquestrador = OrquestradorParalelo(max_trabalhadores=4)
 
-    resultado = orquestrador.extrair(["public"], extrator)
+    resultado = orquestrador.extrair(
+        [("public", "clientes"), ("public", "pedidos")], extrator
+    )
 
     assert isinstance(resultado, Sucesso)
     tabelas = {tabela.nome_tabela: tabela for tabela in resultado.valor}

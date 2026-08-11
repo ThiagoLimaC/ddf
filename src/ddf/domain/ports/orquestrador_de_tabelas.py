@@ -16,23 +16,24 @@ class OrquestradorDeTabelas(Protocol):
 
     def extrair(
         self,
-        escopos: list[str],
+        pares: list[tuple[str, str]],
         extrator: Extrator,
         /,
         progresso: Callable[[str], None] | None = None,
-        ao_conhecer_total: Callable[[int], None] | None = None,
     ) -> Resultado[list[TabelaExtraida]]:
-        """Extrai, em paralelo, todas as tabelas dos escopos informados.
+        """Extrai, em paralelo, as tabelas identificadas pelos pares informados.
 
-        Falhas individuais (listagem de um escopo ou extração de uma tabela)
-        nunca abortam o lote inteiro — viram Aviso no Sucesso devolvido,
-        junto das tabelas que deram certo.
+        `pares` já vem pronto — (escopo, tabela) por item, na forma que
+        `Extrator.listar_tabelas` devolve. Este Port não lista nada por
+        conta própria: quem chama já decidiu o subconjunto e já sabe o
+        total (`len(pares)`), sem precisar de callback.
 
-        `ao_conhecer_total`, se informado, é chamado uma única vez — assim
-        que a listagem interna termina, antes de iniciar a extração — com o
-        nº de tabelas que de fato serão extraídas. Existe para o chamador
-        mostrar um total real sem precisar listar as tabelas de novo por
-        fora.
+        `pares` vazio é aceito sem distinção de motivo — decidir se um lote
+        vazio deve abortar o fluxo é responsabilidade de quem chama, não
+        deste Port.
+
+        Falha ao extrair uma tabela nunca aborta o lote inteiro — vira
+        Aviso no Sucesso devolvido, junto das tabelas que deram certo.
         """
         ...
 

@@ -219,7 +219,7 @@ class TestFeliz:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Com total conhecido, mostra 'concluídas/total' e a barra de blocos."""
-        callback, _definir_total = prompts.progresso_paralelo("Extraindo...", total=2)
+        callback = prompts.progresso_paralelo("Extraindo...", total=2)
 
         callback("public.clientes")
         callback("public.pedidos")
@@ -383,6 +383,30 @@ class TestBorda:
 
         assert excinfo.value.code == 0
 
+    def test_escolher_multiplos_permite_vazio_devolve_lista_vazia(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """permite_vazio=True devolve [] em vez de sair, para o chamador decidir."""
+        _substituir(monkeypatch, "checkbox", [])
+
+        assert (
+            prompts.escolher_multiplos("Escolha:", ["Markdown"], permite_vazio=True)
+            == []
+        )
+
+    def test_escolher_multiplos_permite_vazio_cancelado_ainda_sai(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Cancelamento (None) sai limpo mesmo com permite_vazio=True."""
+        _substituir(monkeypatch, "checkbox", None)
+
+        with pytest.raises(SystemExit) as excinfo:
+            prompts.escolher_multiplos("Escolha:", ["Markdown"], permite_vazio=True)
+
+        assert excinfo.value.code == 0
+
     def test_linha_de_decisao_usa_o_mesmo_conector_por_padrao_mesmo_na_ultima_chamada(
         self,
         interceptar_print: list[dict[str, Any]],
@@ -415,37 +439,13 @@ class TestBorda:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Sem total (None), mostra só a contagem corrida, sem fração."""
-        callback, _definir_total = prompts.progresso_paralelo("Gerando skeletons...")
+        callback = prompts.progresso_paralelo("Gerando skeletons...")
 
         callback("public.clientes")
 
         saida = capsys.readouterr().out
         assert "Gerando skeletons... (1)" in saida
         assert "/1" not in saida
-
-    def test_progresso_paralelo_definir_total_depois_passa_a_mostrar_fracao(
-        self,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """Total definido após a criação passa a valer nas chamadas seguintes."""
-        callback, definir_total = prompts.progresso_paralelo("Extraindo...")
-
-        callback("public.clientes")
-        definir_total(2)
-        callback("public.pedidos")
-
-        saida = capsys.readouterr().out
-        assert "Extraindo... (1)" in saida
-        assert "Extraindo... (2/2)" in saida
-
-    def test_progresso_paralelo_devolve_named_tuple_com_campos_nomeados(
-        self,
-    ) -> None:
-        """Acesso por nome (.callback/.definir_total), não só por posição."""
-        resultado = prompts.progresso_paralelo("Extraindo...")
-
-        assert resultado.callback is resultado[0]
-        assert resultado.definir_total is resultado[1]
 
     def test_ampulheta_nao_propaga_excecao_e_encerra_a_thread(
         self,

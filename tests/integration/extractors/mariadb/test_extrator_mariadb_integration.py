@@ -543,7 +543,9 @@ def test_extracao_paralela_de_tabelas_do_mesmo_schema_via_orquestrador(
     )
     orquestrador = OrquestradorParalelo(max_trabalhadores=4)
 
-    resultado = orquestrador.extrair(["vendas"], extrator)
+    resultado = orquestrador.extrair(
+        [("vendas", "clientes"), ("vendas", "pedidos")], extrator
+    )
 
     assert isinstance(resultado, Sucesso)
     tabelas = {tabela.nome_tabela: tabela for tabela in resultado.valor}

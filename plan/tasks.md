@@ -714,3 +714,55 @@
       Gerador deixa de ser um caso especial de sugestão de texto e passa a
       ser sempre aplicado na escrita; `wizard.py` sugere só `"artefatos"`
       genérico
+- [x] Issue #132 — restringe a extração a um subconjunto de tabelas dentro
+      do(s) escopo(s) escolhido(s), antes obrigatoriamente completo. Banca
+      de revisão (Arquiteto de Software + Engenheiro de Dados + PO +
+      especialista-ux-terminal) rodada sobre o plano antes da implementação
+      — checklist completo em
+      `plan/registry-plan/issue-132-restringe-tabelas-do-escopo.md`:
+  - `OrquestradorDeTabelas.extrair`: `escopos: list[str]` →
+    `pares: list[tuple[str, str]]`, mudança de contrato não-aditiva —
+    reabertura de escopo dentro da própria issue (não issue separada),
+    decisão da banca. Deixa de listar tabelas por conta própria; quem
+    chama já lista e decide o subconjunto antes. `ao_conhecer_total`
+    removido junto — o total (`len(pares)`) já é conhecido pelo chamador
+    antes de extrair, callback deixou de fazer sentido
+  - `cli/etapas/extracao.py`: `listar_pares` (agrega
+    `Extrator.listar_tabelas` por escopo, sucesso parcial via `Aviso`,
+    mesma semântica que antes vivia dentro do Orquestrador) +
+    `escolher_tabelas` (pergunta binária "extração completa do escopo"
+    — default — vs. "escolher tabelas específicas"; só quem restringe vê
+    o checkbox, vazio e com filtro por digitação, reperguntando se nada
+    for marcado)
+  - `prompts.escolher_multiplos` ganha `permite_vazio: bool = False` —
+    só quando `True` a submissão vazia (não cancelamento) devolve `[]`
+    em vez de sair do processo; call sites existentes inalterados
+  - `wizard.py`: nova etapa sob o cabeçalho já existente "Escolher
+    escopos" — sem `cabecalho_etapa` próprio, `_TOTAL_ETAPAS` continua
+    11 (decisão do especialista-ux-terminal, precedente de `conectar()`,
+    que já agrupa várias perguntas sob um único cabeçalho por serem a
+    mesma decisão sendo detalhada, não fases distintas do pipeline)
+  - **Banca de revisão multi-agente pós-implementação** (Arquiteto de
+    Software + Engenheiro de Dados + PO, sobre o diff real, não o plano)
+    — aprovação com ressalvas dos 3, sem bloqueio; achados convergentes
+    corrigidos:
+    - Teste de integração faltante: os 3 revisores notaram que a
+      recomendação do engenheiro de dados (cobrir FK apontando para
+      tabela do mesmo escopo deliberadamente excluída da seleção) tinha
+      ficado só no plano. Corrigido com
+      `test_wizard_restringindo_tabelas_avisa_fk_composta_fora_da_selecao`
+      (`tests/integration/cli/test_wizard_end_to_end.py`) — prova que o
+      Aviso de FK composta fora do lote (mecanismo já existente,
+      `_avisos_de_fk_composta_sem_chave_candidata`) chega mesmo quando a
+      exclusão vem do checkbox de tabelas, não de um escopo inteiro
+    - `Progresso.definir_total`/`prompts.py` (arquiteto + engenheiro de
+      dados): ficou órfão — único caller real (`extracao.py::extrair`)
+      já sempre conhece o total de antemão desde a mudança acima.
+      Removido (`Progresso` NamedTuple inteiro; `progresso_paralelo`
+      devolve o callback direto), docstring corrigida (não cita mais
+      `extrair`/`aplicar_sobrescritas` como exemplos desatualizados)
+    - Colisão de rótulo em `escolher_tabelas` (arquiteto + engenheiro de
+      dados): rótulo do checkbox era `f"{escopo}.{tabela}"` — `.` é
+      caractere válido em identificador citado no Postgres/MySQL, dois
+      pares distintos podiam colidir no mesmo rótulo. Trocado para
+      `f"{escopo} › {tabela}"`

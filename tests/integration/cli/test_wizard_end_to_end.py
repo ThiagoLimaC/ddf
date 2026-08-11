@@ -15,6 +15,7 @@ import pytest
 from click.testing import CliRunner
 
 from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
+from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
 from ddf.domain.ports.extrator import ExtratorRegistrado
@@ -101,7 +102,7 @@ def sem_ampulheta_no_wizard(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_wizard_fluxo_completo_com_extrator_fake(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Caminho feliz: as 14 etapas rodam de ponta a ponta e geram o Markdown."""
+    """Caminho feliz: as 15 etapas rodam de ponta a ponta e geram o Markdown."""
     diretorio_overrides = tmp_path / "overrides"
     destino = tmp_path / "artefatos"
 
@@ -127,7 +128,12 @@ def test_wizard_fluxo_completo_com_extrator_fake(
     monkeypatch.setattr(
         "questionary.checkbox", _fila_de_respostas([["public"], ["Markdown"]])
     )
-    monkeypatch.setattr("questionary.confirm", _fila_de_respostas([True, False]))
+    monkeypatch.setattr(
+        "questionary.confirm",
+        # "Restringir tabelas extraídas?" (não), confirmar_execucao (sim),
+        # "Executar novamente?" (não) — nessa ordem.
+        _fila_de_respostas([False, True, False]),
+    )
     monkeypatch.setattr(
         "questionary.press_any_key_to_continue", _fila_de_respostas([True])
     )
@@ -137,6 +143,179 @@ def test_wizard_fluxo_completo_com_extrator_fake(
     assert resultado.exit_code == 0, resultado.output
     assert (destino / "markdown" / "public" / "clientes.md").exists()
     assert (diretorio_overrides / "public" / "clientes.yaml").exists()
+
+
+class ExtratorFakeDuasTabelas(ExtratorFake):
+    """Como ExtratorFake, mas o escopo 'public' tem 2 tabelas disponíveis."""
+
+    def listar_tabelas(self, escopo: str) -> Resultado[list[tuple[str, str]]]:
+        """Devolve duas tabelas fixas, 'clientes' e 'pedidos'."""
+        return Sucesso(valor=[("public", "clientes"), ("public", "pedidos")])
+
+
+def test_wizard_restringindo_tabelas_extrai_so_o_subconjunto_escolhido(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Usuário restringe a extração a 1 das 2 tabelas disponíveis no escopo.
+
+    Cobre o caminho novo da issue #132: confirmar "sim" em "Restringir
+    tabelas extraídas?" mostra o checkbox de tabelas; só a tabela marcada é
+    extraída e gera artefato — a outra nem chega a ser lida.
+    """
+    diretorio_overrides = tmp_path / "overrides"
+    destino = tmp_path / "artefatos"
+
+    monkeypatch.setattr(
+        extracao,
+        "EXTRATORES_REGISTRADOS",
+        {
+            "Fake": ExtratorRegistrado(
+                classe_extrator=ExtratorFakeDuasTabelas,
+                construir=lambda cfg: ExtratorFakeDuasTabelas(),
+            )
+        },
+    )
+    monkeypatch.setattr(
+        "questionary.select",
+        _fila_de_respostas(["Fake", "Percentual de linhas"]),
+    )
+    monkeypatch.setattr(
+        "questionary.text",
+        _fila_de_respostas(["10", "", str(diretorio_overrides), str(destino)]),
+    )
+    monkeypatch.setattr(
+        "questionary.checkbox",
+        # Escopos, tabelas (só "public › clientes"), Geradores — nessa ordem.
+        _fila_de_respostas([["public"], ["public › clientes"], ["Markdown"]]),
+    )
+    monkeypatch.setattr(
+        "questionary.confirm",
+        # "Restringir tabelas extraídas?" (sim), confirmar_execucao (sim),
+        # "Executar novamente?" (não) — nessa ordem.
+        _fila_de_respostas([True, True, False]),
+    )
+    monkeypatch.setattr(
+        "questionary.press_any_key_to_continue", _fila_de_respostas([True])
+    )
+
+    resultado = CliRunner().invoke(executar)
+
+    assert resultado.exit_code == 0, resultado.output
+    assert (destino / "markdown" / "public" / "clientes.md").exists()
+    assert not (destino / "markdown" / "public" / "pedidos.md").exists()
+
+
+class ExtratorFakeComFkCompostaExcluida(ExtratorFake):
+    """'pedidos' tem FK composta para 'estados', ambas no escopo 'public'.
+
+    'estados' não é selecionada no teste — simula o usuário excluindo via
+    checkbox uma tabela referenciada por outra que permanece no lote.
+    """
+
+    def listar_tabelas(self, escopo: str) -> Resultado[list[tuple[str, str]]]:
+        """Devolve duas tabelas fixas, 'pedidos' e 'estados'."""
+        return Sucesso(valor=[("public", "pedidos"), ("public", "estados")])
+
+    def extrair_tabela(
+        self, escopo: str, tabela: str
+    ) -> Resultado[TabelaExtraida]:
+        """Devolve 'pedidos' (com FK composta) ou 'estados', conforme pedido."""
+        tipo = TipoDeDado(categoria=CategoriaDeDado.INTEGER)
+        if tabela == "pedidos":
+            colunas = [
+                ColunaExtraida(nome="pais_id", tipo_dado=tipo),
+                ColunaExtraida(nome="estado_id", tipo_dado=tipo),
+            ]
+            restricoes = [
+                RestricaoDeFkComposta(
+                    colunas_locais=("pais_id", "estado_id"),
+                    nome_escopo_referenciado="public",
+                    nome_tabela_referenciada="estados",
+                    colunas_referenciadas=("pais_id", "id"),
+                )
+            ]
+        else:
+            colunas = [
+                ColunaExtraida(nome="pais_id", tipo_dado=tipo, chave_primaria=True),
+                ColunaExtraida(nome="id", tipo_dado=tipo, chave_primaria=True),
+            ]
+            restricoes = []
+        return Sucesso(
+            valor=TabelaExtraida(
+                nome_tabela=tabela,
+                nome_escopo=escopo,
+                colunas=colunas,
+                total_linhas=1,
+                amostra=pl.DataFrame({coluna.nome: [1] for coluna in colunas}),
+                metadados_amostra=MetadadosDeAmostra(
+                    estrategia="percentual_de_linhas", tamanho_amostra=1
+                ),
+                restricoes_fk_compostas=restricoes,
+            )
+        )
+
+
+def test_wizard_restringindo_tabelas_avisa_fk_composta_fora_da_selecao(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Excluir do checkbox uma tabela referenciada por FK composta emite Aviso.
+
+    Prova o wiring ponta a ponta: o Aviso que `OrquestradorParalelo.extrair`
+    já emitia para "escopo parcial" (FK apontando fora do lote) também
+    chega ao usuário quando a exclusão vem da seleção manual de tabelas da
+    issue #132, não só de um escopo inteiro deixado de fora.
+    """
+    diretorio_overrides = tmp_path / "overrides"
+    destino = tmp_path / "artefatos"
+    chamadas_print: list[str] = []
+    monkeypatch.setattr(
+        "questionary.print",
+        lambda texto, style=None, end="\n": chamadas_print.append(texto),
+    )
+
+    monkeypatch.setattr(
+        extracao,
+        "EXTRATORES_REGISTRADOS",
+        {
+            "Fake": ExtratorRegistrado(
+                classe_extrator=ExtratorFakeComFkCompostaExcluida,
+                construir=lambda cfg: ExtratorFakeComFkCompostaExcluida(),
+            )
+        },
+    )
+    monkeypatch.setattr(
+        "questionary.select",
+        _fila_de_respostas(["Fake", "Percentual de linhas"]),
+    )
+    monkeypatch.setattr(
+        "questionary.text",
+        _fila_de_respostas(["10", "", str(diretorio_overrides), str(destino)]),
+    )
+    monkeypatch.setattr(
+        "questionary.checkbox",
+        # Escopos, tabelas (só "public › pedidos", exclui "public › estados"),
+        # Geradores — nessa ordem.
+        _fila_de_respostas([["public"], ["public › pedidos"], ["Markdown"]]),
+    )
+    monkeypatch.setattr(
+        "questionary.confirm",
+        # "Restringir tabelas extraídas?" (sim), confirmar_execucao (sim),
+        # "Executar novamente?" (não) — nessa ordem.
+        _fila_de_respostas([True, True, False]),
+    )
+    monkeypatch.setattr(
+        "questionary.press_any_key_to_continue", _fila_de_respostas([True])
+    )
+
+    resultado = CliRunner().invoke(executar)
+
+    assert resultado.exit_code == 0, resultado.output
+    assert (destino / "markdown" / "public" / "pedidos.md").exists()
+    assert not (destino / "markdown" / "public" / "estados.md").exists()
+    textos = " ".join(chamadas_print)
+    assert "public.pedidos" in textos
+    assert "public.estados" in textos
+    assert "não verificada" in textos
 
 
 class ExtratorFakeSemExtracao(ExtratorFake):
@@ -174,6 +353,12 @@ def test_wizard_sem_tabela_extraida_sai_com_codigo_1(
     )
     monkeypatch.setattr("questionary.text", _fila_de_respostas(["10", ""]))
     monkeypatch.setattr("questionary.checkbox", _fila_de_respostas([["public"]]))
+    monkeypatch.setattr(
+        "questionary.confirm",
+        # "Restringir tabelas extraídas?" (não) — único confirm antes do
+        # lote vazio interromper o fluxo.
+        _fila_de_respostas([False]),
+    )
 
     resultado = CliRunner().invoke(executar)
 
