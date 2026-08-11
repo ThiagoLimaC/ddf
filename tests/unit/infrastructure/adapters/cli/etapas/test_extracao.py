@@ -189,7 +189,7 @@ class TestFeliz:
         )
         monkeypatch.setattr(
             "ddf.infrastructure.adapters.cli.prompts.escolher_multiplos",
-            lambda *a, **k: ["vendas.pedidos"],
+            lambda *a, **k: ["vendas › pedidos"],
         )
         pares_disponiveis = [("public", "clientes"), ("vendas", "pedidos")]
 
@@ -342,7 +342,7 @@ class TestBorda:
         monkeypatch.setattr(
             "ddf.infrastructure.adapters.cli.prompts.confirmar", lambda *a, **k: True
         )
-        respostas = iter([[], ["public.clientes"]])
+        respostas = iter([[], ["public › clientes"]])
         monkeypatch.setattr(
             "ddf.infrastructure.adapters.cli.prompts.escolher_multiplos",
             lambda *a, **k: next(respostas),

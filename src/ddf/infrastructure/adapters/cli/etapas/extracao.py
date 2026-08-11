@@ -130,7 +130,10 @@ def escolher_tabelas(pares_disponiveis: list[tuple[str, str]]) -> list[tuple[str
     if not prompts.confirmar("Restringir tabelas extraídas?", default=False):
         return pares_disponiveis
 
-    rotulos = [f"{escopo}.{tabela}" for escopo, tabela in pares_disponiveis]
+    # "›", não "." — "." é caractere válido em identificador citado do
+    # Postgres/MySQL; usá-lo colidiria dois pares distintos no mesmo rótulo
+    # (ex.: ("a.b", "c") e ("a", "b.c")) e marcaria os dois juntos.
+    rotulos = [f"{escopo} › {tabela}" for escopo, tabela in pares_disponiveis]
     while True:
         rotulos_escolhidos = prompts.escolher_multiplos(
             "Escolha uma ou mais tabelas:", rotulos, permite_vazio=True
@@ -159,7 +162,7 @@ def extrair(
     O total exibido na barra de progresso já é conhecido de antemão
     (`len(pares)`) — a listagem acontece antes, em `listar_pares`.
     """
-    progresso, _ = prompts.progresso_paralelo("Tabelas extraídas", total=len(pares))
+    progresso = prompts.progresso_paralelo("Tabelas extraídas", total=len(pares))
     inicio = time.monotonic()
     resultado = orquestrador.extrair(pares, extrator, progresso=progresso)
     print()

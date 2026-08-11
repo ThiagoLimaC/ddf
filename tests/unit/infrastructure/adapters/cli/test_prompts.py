@@ -219,7 +219,7 @@ class TestFeliz:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Com total conhecido, mostra 'concluídas/total' e a barra de blocos."""
-        callback, _definir_total = prompts.progresso_paralelo("Extraindo...", total=2)
+        callback = prompts.progresso_paralelo("Extraindo...", total=2)
 
         callback("public.clientes")
         callback("public.pedidos")
@@ -439,37 +439,13 @@ class TestBorda:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Sem total (None), mostra só a contagem corrida, sem fração."""
-        callback, _definir_total = prompts.progresso_paralelo("Gerando skeletons...")
+        callback = prompts.progresso_paralelo("Gerando skeletons...")
 
         callback("public.clientes")
 
         saida = capsys.readouterr().out
         assert "Gerando skeletons... (1)" in saida
         assert "/1" not in saida
-
-    def test_progresso_paralelo_definir_total_depois_passa_a_mostrar_fracao(
-        self,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        """Total definido após a criação passa a valer nas chamadas seguintes."""
-        callback, definir_total = prompts.progresso_paralelo("Extraindo...")
-
-        callback("public.clientes")
-        definir_total(2)
-        callback("public.pedidos")
-
-        saida = capsys.readouterr().out
-        assert "Extraindo... (1)" in saida
-        assert "Extraindo... (2/2)" in saida
-
-    def test_progresso_paralelo_devolve_named_tuple_com_campos_nomeados(
-        self,
-    ) -> None:
-        """Acesso por nome (.callback/.definir_total), não só por posição."""
-        resultado = prompts.progresso_paralelo("Extraindo...")
-
-        assert resultado.callback is resultado[0]
-        assert resultado.definir_total is resultado[1]
 
     def test_ampulheta_nao_propaga_excecao_e_encerra_a_thread(
         self,
