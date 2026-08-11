@@ -251,16 +251,23 @@ def confirmar(mensagem: str, default: bool = True) -> bool:
     return resposta
 
 
-def escolher_multiplos(mensagem: str, escolhas: list[str]) -> list[str]:
+def escolher_multiplos(
+    mensagem: str, escolhas: list[str], permite_vazio: bool = False
+) -> list[str]:
     """Checkbox com filtro por digitação — permite escolher um ou vários.
 
     Listas longas ficam difíceis de rolar em terminais pequenos; a forma
     rápida de achar um item é digitar parte do nome pra filtrar em vez de
-    navegar pelas setas. Sai limpo se o usuário cancelar ou não marcar nada.
+    navegar pelas setas. Cancelamento (Ctrl+C/Esc) sempre sai limpo,
+    independente de `permite_vazio`.
 
     Args:
         mensagem: pergunta exibida ao usuário.
         escolhas: opções disponíveis para seleção.
+        permite_vazio: `False` (padrão) trata "nenhum item marcado" como
+            cancelamento, saindo limpo — mesmo comportamento de sempre.
+            `True` devolve a lista vazia para o chamador decidir o que
+            fazer (ex.: reperguntar), em vez de sair do processo.
     """
     print()
     selecionados = cast(
@@ -276,7 +283,9 @@ def escolher_multiplos(mensagem: str, escolhas: list[str]) -> list[str]:
             instruction="(digite para filtrar, espaço marca, enter confirma)\n",
         ).ask(),
     )
-    if not selecionados:
+    if selecionados is None:
+        sys.exit(0)
+    if not selecionados and not permite_vazio:
         sys.exit(0)
     return selecionados
 
