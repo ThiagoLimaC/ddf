@@ -57,7 +57,6 @@ class _MetadadosDoSchema(NamedTuple):
     total_linhas_por_tabela: dict[str, int]
     largura_media_por_tabela: dict[str, int]
     tabelas_com_coluna_comprimivel: frozenset[str]
-    tabelas_particionadas: frozenset[str]
 
 
 def _construir_coluna(
@@ -82,38 +81,3 @@ def _construir_coluna(
         nao_nulavel=linha.is_nullable == "NO",
         unica=linha.nome in colunas_unicas,
     )
-
-
-def particoes_de_blocos(total_blocos: int, n: int) -> list[tuple[int, int | None]]:
-    """Divide `[0, total_blocos)` em `n` faixas contíguas de blocos `ctid`.
-
-    Determinístico, disjunto e exaustivo — cada bloco cai em exatamente uma
-    faixa. A última faixa não tem teto (`None`, sem `AND ctid < ...`): o
-    total de blocos foi lido antes da leitura de verdade começar, então um
-    teto fechado excluiria silenciosamente blocos adicionados à tabela
-    nesse meio-tempo — de forma assimétrica em relação a uma leitura
-    sequencial simples, que sempre vê o estado mais recente até onde
-    conseguir ler.
-
-    Args:
-        total_blocos: total de blocos de 8KB da tabela (via
-            `pg_relation_size`/`block_size`).
-        n: número de faixas a gerar — tipicamente o nº de conexões
-            reservadas para a leitura paralela.
-
-    Returns:
-        Lista de `n` tuplas `(inicio_inclusive, fim_exclusivo | None)`.
-    """
-    if n <= 0:
-        return []
-    tamanho_faixa = max(1, total_blocos // n)
-    faixas: list[tuple[int, int | None]] = []
-    inicio = 0
-    for indice in range(n):
-        if indice == n - 1:
-            faixas.append((inicio, None))
-        else:
-            fim = inicio + tamanho_faixa
-            faixas.append((inicio, fim))
-            inicio = fim
-    return faixas

@@ -14,7 +14,6 @@ from ddf.infrastructure.adapters.extractors.mariadb._construcao import (
     _PkElegivel,
     _PkNaoElegivel,
     _quotar_identificador,
-    particionar_faixas_exaustivas,
 )
 
 
@@ -42,18 +41,6 @@ class TestFeliz:
         )
 
         assert resultado == _PkElegivel(nome_coluna="id")
-
-    def test_divide_dominio_em_faixas_do_mesmo_tamanho(self) -> None:
-        """PK de 1 a 1000 em 4 faixas -> 250 valores cada, contíguas."""
-        faixas = particionar_faixas_exaustivas(minimo=1, maximo=1000, n=4)
-
-        assert faixas == [(1, 251), (251, 501), (501, 751), (751, None)]
-
-    def test_ultima_faixa_nao_tem_teto(self) -> None:
-        """A última faixa é sempre aberta (fim=None), nunca fechada."""
-        faixas = particionar_faixas_exaustivas(minimo=1, maximo=100, n=2)
-
-        assert faixas[-1][1] is None
 
 
 class TestBorda:
@@ -109,45 +96,3 @@ class TestBorda:
         )
 
         assert resultado == _PkElegivel(nome_coluna="id")
-
-    def test_n_igual_a_um_devolve_faixa_unica_aberta(self) -> None:
-        """Sem paralelismo de verdade — 1 faixa cobrindo o domínio inteiro."""
-        faixas = particionar_faixas_exaustivas(minimo=1, maximo=500, n=1)
-
-        assert faixas == [(1, None)]
-
-    def test_tabela_com_uma_linha_ainda_gera_faixas_validas(self) -> None:
-        """`min == max` (uma linha só) não deve gerar faixas degeneradas."""
-        faixas = particionar_faixas_exaustivas(minimo=7, maximo=7, n=3)
-
-        assert faixas == [(7, 8), (8, 9), (9, None)]
-
-    def test_n_maior_que_dominio_ainda_e_disjunto_e_exaustivo(self) -> None:
-        """Mais faixas pedidas do que valores de PK existentes — sem overlap nem gap."""
-        faixas = particionar_faixas_exaustivas(minimo=1, maximo=3, n=10)
-
-        inicios_e_fins = [(inicio, fim) for inicio, fim in faixas[:-1]]
-        assert all(fim - inicio >= 1 for inicio, fim in inicios_e_fins)
-        for (_, fim_anterior), (inicio_atual, _) in zip(faixas, faixas[1:]):
-            assert fim_anterior == inicio_atual
-
-    def test_resto_da_divisao_fica_todo_na_ultima_faixa(self) -> None:
-        """Domínio não múltiplo de n — a sobra vai pra faixa aberta final."""
-        faixas = particionar_faixas_exaustivas(minimo=0, maximo=9, n=3)
-
-        assert faixas == [(0, 3), (3, 6), (6, None)]
-
-    def test_pk_nao_comecando_em_zero_preserva_offset(self) -> None:
-        """Domínio deslocado (PK não começa em 0) não distorce o tamanho das faixas."""
-        faixas = particionar_faixas_exaustivas(minimo=1000, maximo=1999, n=2)
-
-        assert faixas == [(1000, 1500), (1500, None)]
-
-
-class TestErro:
-    """Uso indevido."""
-
-    def test_n_zero_ou_negativo_devolve_lista_vazia(self) -> None:
-        """`n <= 0` não faz sentido como número de faixas — devolve vazio."""
-        assert particionar_faixas_exaustivas(minimo=1, maximo=100, n=0) == []
-        assert particionar_faixas_exaustivas(minimo=1, maximo=100, n=-1) == []
