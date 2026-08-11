@@ -165,54 +165,6 @@ class TestFeliz:
             "└─ Senha ****",
         ]
 
-    def test_construir_extrator_postgres_imprime_arvore_de_decisao_no_final(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """A árvore de decisão só aparece depois de coletado todo o parâmetro.
-
-        Senha mascarada com largura fixa ("****"), nunca em texto claro nem
-        com o comprimento real da senha — "senha-bem-longa-mesmo" tem 22
-        caracteres, e a máscara impressa continua "****". Intercepta
-        `questionary.print` (mesma técnica de `test_prompts.py`), em vez de
-        capturar stdout: `prompt_toolkit` escreve direto no terminal, sem
-        passar de forma confiável pela captura de `sys.stdout` do pytest.
-
-        Cada `linha_de_decisao` agora vira 3 chamadas a `questionary.print`
-        (conector, rótulo, valor — cada um com sua própria cor, ver
-        `prompts.imprimir_destacado`), por isso as linhas são reconstruídas
-        juntando os fragmentos antes de comparar.
-        """
-        respostas_texto = iter(["host1", "5433", "banco1", "user1", ""])
-        monkeypatch.setattr(
-            "questionary.text",
-            lambda *args, **kwargs: _RespostaFake(next(respostas_texto)),
-        )
-        monkeypatch.setattr(
-            "questionary.password",
-            lambda *args, **kwargs: _RespostaFake("senha-bem-longa-mesmo"),
-        )
-        chamadas: list[str] = []
-        monkeypatch.setattr(
-            "questionary.print",
-            lambda texto, style=None, end="\n": chamadas.append(texto),
-        )
-        configuracao = ConfiguracaoDeExtracao(
-            estrategia=PercentualDeLinhas(percentual=10)
-        )
-
-        _construir_extrator_postgres(configuracao)
-
-        assert not any("senha-bem-longa-mesmo" in chamada for chamada in chamadas)
-        assert _juntar_linhas(chamadas) == [
-            "├─ Fonte PostgreSQL",
-            "├─ Host host1",
-            "├─ Porta 5433",
-            "├─ Banco banco1",
-            "├─ Usuário user1",
-            "└─ Senha ****",
-        ]
-
     def test_formatar_host_com_hostname_devolve_sem_alteracao(
         self,
     ) -> None:
