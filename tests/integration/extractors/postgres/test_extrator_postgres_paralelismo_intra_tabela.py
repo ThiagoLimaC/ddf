@@ -11,6 +11,7 @@ demais testes de integração já existentes), mas não é `benchmark` — mede
 corretude, não performance, então continua rodando na suíte normal.
 """
 
+import threading
 from collections.abc import Iterator
 
 import psycopg2
@@ -160,3 +161,77 @@ def test_falha_do_connectorx_cai_para_sequencial_em_vez_de_derrubar_a_tabela(
         "leitura paralela via connectorx falhou" in aviso.mensagem
         for aviso in resultado.avisos
     )
+
+
+def test_leitura_paralela_preserva_consistencia_sob_escrita_concorrente(
+    dsn_tabela_grande: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """O snapshot exportado protege a leitura paralela de escrita concorrente real.
+
+    Os testes de corretude acima provam que o particionamento por `ctid` é
+    exaustivo/disjunto, mas não com escrita concorrente — não distinguem
+    "o snapshot funcionou" de "não havia nada pra proteger". Aqui uma
+    thread separada fica incrementando `versao` em todas as linhas, sem
+    parar, durante toda a extração paralela. Não dá pra garantir *quando*
+    exatamente o `pg_export_snapshot()` acontece em relação aos commits da
+    thread de escrita — por isso a asserção não é "a amostra tem que
+    mostrar versão X", e sim "todas as faixas têm que enxergar a *mesma*
+    versão": se o `SET TRANSACTION SNAPSHOT` entre as conexões do
+    connectorx estivesse quebrado, faixas diferentes poderiam ler o
+    catálogo em momentos diferentes da escrita concorrente, e a amostra
+    combinada mostraria uma mistura de versões — corrupção silenciosa,
+    sem nenhuma exceção.
+    """
+    with psycopg2.connect(dsn_tabela_grande) as conexao_setup:
+        conexao_setup.autocommit = True
+        with conexao_setup.cursor() as cursor:
+            cursor.execute(
+                "ALTER TABLE public.tabela_grande "
+                "ADD COLUMN IF NOT EXISTS versao INTEGER NOT NULL DEFAULT 1"
+            )
+
+    monkeypatch.setattr(paralelismo, "_LIMIAR_LINHAS_PARALELISMO_INTRA_TABELA", 0)
+    monkeypatch.setattr(paralelismo, "_LIMIAR_BYTES_PARALELISMO_INTRA_TABELA", 0)
+    configuracao = ConfiguracaoDeExtracao(estrategia=TabelaInteira())
+    extrator = ExtratorPostgres(
+        dsn=dsn_tabela_grande,
+        configuracao=configuracao,
+        max_conexoes=8,
+        max_conexoes_por_tabela=4,
+    )
+
+    parar_escritas = threading.Event()
+
+    def _escrever_sem_parar() -> None:
+        conexao_escritora = psycopg2.connect(dsn_tabela_grande)
+        conexao_escritora.autocommit = True
+        try:
+            with conexao_escritora.cursor() as cursor:
+                while not parar_escritas.is_set():
+                    cursor.execute(
+                        "UPDATE public.tabela_grande SET versao = versao + 1"
+                    )
+        finally:
+            conexao_escritora.close()
+
+    thread_escrita = threading.Thread(target=_escrever_sem_parar, daemon=True)
+    thread_escrita.start()
+    try:
+        resultado = extrator.extrair_tabela("public", "tabela_grande")
+    finally:
+        parar_escritas.set()
+        thread_escrita.join(timeout=10)
+
+    assert isinstance(resultado, Sucesso)
+    versoes_na_amostra = set(resultado.valor.amostra["versao"].to_list())
+    assert len(versoes_na_amostra) == 1, (
+        "amostra deveria refletir um único ponto-no-tempo (mesmo snapshot "
+        f"em todas as faixas) — versões distintas vistas: {versoes_na_amostra}"
+    )
+
+    with psycopg2.connect(dsn_tabela_grande) as conexao_verificacao:
+        conexao_verificacao.autocommit = True
+        with conexao_verificacao.cursor() as cursor:
+            cursor.execute("SELECT MAX(versao) FROM public.tabela_grande")
+            (versao_final,) = cursor.fetchone()
+    assert versao_final > 1, "escrita concorrente não rodou — teste não provou nada"
