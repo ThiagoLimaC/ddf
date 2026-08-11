@@ -124,6 +124,12 @@ class ExtratorPostgres:
                 f"max_conexoes ({max_conexoes_por_tabela} vs. {max_conexoes})."
             )
         self._dsn = dsn
+        # connectorx abre suas próprias conexões, fora do ThreadedConnectionPool
+        # — connect_timeout só chega até elas se estiver embutido na DSN.
+        # `dsn` já vem em formato URI (montada pelo wizard, `postgresql://...`,
+        # com "?" opcional se já houver parâmetros extra do usuário).
+        separador = "&" if "?" in dsn else "?"
+        self._dsn_connectorx = f"{dsn}{separador}connect_timeout={connect_timeout}"
         self._configuracao = configuracao
         self._max_conexoes = max_conexoes
         self._connect_timeout = connect_timeout
@@ -533,7 +539,7 @@ class ExtratorPostgres:
                 ]
                 try:
                     amostra = cx.read_sql(
-                        self._dsn,
+                        self._dsn_connectorx,
                         queries,
                         return_type="polars",
                         pre_execution_query=[

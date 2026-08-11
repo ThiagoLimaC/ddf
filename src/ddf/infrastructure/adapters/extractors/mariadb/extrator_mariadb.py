@@ -473,6 +473,14 @@ class ExtratorMariaDB:
                 condicao += f" AND {identificador_pk} < {fim}"
             queries.append(f"SELECT * FROM {identificador_tabela} WHERE {condicao}")
 
+        # Sem connect_timeout na DSN aqui, ao contrário do ExtratorPostgres:
+        # testado empiricamente (`connect_timeout`, `connect-timeout`,
+        # `timeout`, `connectTimeout`) — o driver MySQL do connectorx
+        # rejeita todos com "Unknown URL parameter", diferente do driver
+        # Postgres (baseado em libpq/tokio-postgres, aceita `connect_timeout`
+        # de verdade). Host inacessível nas conexões que o connectorx abre
+        # aqui continua sem essa proteção — risco aceito, sem alternativa
+        # de baixo custo encontrada.
         dsn = (
             f"mysql://{quote(self._user, safe='')}:"
             f"{quote(self._password, safe='')}@{self._host}:{self._port}/"
