@@ -18,6 +18,7 @@ import pytest
 from testcontainers.postgres import PostgresContainer
 
 import ddf.infrastructure.adapters.extractors.comum.leitura_paralela_intra_tabela as paralelismo  # noqa: E501
+import ddf.infrastructure.adapters.extractors.postgres.extrator_postgres as extrator_postgres_module  # noqa: E501
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.shared.resultado import Sucesso
 from ddf.infrastructure.adapters.extractors.estrategias.tabela_inteira import (
@@ -121,3 +122,41 @@ def test_leitura_paralela_ativa_de_verdade_quando_elegivel(
 
     assert isinstance(resultado, Sucesso)
     assert "paralelismo intra-tabela ativado" in caplog.text
+
+
+def test_falha_do_connectorx_cai_para_sequencial_em_vez_de_derrubar_a_tabela(
+    dsn_tabela_grande: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Crash conhecido do connectorx (ex.: NUMERIC sem escala fixa) não derruba tudo.
+
+    Antes desta correção, qualquer exceção de `cx.read_sql` virava `Falha`
+    e `extrair_tabela` propagava direto — uma regressão em relação ao
+    caminho sequencial, que sempre soube ler essa mesma tabela.
+    """
+    monkeypatch.setattr(paralelismo, "_LIMIAR_LINHAS_PARALELISMO_INTRA_TABELA", 0)
+    monkeypatch.setattr(paralelismo, "_LIMIAR_BYTES_PARALELISMO_INTRA_TABELA", 0)
+    monkeypatch.setattr(
+        extrator_postgres_module.cx,
+        "read_sql",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    configuracao = ConfiguracaoDeExtracao(estrategia=TabelaInteira())
+    extrator = ExtratorPostgres(
+        dsn=dsn_tabela_grande,
+        configuracao=configuracao,
+        max_conexoes=8,
+        max_conexoes_por_tabela=4,
+    )
+
+    with caplog.at_level("WARNING"):
+        resultado = extrator.extrair_tabela("public", "tabela_grande")
+
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor.total_linhas == _N_LINHAS
+    assert "leitura paralela via connectorx falhou" in caplog.text
+    assert any(
+        "leitura paralela via connectorx falhou" in aviso.mensagem
+        for aviso in resultado.avisos
+    )

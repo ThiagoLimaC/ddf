@@ -595,7 +595,6 @@ class ExtratorMariaDB:
                 total_linhas,
                 n_reservado,
             )
-            self._emitir_aviso_paralelismo_se_necessario(avisos)
             minimo, maximo = dominio_pk
             try:
                 resultado_leitura = self._ler_tabela_em_paralelo(
@@ -609,34 +608,57 @@ class ExtratorMariaDB:
             finally:
                 liberar_conexoes(self._semaforo, n_reservado)
             if isinstance(resultado_leitura, Falha):
-                return resultado_leitura
-            amostra_paralela = resultado_leitura.valor
-            colunas = _promover_booleanos_pela_amostra(
-                colunas, amostra_paralela, candidatos_booleanos
-            )
-            metadados_amostra, avisos_amostra = construir_metadados_de_amostra(
-                nome="tabela_inteira",
-                requisicao=requisicao,
-                tamanho_amostra=len(amostra_paralela),
-                total_linhas=len(amostra_paralela),
-                origem="ExtratorMariaDB",
-                causa_provavel="sem ANALYZE TABLE recente",
-                identificador_tabela=f"{escopo}.{tabela}",
-            )
-            avisos.extend(avisos_amostra)
-            return Sucesso(
-                TabelaExtraida(
-                    nome_tabela=tabela,
-                    nome_escopo=escopo,
-                    colunas=colunas,
+                # connectorx pode crashar em casos conhecidos (ex.: NUMERIC
+                # sem precisão/escala fixa) — cair pro caminho sequencial
+                # abaixo em vez de derrubar a tabela inteira, que lia essa
+                # mesma tabela sem problema antes do paralelismo existir.
+                _logger.warning(
+                    "'%s.%s': leitura paralela via connectorx falhou, "
+                    "caindo para o caminho sequencial. Detalhe técnico: %s",
+                    escopo,
+                    tabela,
+                    resultado_leitura.erro,
+                )
+                avisos.append(
+                    Aviso(
+                        mensagem=(
+                            f"'{escopo}.{tabela}': leitura paralela via "
+                            "connectorx falhou — extraída pelo caminho "
+                            "sequencial em vez disso. Ver o log para o "
+                            "detalhe técnico da falha."
+                        ),
+                        origem="ExtratorMariaDB",
+                    )
+                )
+            else:
+                self._emitir_aviso_paralelismo_se_necessario(avisos)
+                amostra_paralela = resultado_leitura.valor
+                colunas = _promover_booleanos_pela_amostra(
+                    colunas, amostra_paralela, candidatos_booleanos
+                )
+                metadados_amostra, avisos_amostra = construir_metadados_de_amostra(
+                    nome="tabela_inteira",
+                    requisicao=requisicao,
+                    tamanho_amostra=len(amostra_paralela),
                     total_linhas=len(amostra_paralela),
-                    amostra=amostra_paralela,
-                    metadados_amostra=metadados_amostra,
-                    restricoes_unicas=restricoes_unicas,
-                    restricoes_fk_compostas=restricoes_fk_compostas,
-                ),
-                avisos=avisos,
-            )
+                    origem="ExtratorMariaDB",
+                    causa_provavel="sem ANALYZE TABLE recente",
+                    identificador_tabela=f"{escopo}.{tabela}",
+                )
+                avisos.extend(avisos_amostra)
+                return Sucesso(
+                    TabelaExtraida(
+                        nome_tabela=tabela,
+                        nome_escopo=escopo,
+                        colunas=colunas,
+                        total_linhas=len(amostra_paralela),
+                        amostra=amostra_paralela,
+                        metadados_amostra=metadados_amostra,
+                        restricoes_unicas=restricoes_unicas,
+                        restricoes_fk_compostas=restricoes_fk_compostas,
+                    ),
+                    avisos=avisos,
+                )
 
         usa_streaming = deve_usar_streaming(total_linhas, largura_media_bytes)
         if usa_streaming:

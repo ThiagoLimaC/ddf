@@ -642,31 +642,53 @@ class ExtratorPostgres:
             finally:
                 liberar_conexoes(self._semaforo, n_reservado)
             if isinstance(resultado_leitura, Falha):
-                return resultado_leitura
-            amostra_paralela = resultado_leitura.valor
-            metadados_amostra, avisos_amostra = construir_metadados_de_amostra(
-                nome=estrategia.nome,
-                requisicao=requisicao,
-                tamanho_amostra=len(amostra_paralela),
-                total_linhas=len(amostra_paralela),
-                origem="ExtratorPostgres",
-                causa_provavel="sem ANALYZE recente",
-                identificador_tabela=f"{schema}.{tabela}",
-            )
-            avisos.extend(avisos_amostra)
-            return Sucesso(
-                TabelaExtraida(
-                    nome_tabela=tabela,
-                    nome_escopo=schema,
-                    colunas=colunas,
+                # connectorx pode crashar em casos conhecidos (ex.: NUMERIC
+                # sem precisão/escala fixa) — cair pro caminho sequencial
+                # abaixo em vez de derrubar a tabela inteira, que lia essa
+                # mesma tabela sem problema antes do paralelismo existir.
+                _logger.warning(
+                    "'%s.%s': leitura paralela via connectorx falhou, "
+                    "caindo para o caminho sequencial. Detalhe técnico: %s",
+                    schema,
+                    tabela,
+                    resultado_leitura.erro,
+                )
+                avisos.append(
+                    Aviso(
+                        mensagem=(
+                            f"'{schema}.{tabela}': leitura paralela via "
+                            "connectorx falhou — extraída pelo caminho "
+                            "sequencial em vez disso. Ver o log para o "
+                            "detalhe técnico da falha."
+                        ),
+                        origem="ExtratorPostgres",
+                    )
+                )
+            else:
+                amostra_paralela = resultado_leitura.valor
+                metadados_amostra, avisos_amostra = construir_metadados_de_amostra(
+                    nome=estrategia.nome,
+                    requisicao=requisicao,
+                    tamanho_amostra=len(amostra_paralela),
                     total_linhas=len(amostra_paralela),
-                    amostra=amostra_paralela,
-                    metadados_amostra=metadados_amostra,
-                    restricoes_unicas=restricoes_unicas,
-                    restricoes_fk_compostas=restricoes_fk_compostas,
-                ),
-                avisos=avisos,
-            )
+                    origem="ExtratorPostgres",
+                    causa_provavel="sem ANALYZE recente",
+                    identificador_tabela=f"{schema}.{tabela}",
+                )
+                avisos.extend(avisos_amostra)
+                return Sucesso(
+                    TabelaExtraida(
+                        nome_tabela=tabela,
+                        nome_escopo=schema,
+                        colunas=colunas,
+                        total_linhas=len(amostra_paralela),
+                        amostra=amostra_paralela,
+                        metadados_amostra=metadados_amostra,
+                        restricoes_unicas=restricoes_unicas,
+                        restricoes_fk_compostas=restricoes_fk_compostas,
+                    ),
+                    avisos=avisos,
+                )
 
         usa_streaming = deve_usar_streaming(total_linhas, largura_media_bytes)
         if usa_streaming:
