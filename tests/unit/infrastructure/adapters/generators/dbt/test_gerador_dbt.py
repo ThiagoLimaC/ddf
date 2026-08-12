@@ -199,17 +199,22 @@ class TestFeliz:
         assert "tests" not in coluna_id_yaml  # PK suprime unique/not_null redundante
 
         coluna_email_yaml = _coluna(modelo_clientes, "email")
-        assert "not_null" in coluna_email_yaml["tests"]
+        testes_email = coluna_email_yaml["tests"]
+        assert {"not_null": {"config": {"severity": "warn"}}} in testes_email
 
         coluna_status_yaml = _coluna(modelo_clientes, "status")
         testes_status = coluna_status_yaml["tests"]
-        accepted = next(t for t in testes_status if isinstance(t, dict))
+        accepted = next(
+            t for t in testes_status if isinstance(t, dict) and "accepted_values" in t
+        )
         assert accepted["accepted_values"]["values"] == ["ativo", "inativo"]
         assert accepted["accepted_values"]["config"]["severity"] == "warn"
 
         coluna_perfil_yaml = _coluna(modelo_clientes, "perfil_id")
         testes_perfil = coluna_perfil_yaml["tests"]
-        relacionamento = next(t for t in testes_perfil if isinstance(t, dict))
+        relacionamento = next(
+            t for t in testes_perfil if isinstance(t, dict) and "relationships" in t
+        )
         assert relacionamento["relationships"]["to"] == "ref('stg_rh__perfis')"
         assert relacionamento["relationships"]["field"] == "id"
 
@@ -872,7 +877,9 @@ class TestFeliz:
         modelo = _modelo(schema, "stg_escopo__tabela")
         coluna_yaml = _coluna(modelo, "codigo")
         testes = coluna_yaml["tests"]
-        accepted = next(t for t in testes if isinstance(t, dict))
+        accepted = next(
+            t for t in testes if isinstance(t, dict) and "accepted_values" in t
+        )
         assert accepted["accepted_values"]["values"] == [str(v) for v in range(9)]
 
     def test_alta_cardinalidade_real_mascarada_por_nulos_nao_sugere_accepted_values(
@@ -1158,6 +1165,86 @@ class TestFeliz:
         modelo = _modelo(schema, "stg_escopo__tabela")
         coluna_yaml = _coluna(modelo, "id")
         assert "tests" not in coluna_yaml
+
+    def test_unique_not_null_amostral_com_amostra_no_piso_vira_warn(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Sem fato estrutural, amostra exatamente no piso já sugere unique/not_null.
+
+        Cenário do achado 3 da issue #140: 100% único/0% nulo só na amostra
+        (`coluna.unica`/`nao_nulavel` ambos False) não deve virar
+        `severity: error` — o piso não elimina o risco de falso-positivo
+        para um teste de valor extremo (diferente dos testes de faixa
+        10%/95%), só o `severity: warn` protege o build.
+        """
+        metrica = MetricasBaseColuna(
+            percentual_nulo=0.0, percentual_unico=100.0, valores_frequentes=[]
+        )
+        coluna = construir_coluna(nome="email", metricas=[metrica])
+        tabela = construir_tabela(colunas=[coluna], tamanho_amostra=100)
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        schema = _schema_yml(tmp_path)
+        modelo = _modelo(schema, "stg_escopo__tabela")
+        testes = _coluna(modelo, "email")["tests"]
+        assert {"unique": {"config": {"severity": "warn"}}} in testes
+        assert {"not_null": {"config": {"severity": "warn"}}} in testes
+
+    def test_unique_not_null_amostral_abaixo_do_piso_nao_e_sugerido(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Amostra abaixo do piso (99) não sugere unique/not_null amostral."""
+        metrica = MetricasBaseColuna(
+            percentual_nulo=0.0, percentual_unico=100.0, valores_frequentes=[]
+        )
+        coluna = construir_coluna(nome="email", metricas=[metrica])
+        tabela = construir_tabela(colunas=[coluna], tamanho_amostra=99)
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        schema = _schema_yml(tmp_path)
+        modelo = _modelo(schema, "stg_escopo__tabela")
+        coluna_yaml = _coluna(modelo, "email")
+        assert "tests" not in coluna_yaml
+
+    def test_unique_not_null_estrutural_prevalece_sobre_amostral(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Fato estrutural do schema sempre gera severity: error, não warn."""
+        metrica = MetricasBaseColuna(
+            percentual_nulo=0.0, percentual_unico=100.0, valores_frequentes=[]
+        )
+        coluna = construir_coluna(
+            nome="email", unica=True, nao_nulavel=True, metricas=[metrica]
+        )
+        tabela = construir_tabela(colunas=[coluna], tamanho_amostra=100)
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        schema = _schema_yml(tmp_path)
+        modelo = _modelo(schema, "stg_escopo__tabela")
+        testes = _coluna(modelo, "email")["tests"]
+        assert "unique" in testes
+        assert "not_null" in testes
 
     def test_teste_soft_unico_sugerido_entre_limite_e_cem(
         self,
