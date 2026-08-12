@@ -103,7 +103,8 @@ essas categorias nativamente; os dois tipos compartilham `valores_permitidos`
 porque a única diferença semântica entre eles (um valor vs. múltiplos valores
 simultâneos por linha) não afeta como `ExtratorMariaDB`, `GeradorMarkdown` e
 `GeradorDbt` consomem o atributo. Sem equivalente ANSI portável, `GeradorDbt`
-faz cast para `VARCHAR` (ver seção do `GeradorDbt`).
+converge para o mesmo tipo canônico `TEXT` de um `TEXT` nativo, roteado
+pelo dispatch `cast_type` (ver seção do `GeradorDbt`).
 
 ### `MetadadosDeAmostra`
 
@@ -2204,12 +2205,25 @@ maior que as demais sugestões da auditoria, tocando 3 Bounded Contexts.
 Decisão registrada: documentar a limitação, não modelar FK composta nesta
 issue.
 
-**Cast SQL:** usa `TipoDeDado.categoria` + atributos de precisão para gerar
-`CAST(col AS NUMERIC(10,2))`, `CAST(col AS VARCHAR(255))`,
-`CAST(col AS TIMESTAMP WITH TIME ZONE)` etc. `ENUM`/`SET` (MariaDB, issue
-#35) não têm equivalente ANSI portável e caem para `VARCHAR`. `UNKNOWN` não
-recebe `CAST` — a coluna é projetada raw, sem tipo mapeado não há cast
-seguro a fazer.
+**Cast SQL:** usa `TipoDeDado.categoria` + atributos de precisão para montar
+o tipo canônico do `CAST` (`_tipo_sql`). Categorias já portáveis entre
+Postgres e MariaDB sem tradução (`VARCHAR(n)`, `CHAR(n)`, `DATE`, `TIME`,
+`INTEGER`, `DECIMAL(p,s)` — unificado com `NUMERIC(p,s)` num único literal,
+validado empiricamente nos dois motores) viram `CAST` literal direto.
+Categorias cujo `CAST()` diverge de verdade entre os dois motores (BIGINT,
+TEXT — inclusive `VARCHAR` sem tamanho e `ENUM`/`SET`, sem equivalente ANSI
+—, TIMESTAMP, TIME, BOOLEAN, JSON, DOUBLE PRECISION, FLOAT) são roteadas
+pelo macro dbt `cast_type` (`templates/macros/cast_type/`, dispatch por
+adapter, mesmo padrão de `matches_format`) — o `CAST()` do MariaDB aceita
+só uma allow-list fixa de destino, diferente dos nomes de tipo de coluna,
+e não existe tradução única "ANSI portável" que cubra os dois motores sem
+esse dispatch. `NUMERIC`/`DECIMAL` sem precisão/escala captada é o único
+caso que falha explícito no `dbt compile` (não na geração do `ddf`, que não
+conhece o motor de destino) quando o alvo é MariaDB — `CAST(x AS DECIMAL)`
+sem parâmetros trunca/clipa em silêncio nesse motor. `UNKNOWN` não recebe
+`CAST` — a coluna é projetada raw, sem tipo mapeado não há cast seguro a
+fazer. Detalhes completos (tabela de dispatch, limitações conhecidas):
+`plan/registry-plan/fase-9-fechamento-da-v1/issue-140-*.md`.
 
 ---
 

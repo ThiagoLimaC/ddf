@@ -18,6 +18,7 @@ from ddf.domain.model.analysis import (
     MetricasBaseColuna,
     TabelaAnalisada,
 )
+from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.infrastructure.adapters.generators.comum._metricas import (
     _elegivel_para_enumeracao,
     _metrica_de_coluna,
@@ -99,12 +100,50 @@ def _precisa_teste_soft_unico(
     return _LIMITE_UNICO_SOFT <= metrica.percentual_unico < 100.0
 
 
+def _referencias_de_fk_composta(
+    nome_coluna: str, restricoes_fk_compostas: list[RestricaoDeFkComposta]
+) -> set[tuple[str, str, str]]:
+    """Referências (escopo, tabela, coluna) que `nome_coluna` cobre via FK composta.
+
+    `construir_colunas_fk` não descarta a decomposição por coluna de uma FK
+    composta — `ColunaAnalisada.referencias` acaba com uma entrada por
+    constraint composta da qual a coluna participa, além de qualquer FK
+    single-column legítima que ela também tenha. Esta função identifica só
+    as entradas de origem composta, pareando por posição
+    (`colunas_locais[i]` ↔ `colunas_referenciadas[i]`), para que
+    `_sugestoes_de_teste` possa excluí-las sem descartar uma referência
+    própria genuína da mesma coluna.
+
+    Args:
+        nome_coluna: nome da coluna analisada.
+        restricoes_fk_compostas: `RestricaoDeFkComposta` da tabela desta
+            coluna.
+
+    Returns:
+        Conjunto de tuplas (nome_escopo, nome_tabela, nome_coluna) — vazio
+        se `nome_coluna` não participa de nenhuma FK composta.
+    """
+    referencias: set[tuple[str, str, str]] = set()
+    for restricao in restricoes_fk_compostas:
+        if nome_coluna not in restricao.colunas_locais:
+            continue
+        indice = restricao.colunas_locais.index(nome_coluna)
+        referencias.add(
+            (
+                restricao.nome_escopo_referenciado,
+                restricao.nome_tabela_referenciada,
+                restricao.colunas_referenciadas[indice],
+            )
+        )
+    return referencias
+
+
 def _sugestoes_de_teste(
     coluna: ColunaAnalisada,
     presentes: set[tuple[str, str]],
     contadores: ContadoresDeAviso,
     tamanho_amostra: int,
-    colunas_em_fk_composta: set[str],
+    restricoes_fk_compostas: list[RestricaoDeFkComposta],
 ) -> list[Any]:
     """Sugere os testes dbt de qualidade aplicáveis a uma coluna.
 
@@ -115,14 +154,19 @@ def _sugestoes_de_teste(
     amostra pequena declare "100% único"/"0% nulo" com a mesma confiança de
     um fato de schema real. Suprimidos se a coluna já é PK. `relationships`
     só é sugerido se a coluna tem exatamente 1
-    referência **e** a tabela referenciada está no lote analisado — senão
-    emite `Aviso` e omite o teste. Coluna com 2+ referências (FK
-    polimórfica sem discriminator) nunca recebe `relationships`
-    automático — o teste assumiria "toda linha satisfaz a relação A",
-    falso positivo garantido quando a linha na verdade satisfaz a relação
-    B; emite `Aviso` explicando a ambiguidade em vez de testar. Coluna em
-    `colunas_em_fk_composta` nunca recebe `relationships` per-coluna, esse
-    teste vai para `_testes_de_modelo` (`composite_relationships`).
+    referência **própria** (fora de qualquer FK composta, ver
+    `_referencias_de_fk_composta`) **e** a tabela referenciada está no
+    lote analisado — senão emite `Aviso` e omite o teste. Coluna com 2+
+    referências próprias (FK polimórfica sem discriminator) nunca recebe
+    `relationships` automático — o teste assumiria "toda linha satisfaz a
+    relação A", falso positivo garantido quando a linha na verdade
+    satisfaz a relação B; emite `Aviso` explicando a ambiguidade em vez de
+    testar. A(s) referência(s) que uma coluna tem só por participar de uma
+    FK composta nunca vira `relationships` per-coluna nem entra na conta
+    de polimorfismo — esse teste vai para `_testes_de_modelo`
+    (`composite_relationships`); se, depois de filtradas, não sobra
+    nenhuma referência própria, nada foi de fato suprimido e nenhum
+    `Aviso` é emitido.
     `accepted_values` exige `_elegivel_para_enumeracao` (critérios em
     `_metricas.py`). `matches_format` exige `formato_detectado`. Testes
     "soft" de nulo/unicidade cobrem a faixa intermediária entre "sem sinal"
@@ -139,9 +183,12 @@ def _sugestoes_de_teste(
         contadores: contadores de Aviso acumulados pelo Gerador, incrementados
             quando uma FK é polimórfica ou referencia tabela fora do lote.
         tamanho_amostra: total de linhas amostradas da tabela desta coluna.
-        colunas_em_fk_composta: nomes de coluna desta tabela que pertencem
-            a alguma `RestricaoDeFkComposta` — suprime `relationships`
-            per-coluna pra elas.
+        restricoes_fk_compostas: `RestricaoDeFkComposta` da tabela desta
+            coluna — usado só para filtrar de `coluna.referencias` as
+            entradas que já são cobertas por `composite_relationships`
+            (ver `_referencias_de_fk_composta`), sem descartar uma
+            referência single-column própria que a mesma coluna também
+            tenha.
 
     Returns:
         Lista de testes no formato aceito por `schema.yml` (strings para
@@ -198,18 +245,20 @@ def _sugestoes_de_teste(
             }
         )
 
-    if (
-        coluna.chave_estrangeira
-        and len(coluna.referencias) > 1
-        and coluna.nome not in colunas_em_fk_composta
-    ):
+    referencias_compostas = _referencias_de_fk_composta(
+        coluna.nome, restricoes_fk_compostas
+    )
+    referencias_proprias = [
+        referencia
+        for referencia in coluna.referencias
+        if (referencia.nome_escopo, referencia.nome_tabela, referencia.nome_coluna)
+        not in referencias_compostas
+    ]
+
+    if len(referencias_proprias) > 1:
         contadores.fk_polimorfica += 1
-    elif (
-        coluna.chave_estrangeira
-        and len(coluna.referencias) == 1
-        and coluna.nome not in colunas_em_fk_composta
-    ):
-        referencia = coluna.referencias[0]
+    elif len(referencias_proprias) == 1:
+        referencia = referencias_proprias[0]
         if (referencia.nome_escopo, referencia.nome_tabela) in presentes:
             nome_model_referenciado = _nome_model(
                 referencia.nome_escopo, referencia.nome_tabela
