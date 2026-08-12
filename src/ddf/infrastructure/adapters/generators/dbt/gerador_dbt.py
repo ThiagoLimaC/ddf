@@ -125,7 +125,15 @@ class GeradorDbt:
         )
 
         gerado_em = datetime.now(UTC).isoformat()
-        projeto = {**_DBT_PROJECT, "meta": {"generated_at": gerado_em}}
+        projeto = {
+            **_DBT_PROJECT,
+            "models": {
+                "ddf_staging": {
+                    **_DBT_PROJECT["models"]["ddf_staging"],
+                    "+meta": {"generated_at": gerado_em},
+                },
+            },
+        }
         resultado_projeto = escrever_arquivo(
             destino / "dbt_project.yml", _dump_yaml(projeto)
         )
