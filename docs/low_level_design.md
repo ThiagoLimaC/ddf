@@ -1643,7 +1643,7 @@ com percentual alto (candidato a tratar como equivalente a
 particionada nativa do MariaDB (o Postgres detecta e cai no sequencial,
 o MariaDB não checa); calibração final dos limiares. Detalhes completos
 (incluindo o histórico da tentativa `ThreadPoolExecutor` abandonada) em
-`plan/registry-plan/issue-126-paralelismo-intra-tabela.md`.
+`plan/registry-plan/fase-3-extrator-concreto/issue-126-paralelismo-intra-tabela.md`.
 
 ---
 
