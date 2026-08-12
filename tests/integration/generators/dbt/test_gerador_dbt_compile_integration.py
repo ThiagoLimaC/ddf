@@ -105,6 +105,46 @@ def _escrever_profiles(diretorio: Path, conteudo: dict[str, Any]) -> None:
     (diretorio / "profiles.yml").write_text(yaml.safe_dump(conteudo))
 
 
+def _tabela_numeric_sem_precisao() -> TabelaAnalisada:
+    coluna = ColunaAnalisada(
+        nome="valor",
+        tipo_dado=TipoDeDado(categoria=CategoriaDeDado.NUMERIC),
+    )
+    return TabelaAnalisada(
+        nome_tabela="numeric_sem_precisao",
+        nome_escopo="verificacao",
+        colunas=[coluna],
+        total_linhas=1,
+        metadados_amostra=MetadadosDeAmostra(
+            estrategia="percentual_de_linhas", tamanho_amostra=1, total_linhas=1
+        ),
+    )
+
+
+def _tabela_time_com_timezone() -> TabelaAnalisada:
+    """TIME WITH TIME ZONE sintético — MariaDB não tem esse tipo de coluna.
+
+    Extração real do MariaDB nunca produz `com_timezone=True` pra TIME (o
+    motor não tem `timetz`), então o único jeito de exercitar essa entrada
+    do dispatch (`mapa_temporal['TIME WITH TIME ZONE'] -> TIME(n)`) contra
+    um `dbt compile` real é construir a tabela direto, como já feito para
+    `_tabela_numeric_sem_precisao`.
+    """
+    coluna = ColunaAnalisada(
+        nome="hora",
+        tipo_dado=TipoDeDado(categoria=CategoriaDeDado.TIME, com_timezone=True),
+    )
+    return TabelaAnalisada(
+        nome_tabela="time_com_timezone",
+        nome_escopo="verificacao",
+        colunas=[coluna],
+        total_linhas=1,
+        metadados_amostra=MetadadosDeAmostra(
+            estrategia="percentual_de_linhas", tamanho_amostra=1, total_linhas=1
+        ),
+    )
+
+
 class TestFeliz:
     """Caminho feliz."""
 
@@ -186,24 +226,164 @@ class TestFeliz:
 
         assert processo.returncode == 0, processo.stdout + processo.stderr
 
+    def test_time_with_time_zone_compila_no_mariadb_via_dispatch_sintetico(
+        self,
+        conexao_mariadb: tuple[str, int, str, str],
+        dbt_mariadb_bin: Path,
+        tmp_path: Path,
+    ) -> None:
+        """TIME WITH TIME ZONE compila no MariaDB via mapa_temporal -> TIME(n).
+
+        Ver docstring de `_tabela_time_com_timezone`: essa entrada do
+        dispatch nunca foi exercitada por `dbt compile` real antes (só por
+        asserção de string em teste unitário), já que o MariaDB não produz
+        esse tipo por extração real.
+        """
+        banco = BancoAnalisado(tabelas=[_tabela_time_com_timezone()])
+        destino = tmp_path / "projeto"
+        resultado_geracao = GeradorDbt()(banco, destino)
+        assert isinstance(resultado_geracao, Sucesso), resultado_geracao
+
+        profiles_dir = tmp_path / "profiles"
+        _escrever_profiles(profiles_dir, _profiles_yml_mariadb(conexao_mariadb))
+
+        processo = subprocess.run(
+            [
+                str(dbt_mariadb_bin),
+                "compile",
+                "--project-dir",
+                str(destino),
+                "--profiles-dir",
+                str(profiles_dir),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        assert processo.returncode == 0, processo.stdout + processo.stderr
+
+    def test_projeto_com_fk_composta_compila_no_postgres(
+        self,
+        dsn_postgres: str,
+        configuracao: ConfiguracaoDeExtracao,
+        tmp_path: Path,
+    ) -> None:
+        """FK composta real gera composite_relationships e compila via dbtRunner.
+
+        `pai`/`filho_fk_composta` precisam estar juntas no mesmo
+        `BancoAnalisado` — o teste `relationships` composto só é gerado
+        quando a tabela referenciada está presente no lote (achado 4 desta
+        issue). Área de bug recente (supressão indevida de `relationships`
+        em FK composta); só tinha sido verificada por asserção de string em
+        teste unitário até aqui.
+        """
+        extrator = ExtratorPostgres(dsn=dsn_postgres, configuracao=configuracao)
+        pai = _extrair_e_analisar(extrator, "verificacao", "pai", tmp_path)
+        filho = _extrair_e_analisar(
+            extrator, "verificacao", "filho_fk_composta", tmp_path
+        )
+        banco = BancoAnalisado(tabelas=[pai, filho])
+
+        destino = tmp_path / "projeto"
+        resultado_geracao = GeradorDbt()(banco, destino)
+        assert isinstance(resultado_geracao, Sucesso), resultado_geracao
+
+        profiles_dir = tmp_path / "profiles"
+        _escrever_profiles(profiles_dir, _profiles_yml_postgres(dsn_postgres))
+
+        resultado = dbtRunner().invoke(
+            [
+                "compile",
+                "--project-dir",
+                str(destino),
+                "--profiles-dir",
+                str(profiles_dir),
+            ]
+        )
+
+        assert resultado.success, resultado.exception
+
+    def test_projeto_com_fk_composta_compila_no_mariadb(
+        self,
+        conexao_mariadb: tuple[str, int, str, str],
+        configuracao: ConfiguracaoDeExtracao,
+        dbt_mariadb_bin: Path,
+        tmp_path: Path,
+    ) -> None:
+        """FK composta real gera composite_relationships e compila via subprocess."""
+        host, port, user, password = conexao_mariadb
+        extrator = ExtratorMariaDB(
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            configuracao=configuracao,
+        )
+        pai = _extrair_e_analisar(extrator, "verificacao", "pai", tmp_path)
+        filho = _extrair_e_analisar(
+            extrator, "verificacao", "filho_fk_composta", tmp_path
+        )
+        banco = BancoAnalisado(tabelas=[pai, filho])
+
+        destino = tmp_path / "projeto"
+        resultado_geracao = GeradorDbt()(banco, destino)
+        assert isinstance(resultado_geracao, Sucesso), resultado_geracao
+
+        profiles_dir = tmp_path / "profiles"
+        _escrever_profiles(profiles_dir, _profiles_yml_mariadb(conexao_mariadb))
+
+        processo = subprocess.run(
+            [
+                str(dbt_mariadb_bin),
+                "compile",
+                "--project-dir",
+                str(destino),
+                "--profiles-dir",
+                str(profiles_dir),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        assert processo.returncode == 0, processo.stdout + processo.stderr
+
+    def test_numeric_sem_precisao_compila_normalmente_no_postgres(
+        self,
+        dsn_postgres: str,
+        tmp_path: Path,
+    ) -> None:
+        """NUMERIC sem precisão/escala compila normal no Postgres — é seguro lá.
+
+        Contraste positivo de `test_numeric_sem_precisao_falha_no_compile_do_mariadb`
+        (`TestErro`): mesma tabela de entrada, motor diferente, resultado
+        diferente — prova que a `Falha` do achado 3 é específica do MariaDB,
+        não uma regra geral aplicada a NUMERIC bare.
+        """
+        banco = BancoAnalisado(tabelas=[_tabela_numeric_sem_precisao()])
+        destino = tmp_path / "projeto"
+        resultado_geracao = GeradorDbt()(banco, destino)
+        assert isinstance(resultado_geracao, Sucesso), resultado_geracao
+
+        profiles_dir = tmp_path / "profiles"
+        _escrever_profiles(profiles_dir, _profiles_yml_postgres(dsn_postgres))
+
+        resultado = dbtRunner().invoke(
+            [
+                "compile",
+                "--project-dir",
+                str(destino),
+                "--profiles-dir",
+                str(profiles_dir),
+            ]
+        )
+
+        assert resultado.success, resultado.exception
+
 
 class TestErro:
     """Erro esperado."""
-
-    def _tabela_numeric_sem_precisao(self) -> TabelaAnalisada:
-        coluna = ColunaAnalisada(
-            nome="valor",
-            tipo_dado=TipoDeDado(categoria=CategoriaDeDado.NUMERIC),
-        )
-        return TabelaAnalisada(
-            nome_tabela="numeric_sem_precisao",
-            nome_escopo="verificacao",
-            colunas=[coluna],
-            total_linhas=1,
-            metadados_amostra=MetadadosDeAmostra(
-                estrategia="percentual_de_linhas", tamanho_amostra=1, total_linhas=1
-            ),
-        )
 
     def test_numeric_sem_precisao_falha_no_compile_do_mariadb(
         self,
@@ -217,7 +397,7 @@ class TestErro:
         em silêncio no MariaDB real (achado do engenheiro de dados) — o macro
         `mariadb__cast_type` levanta `raise_compiler_error`.
         """
-        banco = BancoAnalisado(tabelas=[self._tabela_numeric_sem_precisao()])
+        banco = BancoAnalisado(tabelas=[_tabela_numeric_sem_precisao()])
         destino = tmp_path / "projeto"
         resultado_geracao = GeradorDbt()(banco, destino)
         assert isinstance(resultado_geracao, Sucesso), resultado_geracao
@@ -241,29 +421,3 @@ class TestErro:
 
         assert processo.returncode != 0
         assert "NUMERIC sem precisão/escala" in processo.stdout + processo.stderr
-
-    def test_numeric_sem_precisao_compila_normalmente_no_postgres(
-        self,
-        dsn_postgres: str,
-        tmp_path: Path,
-    ) -> None:
-        """O mesmo caso compila normal no Postgres — NUMERIC bare é seguro lá."""
-        banco = BancoAnalisado(tabelas=[self._tabela_numeric_sem_precisao()])
-        destino = tmp_path / "projeto"
-        resultado_geracao = GeradorDbt()(banco, destino)
-        assert isinstance(resultado_geracao, Sucesso), resultado_geracao
-
-        profiles_dir = tmp_path / "profiles"
-        _escrever_profiles(profiles_dir, _profiles_yml_postgres(dsn_postgres))
-
-        resultado = dbtRunner().invoke(
-            [
-                "compile",
-                "--project-dir",
-                str(destino),
-                "--profiles-dir",
-                str(profiles_dir),
-            ]
-        )
-
-        assert resultado.success, resultado.exception

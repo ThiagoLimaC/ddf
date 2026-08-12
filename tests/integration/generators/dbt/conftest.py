@@ -4,8 +4,14 @@
 `tests/integration/extractors/<motor>/conftest.py` — schema próprio
 (`verificacao`) com os tipos/identificadores validados empiricamente pela
 banca da issue #140 (BIGINT, TEXT sem tamanho, NUMERIC(p,s), BOOLEAN, JSON,
-DOUBLE PRECISION/DOUBLE, TIMESTAMP/DATETIME com precisão fracionária,
-colunas com nome de palavra reservada).
+DOUBLE PRECISION/DOUBLE, REAL/FLOAT, TIME, TIMESTAMP/DATETIME e TIME com
+precisão fracionária, colunas com nome de palavra reservada) mais uma
+segunda tabela (`pai`/`filho_fk_composta`) com FK composta real, pra
+exercitar `composite_relationships` via `dbt compile` de verdade — não só
+por asserção de string em teste unitário (segunda rodada de banca da
+#140). `TIME WITH TIME ZONE` não tem equivalente no MariaDB, por isso só
+existe na tabela Postgres; o lado MariaDB desse dispatch é coberto por
+tabela sintética no teste (`_tabela_time_com_timezone`).
 
 `dbt_mariadb_bin` é o mecanismo à parte para o lado MariaDB: `dbt-mysql`
 (único adapter dbt com suporte a `type: mariadb`) trava em `dbt-core<=1.7`,
@@ -41,18 +47,45 @@ _SETUP_SQL_POSTGRES = """
         ativo BOOLEAN NOT NULL,
         dados JSON NOT NULL,
         medida DOUBLE PRECISION NOT NULL,
+        nota REAL NOT NULL,
         criado_em TIMESTAMP(3) WITH TIME ZONE NOT NULL,
+        hora TIME NOT NULL,
+        hora_tz TIME WITH TIME ZONE NOT NULL,
         "order" INTEGER NOT NULL,
         "left" INTEGER NOT NULL
     );
 
     INSERT INTO verificacao.diversos
-        (id, descricao, preco, ativo, dados, medida, criado_em, "order", "left")
+        (id, descricao, preco, ativo, dados, medida, nota, criado_em, hora,
+         hora_tz, "order", "left")
     VALUES
-        (1, 'a', 10.50, true, '{"a": 1}', 1.5, now(), 1, 1),
-        (2, 'b', 20.00, false, '{"b": 2}', 2.5, now(), 2, 2);
+        (1, 'a', 10.50, true, '{"a": 1}', 1.5, 3.5, now(), '10:00:00',
+         '10:00:00+00', 1, 1),
+        (2, 'b', 20.00, false, '{"b": 2}', 2.5, 4.5, now(), '11:00:00',
+         '11:00:00+00', 2, 2);
 
     ANALYZE verificacao.diversos;
+
+    CREATE TABLE verificacao.pai (
+        chave_a INTEGER NOT NULL,
+        chave_b INTEGER NOT NULL,
+        PRIMARY KEY (chave_a, chave_b)
+    );
+
+    INSERT INTO verificacao.pai (chave_a, chave_b) VALUES (1, 1), (2, 2);
+
+    CREATE TABLE verificacao.filho_fk_composta (
+        id BIGINT PRIMARY KEY,
+        ref_a INTEGER NOT NULL,
+        ref_b INTEGER NOT NULL,
+        FOREIGN KEY (ref_a, ref_b) REFERENCES verificacao.pai (chave_a, chave_b)
+    );
+
+    INSERT INTO verificacao.filho_fk_composta (id, ref_a, ref_b)
+    VALUES (1, 1, 1), (2, 2, 2);
+
+    ANALYZE verificacao.pai;
+    ANALYZE verificacao.filho_fk_composta;
 """
 
 _SETUP_STATEMENTS_MARIADB = [
@@ -65,17 +98,42 @@ _SETUP_STATEMENTS_MARIADB = [
         ativo TINYINT(1) NOT NULL,
         dados JSON NOT NULL,
         medida DOUBLE NOT NULL,
+        nota FLOAT NOT NULL,
         criado_em DATETIME(3) NOT NULL,
+        hora TIME NOT NULL,
         `order` INTEGER NOT NULL,
         `left` INTEGER NOT NULL
     ) ENGINE=InnoDB
     """,
     """
     INSERT INTO verificacao.diversos
-        (id, descricao, preco, ativo, dados, medida, criado_em, `order`, `left`)
+        (id, descricao, preco, ativo, dados, medida, nota, criado_em, hora,
+         `order`, `left`)
     VALUES
-        (1, 'a', 10.50, 1, '{"a": 1}', 1.5, NOW(3), 1, 1),
-        (2, 'b', 20.00, 0, '{"b": 2}', 2.5, NOW(3), 2, 2)
+        (1, 'a', 10.50, 1, '{"a": 1}', 1.5, 3.5, NOW(3), '10:00:00', 1, 1),
+        (2, 'b', 20.00, 0, '{"b": 2}', 2.5, 4.5, NOW(3), '11:00:00', 2, 2)
+    """,
+    """
+    CREATE TABLE verificacao.pai (
+        chave_a INT NOT NULL,
+        chave_b INT NOT NULL,
+        PRIMARY KEY (chave_a, chave_b)
+    ) ENGINE=InnoDB
+    """,
+    """
+    INSERT INTO verificacao.pai (chave_a, chave_b) VALUES (1, 1), (2, 2)
+    """,
+    """
+    CREATE TABLE verificacao.filho_fk_composta (
+        id BIGINT PRIMARY KEY,
+        ref_a INT NOT NULL,
+        ref_b INT NOT NULL,
+        FOREIGN KEY (ref_a, ref_b) REFERENCES verificacao.pai (chave_a, chave_b)
+    ) ENGINE=InnoDB
+    """,
+    """
+    INSERT INTO verificacao.filho_fk_composta (id, ref_a, ref_b)
+    VALUES (1, 1, 1), (2, 2, 2)
     """,
 ]
 
