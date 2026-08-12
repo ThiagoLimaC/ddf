@@ -674,6 +674,83 @@ class TestFeliz:
         modelo = _modelo(schema, "stg_vendas__pedidos")
         assert "tests" not in modelo
 
+    def test_coluna_em_fk_composta_mantem_relationships_de_fk_propria(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Coluna com FK composta + FK single-column própria mantém relationships.
+
+        Achado 4 da issue #140: `tenant_id` participa de uma FK composta
+        `(tenant_id, user_id) → users(tenant_id, id)` **e** tem uma FK
+        single-column legítima e independente pra `tenants.id`.
+        `ColunaAnalisada.referencias` acumula as duas — a supressão de
+        `relationships` deve descartar só a entrada que corresponde à FK
+        composta, não a coluna inteira.
+        """
+        coluna_tenant = construir_coluna(
+            nome="tenant_id",
+            chave_estrangeira=True,
+            referencias=[
+                ReferenciaDeColuna(
+                    nome_escopo="vendas", nome_tabela="tenants", nome_coluna="id"
+                ),
+                ReferenciaDeColuna(
+                    nome_escopo="vendas", nome_tabela="users", nome_coluna="tenant_id"
+                ),
+            ],
+        )
+        coluna_user = construir_coluna(
+            nome="user_id",
+            chave_estrangeira=True,
+            referencias=[
+                ReferenciaDeColuna(
+                    nome_escopo="vendas", nome_tabela="users", nome_coluna="id"
+                ),
+            ],
+        )
+        tabela = construir_tabela(
+            colunas=[coluna_tenant, coluna_user],
+            nome_tabela="orders",
+            nome_escopo="vendas",
+            restricoes_fk_compostas=[
+                RestricaoDeFkComposta(
+                    colunas_locais=("tenant_id", "user_id"),
+                    nome_escopo_referenciado="vendas",
+                    nome_tabela_referenciada="users",
+                    colunas_referenciadas=("tenant_id", "id"),
+                )
+            ],
+        )
+        tabela_tenants = construir_tabela(
+            colunas=[construir_coluna(nome="id", chave_primaria=True)],
+            nome_tabela="tenants",
+            nome_escopo="vendas",
+        )
+        tabela_users = construir_tabela(
+            colunas=[construir_coluna(nome="id", chave_primaria=True)],
+            nome_tabela="users",
+            nome_escopo="vendas",
+        )
+        banco = construir_banco([tabela, tabela_tenants, tabela_users])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        assert resultado.avisos == []  # nada suprimido de fato, sem Aviso
+
+        schema = _schema_yml(tmp_path, "vendas")
+        modelo = _modelo(schema, "stg_vendas__orders")
+
+        coluna_tenant_yaml = _coluna(modelo, "tenant_id")
+        assert coluna_tenant_yaml["tests"] == [
+            {"relationships": {"to": "ref('stg_vendas__tenants')", "field": "id"}}
+        ]
+        coluna_user_yaml = _coluna(modelo, "user_id")
+        assert "tests" not in coluna_user_yaml  # só referência composta, suprimida
+
     def test_accepted_values_omitido_quando_top10_cobre_pouco_da_amostra(
         self,
         tmp_path: Path,
