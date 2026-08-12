@@ -108,9 +108,13 @@ def _sugestoes_de_teste(
 ) -> list[Any]:
     """Sugere os testes dbt de qualidade aplicáveis a uma coluna.
 
-    `unique`/`not_null` combinam o fato estrutural do schema com a métrica
-    amostral, priorizando sempre o fato do schema; suprimidos se a coluna
-    já é PK. `relationships` só é sugerido se a coluna tem exatamente 1
+    `unique`/`not_null` priorizam sempre o fato estrutural do schema
+    (`severity: error`, o padrão do dbt); na ausência dele, caem para o
+    ramo amostral só acima do piso `_TAMANHO_AMOSTRA_MINIMO_SOFT`, com
+    `severity: warn` — mesma política dos demais testes soft, evita que uma
+    amostra pequena declare "100% único"/"0% nulo" com a mesma confiança de
+    um fato de schema real. Suprimidos se a coluna já é PK. `relationships`
+    só é sugerido se a coluna tem exatamente 1
     referência **e** a tabela referenciada está no lote analisado — senão
     emite `Aviso` e omite o teste. Coluna com 2+ referências (FK
     polimórfica sem discriminator) nunca recebe `relationships`
@@ -146,18 +150,24 @@ def _sugestoes_de_teste(
     testes: list[Any] = []
     metrica = _metrica_de_coluna(coluna)
 
-    unico = coluna.unica or (
-        tamanho_amostra > 0
-        and metrica is not None
-        and metrica.percentual_unico == 100.0
-    )
-    nao_nulo = coluna.nao_nulavel or (
-        tamanho_amostra > 0 and metrica is not None and metrica.percentual_nulo == 0.0
-    )
-    if unico and not coluna.chave_primaria:
-        testes.append("unique")
-    if nao_nulo and not coluna.chave_primaria:
-        testes.append("not_null")
+    if not coluna.chave_primaria:
+        if coluna.unica:
+            testes.append("unique")
+        elif (
+            metrica is not None
+            and metrica.percentual_unico == 100.0
+            and tamanho_amostra >= _TAMANHO_AMOSTRA_MINIMO_SOFT
+        ):
+            testes.append({"unique": {"config": {"severity": "warn"}}})
+
+        if coluna.nao_nulavel:
+            testes.append("not_null")
+        elif (
+            metrica is not None
+            and metrica.percentual_nulo == 0.0
+            and tamanho_amostra >= _TAMANHO_AMOSTRA_MINIMO_SOFT
+        ):
+            testes.append({"not_null": {"config": {"severity": "warn"}}})
 
     if metrica is not None and metrica.formato_detectado is not None:
         testes.append(
