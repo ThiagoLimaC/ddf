@@ -26,6 +26,7 @@ from ddf.infrastructure.adapters.generators.dbt._sql import (
     _precisa_cast_type,
     _renderizar_sql,
     _tabela_com_nome_model_invalido,
+    _tem_coluna_bigint,
 )
 from ddf.infrastructure.adapters.generators.dbt._templates import (
     _CONTEUDO_CAST_TYPE,
@@ -118,6 +119,7 @@ class GeradorDbt:
         tabelas_por_escopo = _agrupar_por_escopo(tabelas)
         usa_dbt_utils = _precisa_dbt_utils(tabelas)
         usa_cast_type = _precisa_cast_type(tabelas)
+        usa_bigint = _tem_coluna_bigint(tabelas)
         usa_matches_format = _precisa_matches_format(tabelas)
         usa_unique_percentage_at_least = _precisa_unique_percentage_at_least(tabelas)
         usa_composite_relationships = _precisa_composite_relationships(
@@ -216,7 +218,11 @@ class GeradorDbt:
         resultado_readme = escrever_arquivo(
             destino / "README.md",
             _renderizar_readme(
-                tabelas_por_escopo, gerado_em, usa_dbt_utils, usa_matches_format
+                tabelas_por_escopo,
+                gerado_em,
+                usa_dbt_utils,
+                usa_matches_format,
+                usa_bigint,
             ),
         )
         if isinstance(resultado_readme, Falha):

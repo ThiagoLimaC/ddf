@@ -193,6 +193,7 @@ def _renderizar_readme(
     gerado_em: str,
     usa_dbt_utils: bool,
     usa_matches_format: bool,
+    usa_bigint: bool,
 ) -> str:
     """Renderiza o README.md do projeto dbt gerado, na raiz do projeto.
 
@@ -207,6 +208,10 @@ def _renderizar_readme(
         usa_matches_format: se `macros/matches_format/` foi gerado nesta
             execução — a nota sobre engines suportadas (Postgres/MariaDB
             nesta v1) só aparece quando há consumidor real.
+        usa_bigint: se há coluna BIGINT no lote — aciona a nota sobre
+            `BIGINT UNSIGNED` virar negativo em silêncio quando o destino
+            é MariaDB (limitação conhecida, ver
+            `plan/registry-plan/fase-9-fechamento-da-v1/issue-140-*.md`).
 
     Returns:
         Markdown listando os escopos e tabelas cobertos, com o caminho real
@@ -235,6 +240,7 @@ def _renderizar_readme(
         gerado_em=gerado_em,
         usa_dbt_utils=usa_dbt_utils,
         usa_matches_format=usa_matches_format,
+        usa_bigint=usa_bigint,
     )
 
 

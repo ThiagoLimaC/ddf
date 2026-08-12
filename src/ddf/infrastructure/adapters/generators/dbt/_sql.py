@@ -225,6 +225,27 @@ def _precisa_cast_type(tabelas: list[TabelaAnalisada]) -> bool:
     return False
 
 
+def _tem_coluna_bigint(tabelas: list[TabelaAnalisada]) -> bool:
+    """Indica se alguma coluna do lote é BIGINT.
+
+    Args:
+        tabelas: tabelas do lote analisado.
+
+    Returns:
+        True se pelo menos uma coluna tem `CategoriaDeDado.BIGINT` —
+        aciona a nota sobre a limitação de `BIGINT UNSIGNED` no README
+        gerado (`_renderizar_readme`). ddf não sabe em tempo de geração
+        se o destino será MariaDB (única engine da v1 onde a limitação se
+        aplica — Postgres não tem inteiro unsigned), então a nota aparece
+        sempre que há BIGINT no lote, não só quando o destino é conhecido.
+    """
+    for tabela in tabelas:
+        for coluna in tabela.colunas:
+            if coluna.tipo_dado.categoria == CategoriaDeDado.BIGINT:
+                return True
+    return False
+
+
 def _renderizar_sql(tabela: TabelaAnalisada) -> str:
     """Renderiza o SELECT com CAST + alias por coluna do staging model.
 

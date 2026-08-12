@@ -42,6 +42,15 @@ dbt test
 > para Postgres e MariaDB nesta versão — rodar contra outra engine de
 > destino falha o `dbt compile` com um erro explícito.
 {% endif %}
+{% if usa_bigint %}
+> Este projeto tem coluna(s) `BIGINT`. Se a coluna de origem for
+> `BIGINT UNSIGNED` (só existe no MariaDB — Postgres não tem inteiro sem
+> sinal) e algum valor real ultrapassar 2^63-1, o `CAST` gerado (`SIGNED`,
+> único alvo portável) devolve um número negativo em silêncio quando o
+> destino é MariaDB — sem erro, sem warning do `dbt test`. Confira se a(s)
+> coluna(s) `BIGINT` deste projeto têm valores acima desse limite antes de
+> confiar no resultado.
+{% endif %}
 
 ## Escopos e tabelas
 
