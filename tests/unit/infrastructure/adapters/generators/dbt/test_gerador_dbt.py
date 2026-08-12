@@ -159,18 +159,31 @@ class TestFeliz:
         ).read_text()
         linhas_sql = sql_clientes.splitlines()
         assert linhas_sql[0] == "select"
-        assert linhas_sql[1] == "    CAST(id AS INTEGER) as id,"
-        assert linhas_sql[2] == "    CAST(email AS VARCHAR(255)) as email,"
-        assert linhas_sql[3] == "    CAST(status AS VARCHAR(10)) as status,"
-        assert (
-            linhas_sql[4] == "    CAST(perfil_id AS INTEGER) as perfil_id"
+        assert linhas_sql[1] == (
+            "    CAST({{ adapter.quote('id') }} AS INTEGER)"
+            " as {{ adapter.quote('id') }},"
+        )
+        assert linhas_sql[2] == (
+            "    CAST({{ adapter.quote('email') }} AS VARCHAR(255))"
+            " as {{ adapter.quote('email') }},"
+        )
+        assert linhas_sql[3] == (
+            "    CAST({{ adapter.quote('status') }} AS VARCHAR(10))"
+            " as {{ adapter.quote('status') }},"
+        )
+        assert linhas_sql[4] == (
+            "    CAST({{ adapter.quote('perfil_id') }} AS INTEGER)"
+            " as {{ adapter.quote('perfil_id') }}"
         )  # sem vírgula
         assert linhas_sql[5] == "from {{ source('vendas', 'clientes') }}"
 
         sql_perfis = (
             tmp_path / "models" / "staging" / "rh" / "stg_rh__perfis.sql"
         ).read_text()
-        assert "CAST(id AS DECIMAL(10,2)) as id" in sql_perfis
+        assert (
+            "CAST({{ adapter.quote('id') }} AS DECIMAL(10,2))"
+            " as {{ adapter.quote('id') }}"
+        ) in sql_perfis
 
         schema_vendas = _schema_yml(tmp_path, "vendas")
         nomes_models_vendas = [m["name"] for m in schema_vendas["models"]]
@@ -918,7 +931,10 @@ class TestFeliz:
         sql = (
             tmp_path / "models" / "staging" / "escopo" / "stg_escopo__tabela.sql"
         ).read_text()
-        assert "spatiallocation as spatiallocation" in sql
+        assert (
+            "{{ adapter.quote('spatiallocation') }}"
+            " as {{ adapter.quote('spatiallocation') }}"
+        ) in sql
         assert "CAST" not in sql
 
     def test_array_com_elemento_reconhecido_recebe_cast_de_array(
@@ -945,7 +961,33 @@ class TestFeliz:
         sql = (
             tmp_path / "models" / "staging" / "escopo" / "stg_escopo__tabela.sql"
         ).read_text()
-        assert "CAST(tags AS INTEGER[])" in sql
+        assert "CAST({{ adapter.quote('tags') }} AS INTEGER[])" in sql
+
+    def test_coluna_com_nome_reservado_e_quotada_no_sql(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Coluna com nome de palavra reservada (`order`) sai sempre quotada.
+
+        `adapter.quote()` resolve o delimitador certo por motor em tempo de
+        compile (aspas duplas no Postgres, crase no MariaDB) — aspas duplas
+        fixas não funcionam no MariaDB sem `ANSI_QUOTES`.
+        """
+        coluna = construir_coluna(nome="order")
+        tabela = construir_tabela(colunas=[coluna])
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        sql = (
+            tmp_path / "models" / "staging" / "escopo" / "stg_escopo__tabela.sql"
+        ).read_text()
+        assert "CAST({{ adapter.quote('order') }} AS INTEGER)" in sql
+        assert "as {{ adapter.quote('order') }}" in sql
 
     def test_geracao_e_deterministica(
         self,
@@ -1281,7 +1323,9 @@ class TestFeliz:
             / "vendas"
             / "stg_vendas__pedidos.sql"
         ).read_text()
-        assert "{{ cast_type('id_externo', 'BIGINT') }}" in sql
+        assert (
+            "{{ cast_type(adapter.quote('id_externo'), 'BIGINT') }}" in sql
+        )
         assert "CAST(id_externo AS BIGINT)" not in sql
 
     def test_sql_de_coluna_timestamp_com_precisao_passa_precisao_ao_macro(
@@ -1316,7 +1360,8 @@ class TestFeliz:
             / "stg_vendas__pedidos.sql"
         ).read_text()
         assert (
-            "{{ cast_type('criado_em', 'TIMESTAMP WITH TIME ZONE', 3) }}" in sql
+            "{{ cast_type(adapter.quote('criado_em'), "
+            "'TIMESTAMP WITH TIME ZONE', 3) }}" in sql
         )
 
     def test_macro_unique_percentage_nao_gerado_sem_consumidor(
@@ -1432,8 +1477,70 @@ class TestFeliz:
         assert (tmp_path / "packages.yml").exists()
 
 
+class TestErro:
+    """Erro esperado."""
+
+    def test_nome_de_tabela_com_espaco_falha_antes_de_escrever(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Tabela com espaço no nome vira model inválido — Falha, não normalização."""
+        tabela = construir_tabela(
+            colunas=[construir_coluna()], nome_tabela="order items"
+        )
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Falha)
+        assert "stg_escopo__order items" in resultado.erro
+        assert not (tmp_path / "dbt_project.yml").exists()
+
+    def test_nome_de_escopo_com_hifen_falha_antes_de_escrever(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Escopo com hífen no nome vira model inválido — Falha, não normalização."""
+        tabela = construir_tabela(
+            colunas=[construir_coluna()], nome_escopo="sales-eu"
+        )
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Falha)
+        assert "stg_sales-eu__tabela" in resultado.erro
+        assert not (tmp_path / "dbt_project.yml").exists()
+
+
 class TestBorda:
     """Bordas."""
+
+    def test_coluna_com_apostrofo_no_nome_escapa_o_literal_jinja(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Apóstrofo no nome não quebra o literal Jinja de `adapter.quote()`."""
+        coluna = construir_coluna(nome="d'agua")
+        tabela = construir_tabela(colunas=[coluna])
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        sql = (
+            tmp_path / "models" / "staging" / "escopo" / "stg_escopo__tabela.sql"
+        ).read_text()
+        assert "adapter.quote('d\\'agua')" in sql
 
     def test_packages_yml_orfao_e_removido_quando_restricao_some(
         self,
@@ -1532,7 +1639,9 @@ class TestBorda:
         sql = (
             tmp_path / "models" / "staging" / "escopo" / "stg_escopo__tabela.sql"
         ).read_text()
-        assert "pontos as pontos" in sql
+        assert (
+            "{{ adapter.quote('pontos') }} as {{ adapter.quote('pontos') }}"
+        ) in sql
         assert "CAST" not in sql
 
     def test_teste_soft_nulo_omitido_com_amostra_abaixo_do_piso(
