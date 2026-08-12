@@ -3,15 +3,12 @@
 import logging
 import threading
 from collections import defaultdict
-from collections.abc import Generator
-from contextlib import contextmanager
 from typing import assert_never
 
 import connectorx as cx
 import polars as pl
-from psycopg2 import OperationalError, sql
+from psycopg2 import sql
 from psycopg2.extensions import connection as conexao_postgres
-from psycopg2.pool import ThreadedConnectionPool
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.model.common.requisicao_de_amostragem import (
@@ -35,10 +32,7 @@ from ddf.infrastructure.adapters.extractors.comum.construir_restricoes_fk_compos
     construir_restricoes_fk_compostas,
 )
 from ddf.infrastructure.adapters.extractors.comum.leitura_paralela_intra_tabela import (  # noqa: E501
-    MINIMO_CONEXOES_PARALELISMO,
     deve_paralelizar_leitura,
-    liberar_conexoes,
-    reservar_conexoes,
 )
 from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
     LARGURA_MEDIA_PADRAO_BYTES,
@@ -48,6 +42,10 @@ from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
     ler_amostra_fetchall,
 )
 from ddf.infrastructure.adapters.extractors.comum.seed_efetivo import seed_efetivo
+from ddf.infrastructure.adapters.extractors.postgres._conexoes import (
+    TokenDeReserva,
+    _GerenciadorDeConexoesPostgres,
+)
 from ddf.infrastructure.adapters.extractors.postgres._construcao import (
     _construir_coluna,
     _LinhaColuna,
@@ -123,7 +121,6 @@ class ExtratorPostgres:
                 "max_conexoes_por_tabela deve ser positivo e não exceder "
                 f"max_conexoes ({max_conexoes_por_tabela} vs. {max_conexoes})."
             )
-        self._dsn = dsn
         # connectorx abre suas próprias conexões, fora do ThreadedConnectionPool
         # — connect_timeout só chega até elas se estiver embutido na DSN.
         # `dsn` já vem em formato URI (montada pelo wizard, `postgresql://...`,
@@ -131,106 +128,16 @@ class ExtratorPostgres:
         separador = "&" if "?" in dsn else "?"
         self._dsn_connectorx = f"{dsn}{separador}connect_timeout={connect_timeout}"
         self._configuracao = configuracao
-        self._max_conexoes = max_conexoes
-        self._connect_timeout = connect_timeout
         self._max_conexoes_por_tabela = max_conexoes_por_tabela
-        self._pool: ThreadedConnectionPool | None = None
-        self._semaforo = threading.Semaphore(max_conexoes)
-        self._lock_pool = threading.Lock()
+        self._conexoes = _GerenciadorDeConexoesPostgres(
+            dsn, max_conexoes, connect_timeout
+        )
         self._cache_schemas: dict[str, _MetadadosDoSchema] = {}
         self._lock_cache_schemas = threading.Lock()
-        self._lock_reserva_paralelismo = threading.Lock()
-
-    def _obter_pool(self) -> Resultado[ThreadedConnectionPool]:
-        """Cria o pool sob demanda, pra falha de conexão virar Falha, não exceção."""
-        if self._pool is None:
-            with self._lock_pool:
-                if self._pool is None:
-                    try:
-                        self._pool = ThreadedConnectionPool(
-                            minconn=1,
-                            maxconn=self._max_conexoes,
-                            dsn=self._dsn,
-                            connect_timeout=self._connect_timeout,
-                        )
-                    except OperationalError as erro:
-                        return Falha(f"Não foi possível conectar: {erro}")
-        return Sucesso(self._pool)
-
-    @contextmanager
-    def _conexao(
-        self, autocommit: bool = True
-    ) -> Generator[Resultado[conexao_postgres], None, None]:
-        """Empresta uma conexão do pool, sob o semáforo, com release garantido.
-
-        `yield`a um `Falha` cedo, sem entrar no bloco `try`/`finally` de
-        conexão, quando o próprio pool não pode ser obtido ou o
-        `getconn()` falha — nesses casos não há conexão nem posse do
-        semáforo a devolver. Quando a conexão é obtida com sucesso, o
-        `finally` garante `putconn` + liberação do semáforo mesmo se o
-        corpo do `with` levantar uma exceção não tratada.
-
-        Args:
-            autocommit: `False` sustenta uma transação aberta na conexão
-                emprestada — obrigatório para cursor nomeado (streaming).
-                Quem pede `autocommit=False` é responsável por chamar
-                `conexao.commit()` no caminho de sucesso, antes do `with`
-                terminar; no caminho de erro, o `rollback()` automático do
-                `ThreadedConnectionPool.putconn` cobre a limpeza — sem
-                vazamento de estado entre quem pegar a conexão emprestada
-                depois, só a duração da transação fica maior enquanto
-                durar o streaming.
-        """
-        resultado_pool = self._obter_pool()
-        if isinstance(resultado_pool, Falha):
-            yield resultado_pool
-            return
-        pool = resultado_pool.valor
-        self._semaforo.acquire()
-        try:
-            conexao = pool.getconn()
-        except OperationalError as erro:
-            self._semaforo.release()
-            yield Falha(f"Não foi possível conectar: {erro}")
-            return
-        try:
-            conexao.autocommit = autocommit
-            yield Sucesso(conexao)
-        finally:
-            pool.putconn(conexao)
-            self._semaforo.release()
-
-    @contextmanager
-    def _conexao_ja_reservada(
-        self, autocommit: bool = True
-    ) -> Generator[Resultado[conexao_postgres], None, None]:
-        """Empresta uma conexão do pool sem tocar no semáforo.
-
-        Uso restrito à leitura paralela intra-tabela: o orçamento de
-        conexões já foi reservado antes (via `reservar_conexoes`), fora
-        deste método — adquirir o semáforo de novo aqui dessincronizaria a
-        contagem do quanto está realmente em uso. Mesmo formato de
-        `_conexao`, só sem o `acquire`/`release`.
-        """
-        resultado_pool = self._obter_pool()
-        if isinstance(resultado_pool, Falha):
-            yield resultado_pool
-            return
-        pool = resultado_pool.valor
-        try:
-            conexao = pool.getconn()
-        except OperationalError as erro:
-            yield Falha(f"Não foi possível conectar: {erro}")
-            return
-        try:
-            conexao.autocommit = autocommit
-            yield Sucesso(conexao)
-        finally:
-            pool.putconn(conexao)
 
     def listar_escopos(self) -> Resultado[list[str]]:
         """Lista os escopos (schemas) disponíveis, ordenados por nome."""
-        with self._conexao() as resultado_conexao:
+        with self._conexoes.conexao() as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
             conexao = resultado_conexao.valor
@@ -244,7 +151,7 @@ class ExtratorPostgres:
 
     def listar_tabelas(self, schema: str) -> Resultado[list[tuple[str, str]]]:
         """Lista (schema, nome_tabela) do schema informado, ordenado por nome_tabela."""
-        with self._conexao() as resultado_conexao:
+        with self._conexoes.conexao() as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
             conexao = resultado_conexao.valor
@@ -275,7 +182,7 @@ class ExtratorPostgres:
             if metadados is not None:
                 return Sucesso(metadados)
 
-            with self._conexao() as resultado_conexao:
+            with self._conexoes.conexao() as resultado_conexao:
                 if isinstance(resultado_conexao, Falha):
                     return resultado_conexao
                 conexao = resultado_conexao.valor
@@ -391,7 +298,7 @@ class ExtratorPostgres:
             100.0,
             max(0.01, (_LINHAS_AMOSTRA_LARGURA_REAL / total_linhas) * 100),
         )
-        with self._conexao() as resultado_conexao:
+        with self._conexoes.conexao() as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
             conexao = resultado_conexao.valor
@@ -429,7 +336,7 @@ class ExtratorPostgres:
         como elegível — não faz parte do round-trip de metadados por
         schema, que roda uma vez só e cobre todas as tabelas de uma vez.
         """
-        with self._conexao() as resultado_conexao:
+        with self._conexoes.conexao() as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
             conexao = resultado_conexao.valor
@@ -468,7 +375,7 @@ class ExtratorPostgres:
         self,
         schema: str,
         tabela: str,
-        n: int,
+        token: TokenDeReserva,
         total_linhas: int,
         largura_media_bytes: int,
     ) -> Resultado[pl.DataFrame]:
@@ -489,14 +396,15 @@ class ExtratorPostgres:
         `pre_execution_query` (`SET TRANSACTION SNAPSHOT`). Preserva a
         mesma consistência entre faixas que o desenho anterior garantia.
 
-        `n` é o total de permits reservados do semáforo — a conexão líder
-        consome 1 deles (via `_conexao_ja_reservada`, que empresta do pool
-        sem tocar o semáforo de novo, assumindo que esse permit já está
-        contado aqui). Os `n - 1` restantes vão pro `connectorx`, senão o
-        uso real de conexões (`n` faixas + 1 líder) excederia o orçamento
-        que `reservar_conexoes` efetivamente reservou.
+        `token.n` é o total de permits reservados do semáforo (via
+        `self._conexoes.reservar`) — a conexão líder consome 1 deles (via
+        `self._conexoes.conexao_ja_reservada(token, ...)`, que empresta do
+        pool sem tocar o semáforo de novo, assumindo que esse permit já
+        está contado aqui). Os `token.n - 1` restantes vão pro `connectorx`,
+        senão o uso real de conexões (`token.n` faixas + 1 líder) excederia
+        o orçamento que a reserva efetivamente concedeu.
         """
-        n_faixas = n - 1
+        n_faixas = token.n - 1
         resultado_blocos = self._total_blocos(schema, tabela)
         if isinstance(resultado_blocos, Falha):
             return resultado_blocos
@@ -517,7 +425,9 @@ class ExtratorPostgres:
             total_blocos // n_faixas if n_faixas else total_blocos,
         )
 
-        with self._conexao_ja_reservada(autocommit=False) as resultado_lider:
+        with self._conexoes.conexao_ja_reservada(
+            token, autocommit=False
+        ) as resultado_lider:
             if isinstance(resultado_lider, Falha):
                 return resultado_lider
             conexao_lider = resultado_lider.valor
@@ -625,28 +535,24 @@ class ExtratorPostgres:
             and isinstance(requisicao, AmostragemIntegral)
             and deve_paralelizar_leitura(total_linhas, largura_media_bytes)
         )
-        n_reservado = 0
+        token_reserva: TokenDeReserva | None = None
         if elegivel_paralelo:
-            n_reservado = reservar_conexoes(
-                self._semaforo,
-                self._lock_reserva_paralelismo,
-                self._max_conexoes_por_tabela,
-            )
-        if n_reservado >= MINIMO_CONEXOES_PARALELISMO:
+            token_reserva = self._conexoes.reservar(self._max_conexoes_por_tabela)
+        if token_reserva is not None:
             _logger.info(
                 "'%s.%s': paralelismo intra-tabela ativado (~%d linhas, "
                 "%d conexões).",
                 schema,
                 tabela,
                 total_linhas,
-                n_reservado,
+                token_reserva.n,
             )
             try:
                 resultado_leitura = self._ler_tabela_em_paralelo(
-                    schema, tabela, n_reservado, total_linhas, largura_media_bytes
+                    schema, tabela, token_reserva, total_linhas, largura_media_bytes
                 )
             finally:
-                liberar_conexoes(self._semaforo, n_reservado)
+                self._conexoes.liberar(token_reserva)
             if isinstance(resultado_leitura, Falha):
                 # connectorx pode crashar em casos conhecidos (ex.: NUMERIC
                 # sem precisão/escala fixa) — cair pro caminho sequencial
@@ -706,7 +612,7 @@ class ExtratorPostgres:
                 total_linhas,
                 largura_media_bytes,
             )
-        with self._conexao(autocommit=not usa_streaming) as resultado_conexao:
+        with self._conexoes.conexao(autocommit=not usa_streaming) as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
             conexao = resultado_conexao.valor

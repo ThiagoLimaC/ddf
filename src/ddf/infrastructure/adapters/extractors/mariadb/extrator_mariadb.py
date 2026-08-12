@@ -4,15 +4,12 @@ import logging
 import random
 import threading
 from collections import defaultdict
-from collections.abc import Generator
-from contextlib import contextmanager
-from typing import Any, assert_never
+from typing import assert_never
 from urllib.parse import quote
 
 import connectorx as cx
 import polars as pl
 import pymysql
-from dbutils.pooled_db import PooledDB
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.model.common.requisicao_de_amostragem import (
@@ -35,10 +32,7 @@ from ddf.infrastructure.adapters.extractors.comum.construir_restricoes_fk_compos
     construir_restricoes_fk_compostas,
 )
 from ddf.infrastructure.adapters.extractors.comum.leitura_paralela_intra_tabela import (  # noqa: E501
-    MINIMO_CONEXOES_PARALELISMO,
     deve_paralelizar_leitura,
-    liberar_conexoes,
-    reservar_conexoes,
 )
 from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
     LARGURA_MEDIA_PADRAO_BYTES,
@@ -48,6 +42,10 @@ from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
     ler_amostra_fetchall,
 )
 from ddf.infrastructure.adapters.extractors.comum.seed_efetivo import seed_efetivo
+from ddf.infrastructure.adapters.extractors.mariadb._conexoes import (
+    TokenDeReserva,
+    _GerenciadorDeConexoesMariaDB,
+)
 from ddf.infrastructure.adapters.extractors.mariadb._construcao import (
     _agrupar_colunas_json_por_tabela,
     _agrupar_colunas_unicas_por_tabela,
@@ -156,83 +154,18 @@ class ExtratorMariaDB:
         self._password = password
         self._configuracao = configuracao
         self._port = port
-        self._max_conexoes = max_conexoes
-        self._connect_timeout = connect_timeout
         self._max_conexoes_por_tabela = max_conexoes_por_tabela
-        self._pool: PooledDB | None = None
-        self._lock_pool = threading.Lock()
+        self._conexoes = _GerenciadorDeConexoesMariaDB(
+            host, user, password, port, max_conexoes, connect_timeout
+        )
         self._cache_schemas: dict[str, _MetadadosDoSchema] = {}
         self._lock_cache_schemas = threading.Lock()
-        self._semaforo = threading.Semaphore(max_conexoes)
-        self._lock_reserva_paralelismo = threading.Lock()
         self._aviso_paralelismo_emitido = False
         self._lock_aviso_paralelismo = threading.Lock()
 
-    def _obter_pool(self) -> Resultado[PooledDB]:
-        """Cria o pool sob demanda, pra falha de conexão virar Falha, não exceção."""
-        if self._pool is None:
-            with self._lock_pool:
-                if self._pool is None:
-                    try:
-                        self._pool = PooledDB(
-                            creator=pymysql,
-                            mincached=1,
-                            maxcached=self._max_conexoes,
-                            maxconnections=self._max_conexoes,
-                            blocking=True,
-                            host=self._host,
-                            port=self._port,
-                            user=self._user,
-                            password=self._password,
-                            autocommit=True,
-                            connect_timeout=self._connect_timeout,
-                        )
-                    except pymysql.err.OperationalError as erro:
-                        return Falha(f"Não foi possível conectar: {erro}")
-        return Sucesso(self._pool)
-
-    @contextmanager
-    def _conexao(self) -> Generator[Resultado[Any], None, None]:
-        """Empresta uma conexão do pool, com devolução (`close`) garantida.
-
-        `PooledDB` foi criado com `blocking=True` (`_obter_pool`), então
-        `pool.connection()` já bloqueia internamente quando o pool está
-        saturado, em vez de levantar erro como o `ThreadedConnectionPool`
-        do psycopg2 faria — mas isso sozinho não basta mais desde que o
-        paralelismo intra-tabela passou a reservar conexões via
-        `reservar_conexoes`: as conexões que o `connectorx` abre por conta
-        própria (fora deste `PooledDB`) também precisam contar contra o
-        mesmo orçamento `max_conexoes`, senão o total real de conexões no
-        servidor pode passar do configurado. `self._semaforo` (mesmo
-        padrão do `ExtratorPostgres`) cobre as duas fontes.
-
-        `yield`a um `Falha` cedo, sem entrar no `try`/`finally` de conexão,
-        quando o pool não pode ser obtido ou `pool.connection()` falha —
-        nesses casos não há conexão nem posse do semáforo a devolver. Tipo
-        `Any` porque `dbutils.pooled_db` não tem stubs
-        (`ignore_missing_imports` em `pyproject.toml`).
-        """
-        resultado_pool = self._obter_pool()
-        if isinstance(resultado_pool, Falha):
-            yield resultado_pool
-            return
-        pool = resultado_pool.valor
-        self._semaforo.acquire()
-        try:
-            conexao = pool.connection()
-        except pymysql.err.OperationalError as erro:
-            self._semaforo.release()
-            yield Falha(f"Não foi possível conectar: {erro}")
-            return
-        try:
-            yield Sucesso(conexao)
-        finally:
-            conexao.close()
-            self._semaforo.release()
-
     def listar_escopos(self) -> Resultado[list[str]]:
         """Lista os escopos (databases) disponíveis, ordenados por nome."""
-        with self._conexao() as resultado_conexao:
+        with self._conexoes.conexao() as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
             conexao = resultado_conexao.valor
@@ -246,7 +179,7 @@ class ExtratorMariaDB:
 
     def listar_tabelas(self, escopo: str) -> Resultado[list[tuple[str, str]]]:
         """Lista (escopo, nome_tabela) do escopo informado, ordenado por nome_tabela."""
-        with self._conexao() as resultado_conexao:
+        with self._conexoes.conexao() as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
             conexao = resultado_conexao.valor
@@ -277,7 +210,7 @@ class ExtratorMariaDB:
             if metadados is not None:
                 return Sucesso(metadados)
 
-            with self._conexao() as resultado_conexao:
+            with self._conexoes.conexao() as resultado_conexao:
                 if isinstance(resultado_conexao, Falha):
                     return resultado_conexao
                 conexao = resultado_conexao.valor
@@ -411,7 +344,7 @@ class ExtratorMariaDB:
             f"{_quotar_identificador(escopo)}.{_quotar_identificador(tabela)}"
         )
         identificador_pk = _quotar_identificador(nome_pk)
-        with self._conexao() as resultado_conexao:
+        with self._conexoes.conexao() as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
             conexao = resultado_conexao.valor
@@ -436,7 +369,7 @@ class ExtratorMariaDB:
         nome_pk: str,
         minimo: int,
         maximo: int,
-        n: int,
+        token: TokenDeReserva,
     ) -> Resultado[pl.DataFrame]:
         """Lê a tabela inteira via `connectorx`, uma faixa contígua de PK por conexão.
 
@@ -448,20 +381,23 @@ class ExtratorMariaDB:
         (domínio do PK) já vêm calculados por `_dominio_de_pk`, chamado
         antes da reserva de conexões — ver docstring de lá.
         `particionar_faixas_exaustivas` gera as faixas (mesmo algoritmo de
-        `ctid` do Postgres, aplicado a valor de PK em vez de bloco
-        físico).
+        `ctid` do Postgres, aplicado a valor de PK em vez de bloco físico) —
+        `token.n` é quantas conexões `self._conexoes.reservar` concedeu,
+        mesmo que nenhuma delas seja emprestada aqui (ver docstring do
+        módulo `_conexoes.py`: o MariaDB não tem `conexao_ja_reservada`
+        porque o `connectorx` sempre abre conexão própria via DSN).
         """
         identificador_tabela = (
             f"{_quotar_identificador(escopo)}.{_quotar_identificador(tabela)}"
         )
         identificador_pk = _quotar_identificador(nome_pk)
-        faixas = particionar_faixas_exaustivas(minimo, maximo, n)
+        faixas = particionar_faixas_exaustivas(minimo, maximo, token.n)
         _logger.info(
             "'%s.%s': dividindo em %d faixas de PK '%s' (%d..%d) para "
             "leitura paralela via connectorx.",
             escopo,
             tabela,
-            n,
+            token.n,
             nome_pk,
             minimo,
             maximo,
@@ -585,14 +521,10 @@ class ExtratorMariaDB:
             else:
                 elegivel_paralelo = False
 
-        n_reservado = 0
+        token_reserva: TokenDeReserva | None = None
         if elegivel_paralelo:
-            n_reservado = reservar_conexoes(
-                self._semaforo,
-                self._lock_reserva_paralelismo,
-                self._max_conexoes_por_tabela,
-            )
-        if n_reservado >= MINIMO_CONEXOES_PARALELISMO:
+            token_reserva = self._conexoes.reservar(self._max_conexoes_por_tabela)
+        if token_reserva is not None:
             assert pk_elegivel is not None
             assert dominio_pk is not None
             _logger.info(
@@ -601,7 +533,7 @@ class ExtratorMariaDB:
                 escopo,
                 tabela,
                 total_linhas,
-                n_reservado,
+                token_reserva.n,
             )
             minimo, maximo = dominio_pk
             try:
@@ -611,10 +543,10 @@ class ExtratorMariaDB:
                     pk_elegivel.nome_coluna,
                     minimo,
                     maximo,
-                    n_reservado,
+                    token_reserva,
                 )
             finally:
-                liberar_conexoes(self._semaforo, n_reservado)
+                self._conexoes.liberar(token_reserva)
             if isinstance(resultado_leitura, Falha):
                 # connectorx pode crashar em casos conhecidos (ex.: NUMERIC
                 # sem precisão/escala fixa) — cair pro caminho sequencial
@@ -678,7 +610,7 @@ class ExtratorMariaDB:
                 total_linhas,
                 largura_media_bytes,
             )
-        with self._conexao() as resultado_conexao:
+        with self._conexoes.conexao() as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
             conexao = resultado_conexao.valor

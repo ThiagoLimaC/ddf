@@ -39,7 +39,7 @@ def pool_classe_fake(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """Substitui PooledDB por um mock, retorna a classe mockada."""
     classe_fake = MagicMock()
     monkeypatch.setattr(
-        "ddf.infrastructure.adapters.extractors.mariadb.extrator_mariadb.PooledDB",
+        "ddf.infrastructure.adapters.extractors.mariadb._conexoes.PooledDB",
         classe_fake,
     )
     return classe_fake
