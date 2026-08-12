@@ -197,49 +197,241 @@ incluindo fixtures com os tipos/identificadores que hoje quebram (achados 1 e
 
 ## Escopo desta issue
 
-- [ ] `generators/dbt/_sql.py` — `_tipo_sql`/`_expressao_coluna` via macros
-      cross-database do dbt-core, sem literal de tipo fixo
-- [ ] `generators/dbt/_sql.py`/`_yaml.py` — quoting consistente de
-      identificadores (coluna, tabela, nome de model); sanitização/validação
-      do nome do model gerado
-- [ ] `generators/dbt/_testes.py` — piso de amostra + `severity: warn` no
-      ramo amostral de `unique`/`not_null`
-- [ ] `generators/dbt/templates/readme.md.jinja2` — `unique`/`not_null`
-      entram na lista de testes potencialmente amostrais; explicação
-      concreta (com exemplo numérico) da probabilidade de falso-positivo
-- [ ] `extractors/comum/construir_colunas_fk.py`/`generators/dbt/_testes.py`
-      — guard de supressão de `relationships` corrigido para FK composta +
-      single-column própria; `Aviso` emitido quando de fato suprimir
-- [ ] `domain/model/analysis.py` — corrigir docstring de
-      `ColunaAnalisada.referencias`
-- [ ] `docs/low_level_design.md:2207-2212` — corrigir afirmação de "ANSI
-      portável"
-- [ ] `pyproject.toml` — `dbt-core` + adapter(s) necessário(s) como
-      dependência de dev
-- [ ] `mypy --strict`/`ruff` limpos
+Plano completo revisado em `/home/dev/.claude/plans/swift-snuggling-anchor.md`
+(sessão de planejamento). Banca de revisão (arquiteto-de-software +
+engenheiro-de-dados + po-revisor) rodada sobre o plano antes da
+implementação — achados incorporados ao plano antes do código.
+
+- [x] `generators/dbt/_sql.py` — `_tipo_sql`/`_expressao_coluna` via macro
+      de dispatch por adapter próprio (`cast_type`, mesmo padrão de
+      `matches_format`/#90), **não** os macros builtin do dbt-core
+      recomendados originalmente pela issue.
+  - Decisão técnica: verificado contra o código-fonte real do dbt-core e do
+    adapter MariaDB (`dbt-mysql`) que os macros builtin (`dbt.type_bigint()`
+    etc.) não resolvem o problema — o adapter só sobrescreve
+    `type_timestamp()`; os demais caem no default do dbt-core, que devolve
+    nomes que o `CAST()` real do MariaDB rejeita, e `type_numeric()`
+    descarta a precisão/escala real da coluna. Tabela de dispatch validada
+    empiricamente contra Postgres 15/MariaDB 11.8 reais pelo engenheiro de
+    dados (`SIGNED`, `CHAR`, `DECIMAL(p,s)`, `DATETIME(n)`, `UNSIGNED`,
+    `DOUBLE`, `FLOAT`).
+  - `NUMERIC`/`DECIMAL` sem precisão/escala: roteado pelo mesmo dispatch
+    (`tipo_canonico='NUMERIC'`) — Postgres repassa (seguro, precisão
+    arbitrária), MariaDB falha explícito no `dbt compile`
+    (`raise_compiler_error`), não na geração do `ddf` (que não conhece o
+    motor de destino). 
+  - `VARCHAR` sem tamanho e `ENUM`/`SET` (sem equivalente ANSI) passam a
+    convergir para o mesmo canônico `TEXT` de um `TEXT` nativo — mesmo
+    risco de CAST, achado durante a implementação, fora da tabela original
+    do plano.
+  - `TIMESTAMP`/`TIME` sempre passam pelo dispatch agora (não só quando
+    `WITH TIME ZONE`), carregando `precisao_fracionaria` real — escopo
+    expandido nesta sessão (ver item de captura de `datetime_precision`
+    abaixo).
+  - `_precisa_cast_type` implementado em `_sql.py` (não `_testes.py` como o
+    plano inicial sugeria — mais coeso com `_CATEGORIAS_DISPATCHADAS`, que
+    já mora ali), macro condicional/órfão no mesmo padrão dos demais.
+- [x] Reabertura de escopo desta própria issue, decidida com o usuário
+      durante a implementação: captura de `datetime_precision` do catálogo
+      nos dois extratores (Postgres e MariaDB) — achado da auditoria
+      pontual do engenheiro de dados sobre `mariadb/mapeamento_de_tipos.py`
+      (gap encontrado ao investigar por que `DATETIME(6)` estava hardcoded
+      no macro `cast_type`).
+  - `TipoDeDado.precisao_fracionaria: int | None` novo, permitido só para
+    TIMESTAMP/TIME (mesmo padrão de `com_timezone`).
+  - `_queries.py`/`_LinhaColuna`/`_construir_coluna`/`mapeamento_de_tipos.py`
+    dos dois motores propagam `datetime_precision` real; MariaDB ganhou
+    branch próprio pra `time` (antes agrupado em `_CATEGORIAS_SIMPLES`,
+    sem lugar pra carregar a precisão).
+  - Gap de tipos `YEAR`/`BINARY`/`VARBINARY`/`BLOB`/`BIT` caindo em
+    `UNKNOWN` no MariaDB (achado da mesma auditoria) **não** entrou nesta
+    issue — registrado como candidato a issue futura, sem relação direta
+    com o CAST corrigido aqui.
+- [x] `generators/dbt/_sql.py` — quoting via `{{ adapter.quote() }}` builtin
+      do dbt-core (não aspas duplas fixas — validado que não funcionam no
+      MariaDB sem `ANSI_QUOTES`, achado do engenheiro de dados); aplicado
+      em toda referência de coluna no SQL gerado (CAST, argumento do
+      dispatch `cast_type`, passthrough) **e** no alias (`as <coluna>`),
+      que quebra do mesmo jeito com nome reservado sem aspas — achado
+      durante a implementação, fora do plano original.
+  - Nomes com apóstrofo escapados no literal Jinja (`d'agua` →
+    `adapter.quote('d\'agua')`).
+- [x] `generators/dbt/_sql.py`/`gerador_dbt.py` — nome de model inválido
+      (`_nome_model_invalido`/`_tabela_com_nome_model_invalido`) vira
+      `Falha` explícita em `GeradorDbt.__call__`, verificada antes de
+      qualquer escrita em disco — decisão do usuário (não normalização
+      silenciosa), alinhada a RNF1/RNF4 do PRD. `_yaml.py` não precisou de
+      mudança: `schema.yml`/`sources.yml` usam `name:` cru, dbt resolve
+      quoting internamente nesses arquivos.
+- [x] `generators/dbt/_testes.py` — piso de amostra
+      (`_TAMANHO_AMOSTRA_MINIMO_SOFT`) + `severity: warn` no ramo amostral
+      de `unique`/`not_null`; fato estrutural do schema (`coluna.unica`/
+      `nao_nulavel`) continua prioritário e gera `severity: error` (padrão
+      do dbt), nunca os dois ao mesmo tempo.
+  - Achado do engenheiro de dados, incorporado ao README: diferente dos
+    testes soft de faixa (10%/95%, com margem estatística), `unique`/
+    `not_null` afirmam valor **extremo** (0%/100%), sem margem — o piso
+    não reduz a taxa de falso-positivo do mesmo jeito; a proteção real
+    vem inteiramente do `severity: warn`.
+- [x] `generators/dbt/templates/readme.md.jinja2` — `unique`/`not_null`
+      entram na lista de testes potencialmente amostrais; exemplo numérico
+      concreto (P(falso positivo) por amostra Bernoulli, ~95%/~59% no
+      cenário de 5M linhas/10% de amostra) + nota de que o piso não protege
+      esse par do mesmo jeito que protege os testes de faixa.
+- [x] `generators/dbt/_testes.py` — guard de supressão de `relationships`
+      corrigido para FK composta + single-column própria; `Aviso` emitido
+      só quando de fato suprimir.
+  - `construir_colunas_fk.py` não precisou de mudança — confirmado por
+    leitura que a mesma linha bruta de FK já alimenta tanto ele quanto
+    `construir_restricoes_fk_compostas`, sem filtro entre os dois; o bug
+    era só no consumo (`_sugestoes_de_teste`), não na extração.
+  - `_referencias_de_fk_composta` novo (`_testes.py`) — filtra
+    `coluna.referencias` por posição contra `RestricaoDeFkComposta.
+    colunas_locais`/`colunas_referenciadas`, em vez de suprimir a coluna
+    inteira via `set[str]` de nomes.
+  - Mudança de assinatura confirmada pelo arquiteto na revisão de plano:
+    `_sugestoes_de_teste`/`_coluna_schema_yaml`/`_model_schema_yaml`
+    (`_yaml.py`) trocam `colunas_em_fk_composta: set[str]` por
+    `restricoes_fk_compostas: list[RestricaoDeFkComposta]`.
+- [x] `domain/model/analysis.py` — corrigido docstring de
+      `ColunaAnalisada.referencias` (afirmava que FK composta "não aparece
+      aqui"; empiricamente aparece, decomposta por coluna, junto de
+      qualquer FK single-column própria).
+- [x] `docs/low_level_design.md:2207-2212` (CAST SQL) e `:105-106`
+      (ENUM/SET) — corrigida a afirmação de "ANSI portável"; documentado o
+      dispatch `cast_type` por adapter e a convergência VARCHAR-sem-tamanho/
+      ENUM/SET/TEXT pro mesmo canônico `TEXT`.
+- [x] `pyproject.toml` — `dbt-core`+`dbt-postgres` (modernos, 1.12.1/1.11.0)
+      como dependência de dev normal.
+  - **Achado real durante a implementação, não coberto pelo plano:**
+    `dbt-mysql` (único adapter dbt com `type: mariadb`) trava em
+    `dbt-core<=1.7.19`, que **não roda em Python 3.12** (mínimo do
+    projeto) — e mesmo fixando a versão exata, `dbt-core<=1.7` exige
+    `pathspec<0.12`, incompatível com `mypy>=2.1.0` (`pathspec>=1.0.0`)
+    já usado pelo projeto. Não é um conflito resolvível por pinning.
+    Decisão do usuário: `dbt-mysql` nunca entra na dependência de dev
+    normal — o teste de integração do lado MariaDB provisiona (e
+    cacheia) um venv Python 3.11 isolado sob demanda
+    (`tests/integration/generators/dbt/conftest.py::dbt_mariadb_bin`),
+    totalmente à parte do venv principal, e invoca `dbt compile` via
+    `subprocess`. Postgres usa `dbtRunner` em processo, no venv normal.
+- [x] `mypy --strict`/`ruff` limpos.
 
 ## Testes
 
-- [ ] `dbt parse`/`dbt compile` sobre o projeto gerado, em teste de
-      integração, contra Postgres **e** MariaDB (testcontainers), incluindo
-      fixture com tipos citados no achado 1 (BIGINT/TEXT/NUMERIC/TIMESTAMP/
-      BOOLEAN/JSON/DOUBLE) e identificadores citados no achado 2 (palavra
-      reservada, espaço, hífen no nome do schema)
-- [ ] Unit: teste novo reproduzindo o cenário numérico de falso-positivo de
-      `unique`/`not_null` amostral (5 duplicatas/5M linhas análogo, ou
-      equivalente proporcional testável), confirmando piso+`warn` aplicados
-- [ ] Unit: coluna com FK composta + FK single-column própria válida —
+- [x] `dbt parse`/`dbt compile` sobre o projeto gerado, em teste de
+      integração (`tests/integration/generators/dbt/`), contra Postgres
+      **e** MariaDB reais (testcontainers) — pipeline completo (`Extrator`
+      real → `SobrescritaDeTabela` → `iniciar_contexto` → `GeradorDbt`),
+      cobrindo os tipos do achado 1 (BIGINT/TEXT/DECIMAL/BOOLEAN/JSON/
+      DOUBLE/TIMESTAMP-DATETIME com precisão fracionária real) e os
+      identificadores do achado 2 (`order`, `left`).
+  - Confirmou a tabela de dispatch inteira sem nenhuma correção
+    necessária, incluindo o único item que tinha ficado como hipótese
+    não testada (`TIME WITH TIME ZONE`/precisão fracionária real).
+  - **Achado real do próprio teste, não relacionado a CAST/quoting:**
+    `dbt_project.yml` com `meta` na raiz (existente desde antes desta
+    issue) não é aceito pelo parsing estrito do dbt-core moderno
+    (`meta` de projeto na raiz nunca foi uma chave suportada do schema).
+    Corrigido movendo pra `models.ddf_staging.+meta.generated_at`, local
+    válido que ainda propaga pra todos os models do projeto.
+  - Teste dedicado de `TestErro`: `NUMERIC` sem precisão/escala falha
+    explícito no `dbt compile` do MariaDB (`raise_compiler_error`),
+    compila normal no Postgres — confirma o mecanismo do achado 1.
+- [x] Unit: teste novo reproduzindo o cenário numérico de falso-positivo de
+      `unique`/`not_null` amostral (piso exato, abaixo do piso, fato
+      estrutural prevalecendo), confirmando piso+`warn` aplicados
+- [x] Unit: coluna com FK composta + FK single-column própria válida —
       `relationships` da FK simples presente, sem supressão indevida
-- [ ] Unit: coluna só em FK composta (sem FK própria) — `relationships`
-      suprimido, `Aviso` emitido (não silêncio)
-- [ ] Regressão: suíte completa de `test_gerador_dbt.py` segue verde após as
+- [x] Unit: coluna só em FK composta (sem FK própria) — `relationships`
+      suprimido, sem `Aviso` (nada de fato suprimido)
+- [x] Regressão: suíte completa de `test_gerador_dbt.py` segue verde após as
       mudanças de CAST/quoting (ajustar asserções de string existentes que
       hoje esperam o CAST antigo sem macro/quoting)
 
 ## Verificação final
 
-- [ ] `mypy --strict src` + `ruff check .` limpos
-- [ ] `pytest tests/unit` + `pytest tests/integration` (Postgres+MariaDB
-      reais) verdes
-- [ ] `dbt parse` manual contra um projeto gerado real (Postgres e MariaDB),
-      confirmando que os dois compilam sem erro
+- [x] `mypy --strict src` (97 arquivos) + `ruff check .` limpos
+- [x] `pytest tests/unit` (650 testes) + `pytest tests/integration` (71
+      testes, Postgres+MariaDB reais) verdes
+- [x] `dbt compile` real contra projeto gerado (Postgres via `dbtRunner`,
+      MariaDB via subprocess no venv isolado) — coberto pelo teste de
+      integração automatizado do achado 5, substitui a verificação manual
+      original
+
+## Follow-ups fora do escopo desta issue (registrados, não implementados)
+
+- Captura de tipos `YEAR`/`BINARY`/`VARBINARY`/`BLOB`/`BIT` no MariaDB
+  (hoje `UNKNOWN`) — achado da auditoria pontual sobre
+  `mariadb/mapeamento_de_tipos.py` durante esta sessão, sem relação direta
+  com o CAST corrigido aqui. Reconfirmado como fora de escopo na segunda
+  rodada de banca (ver abaixo) — permanece só como limitação documentada,
+  sem issue nova.
+- Modelar signedness (`BIGINT UNSIGNED`) em `TipoDeDado` — `BIGINT
+  UNSIGNED` > 2^63-1 vira negativo em silêncio no `CAST(x AS SIGNED)` do
+  MariaDB; fica como limitação documentada, não mudança de domínio.
+  Reconfirmado como fora de escopo na segunda rodada de banca — exigiria
+  campo novo (`sem_sinal: bool`, mesmo padrão de `precisao_fracionaria`) +
+  captura no extrator MariaDB + lógica nova no macro `cast_type`, mudança
+  de domínio real, não um fix pontual.
+
+## Segunda rodada de banca — revisão do diff final, antes do PR
+
+Com os 5 achados implementados e commitados (13 commits,
+`development..HEAD`), o usuário convocou a banca completa (arquiteto-de-
+software + engenheiro-de-dados + po-revisor) em modo automático, só
+leitura, pra revisar o diff final antes de abrir o PR. Veredito dos três:
+**aprovado** (arquiteto com ressalvas menores, não bloqueantes). Três
+achados acionáveis, todos implementados nesta mesma sessão:
+
+- [x] **Bug de classificação de teste** (arquiteto) —
+      `test_numeric_sem_precisao_compila_normalmente_no_postgres` estava
+      dentro de `TestErro`, mas afirma sucesso de compilação (contraste
+      positivo do caso de erro, não um erro). Movido para `TestFeliz`;
+      helper `_tabela_numeric_sem_precisao` virou função de módulo
+      (consumida pelas duas classes).
+- [x] **Lacunas no teste de integração real** (engenheiro de dados) —
+      `REAL`/`FLOAT`, `TIME`/`TIME WITH TIME ZONE` e FK composta
+      (`composite_relationships`) nunca tinham passado por `dbt compile`
+      real, só por asserção de string em teste unitário.
+  - `tests/integration/generators/dbt/conftest.py`: tabela `diversos`
+    (Postgres e MariaDB) ganhou colunas `nota REAL`/`FLOAT` e `hora TIME`;
+    Postgres ganhou também `hora_tz TIME WITH TIME ZONE` (MariaDB não tem
+    esse tipo). Nova tabela `pai`/`filho_fk_composta` com FK composta real
+    nos dois motores.
+  - `test_gerador_dbt_compile_integration.py`: 3 testes novos em
+    `TestFeliz` — `TIME WITH TIME ZONE` no MariaDB via tabela **sintética**
+    (o motor não produz esse tipo por extração real, já que não tem
+    `timetz`; é o único jeito de exercitar essa entrada do dispatch contra
+    `dbt compile` de verdade) e FK composta real (Postgres via `dbtRunner`,
+    MariaDB via subprocess), extraindo as duas tabelas e gerando o projeto
+    junto — `composite_relationships` só é gerado com a tabela referenciada
+    presente no lote (achado 4 da primeira rodada). Todos os 7 testes do
+    arquivo passaram contra containers reais (não só coletados).
+- [x] **Limitação de BIGINT UNSIGNED não chega ao usuário final**
+      (engenheiro de dados, endossado pelo PO) — só documentada no
+      registry-plan interno; quem lê é o time ddf, não quem consome o
+      projeto dbt gerado.
+  - `_sql.py`: `_tem_coluna_bigint` novo (mesmo padrão de
+    `_precisa_cast_type`).
+  - `gerador_dbt.py`/`_yaml.py`: `usa_bigint` calculado e repassado a
+    `_renderizar_readme`.
+  - `readme.md.jinja2`: nota condicional explicando a limitação, sempre
+    que há BIGINT no lote (ddf não sabe em tempo de geração se o destino
+    será MariaDB — única engine onde o problema existe, Postgres não tem
+    inteiro sem sinal).
+  - Testes unit novos: com BIGINT no lote (nota aparece) / sem BIGINT
+    (nota ausente).
+- Descartado pelo usuário: abrir issue no GitHub para os follow-ups
+  (YEAR/BINARY/VARBINARY/BLOB/BIT, signedness de BIGINT UNSIGNED) — ambos
+  permanecem só como limitação documentada nesta issue.
+- Reorganização de `plan/registry-plan/` em pastas por fase (commit
+  `76f3c80`, já commitado antes desta rodada) e demais itens "nice-to-have"
+  sem ação concreta pedida (indireção não-decorativa em `_expressao_quote`/
+  `_nome_quotado`, helpers com único call site mas mesmo padrão do módulo)
+  — sem ação, confirmados como não-problema pela própria banca.
+
+Verificação final desta rodada: `mypy --strict src` (97 arquivos) +
+`ruff check .` limpos; `pytest tests/unit` (652 testes) verde;
+`pytest tests/integration/generators/dbt/` (7 testes, Postgres+MariaDB
+reais) verde.
