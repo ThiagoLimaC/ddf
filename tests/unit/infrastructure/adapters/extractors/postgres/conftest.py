@@ -39,7 +39,7 @@ def pool_classe_fake(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """Substitui ThreadedConnectionPool por um mock, retorna a classe mockada."""
     classe_fake = MagicMock()
     monkeypatch.setattr(
-        "ddf.infrastructure.adapters.extractors.postgres.extrator_postgres."
+        "ddf.infrastructure.adapters.extractors.postgres._conexoes."
         "ThreadedConnectionPool",
         classe_fake,
     )
