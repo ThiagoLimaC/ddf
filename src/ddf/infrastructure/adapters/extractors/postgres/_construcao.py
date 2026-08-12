@@ -43,6 +43,7 @@ class _LinhaColuna(NamedTuple):
     tamanho_maximo: int | None
     precisao: int | None
     escala: int | None
+    precisao_fracionaria: int | None
     is_nullable: str
 
 
@@ -92,6 +93,7 @@ def _construir_coluna(
             linha.tamanho_maximo,
             linha.precisao,
             linha.escala,
+            linha.precisao_fracionaria,
         ),
         chave_primaria=linha.nome in colunas_pk,
         chave_estrangeira=bool(referencias),

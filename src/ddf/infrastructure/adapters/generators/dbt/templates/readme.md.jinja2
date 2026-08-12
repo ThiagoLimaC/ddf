@@ -17,10 +17,22 @@ dbt run
 dbt test
 ```
 
-> Os testes `accepted_values`, `matches_format`, `dbt_utils.not_null_proportion`
-> e `unique_percentage_at_least` usam `severity: warn` — são calculados sobre
-> uma amostra dos dados, não a população completa, então um resultado fora
-> da amostra não deve quebrar o build.
+> Os testes `accepted_values`, `matches_format`, `dbt_utils.not_null_proportion`,
+> `unique_percentage_at_least` — e, quando não há garantia estrutural do
+> schema (`NOT NULL`/`UNIQUE`) por trás, também `unique`/`not_null` — usam
+> `severity: warn`: são calculados sobre uma amostra dos dados, não a
+> população completa, então um resultado fora da amostra não deve quebrar
+> o build.
+>
+> A probabilidade de falso-positivo de `unique`/`not_null` amostral é real
+> mesmo com o piso mínimo de amostra: numa tabela de 5M linhas com 5 pares
+> duplicados de e-mail, amostrando 10% (Bernoulli), a chance de nenhum par
+> cair inteiro na amostra — e o `ddf` sugerir `unique` sem saber da
+> duplicata — é de ~95%; para `not_null`, 5 nulos em 5M linhas com a mesma
+> amostra têm ~59% de chance de não aparecer. Diferente dos testes de
+> faixa (10%/95%), o piso mínimo de amostra não reduz esse risco — a
+> proteção real é o `severity: warn` em si, por isso `dbt test` nunca
+> quebra o build por causa desses dois testes quando a amostra mentiu.
 {% if usa_dbt_utils %}
 > Este projeto depende do pacote `dbt_utils` (`packages.yml`) — rode
 > `dbt deps` antes de `dbt run`/`dbt test`.
@@ -29,6 +41,15 @@ dbt test
 > O teste `matches_format` (`macros/matches_format/`) só tem implementação
 > para Postgres e MariaDB nesta versão — rodar contra outra engine de
 > destino falha o `dbt compile` com um erro explícito.
+{% endif %}
+{% if usa_bigint %}
+> Este projeto tem coluna(s) `BIGINT`. Se a coluna de origem for
+> `BIGINT UNSIGNED` (só existe no MariaDB — Postgres não tem inteiro sem
+> sinal) e algum valor real ultrapassar 2^63-1, o `CAST` gerado (`SIGNED`,
+> único alvo portável) devolve um número negativo em silêncio quando o
+> destino é MariaDB — sem erro, sem warning do `dbt test`. Confira se a(s)
+> coluna(s) `BIGINT` deste projeto têm valores acima desse limite antes de
+> confiar no resultado.
 {% endif %}
 
 ## Escopos e tabelas

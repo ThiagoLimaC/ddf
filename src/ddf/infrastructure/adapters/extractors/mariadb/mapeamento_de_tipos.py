@@ -16,7 +16,6 @@ _CATEGORIAS_SIMPLES: dict[str, CategoriaDeDado] = {
     "bigint": CategoriaDeDado.BIGINT,
     "date": CategoriaDeDado.DATE,
     "uuid": CategoriaDeDado.UUID,
-    "time": CategoriaDeDado.TIME,
 }
 
 _PADRAO_VALOR_ENUM = re.compile(r"'((?:[^']|'')*)'")
@@ -67,13 +66,18 @@ def mapear_tipo_mariadb(
     tamanho_maximo: int | None = None,
     precisao: int | None = None,
     escala: int | None = None,
+    precisao_fracionaria: int | None = None,
 ) -> TipoDeDado:
     """Mapeia um tipo de coluna do MariaDB para TipoDeDado.
 
     Tipos fora da tabela de mapeamento caem em CategoriaDeDado.UNKNOWN, nunca
     levantam exceção. `tinyint` sempre vira INTEGER aqui, mesmo `tinyint(1)`
     — a promoção pra BOOLEAN é responsabilidade de ExtratorMariaDB, baseada
-    na amostra real, não desta função pura de metadado.
+    na amostra real, não desta função pura de metadado. `TIMESTAMP` guarda o
+    valor internamente em UTC e converte conforme o timezone da sessão em
+    cada leitura/escrita; `DATETIME` grava o valor literal, sem conversão —
+    é essa diferença de comportamento que `com_timezone` documenta, não a
+    presença de um offset por linha (nenhum dos dois motores tem isso).
 
     Args:
         data_type: valor de information_schema.columns.DATA_TYPE.
@@ -82,6 +86,8 @@ def mapear_tipo_mariadb(
         tamanho_maximo: character_maximum_length, usado por VARCHAR/CHAR.
         precisao: numeric_precision, usado por NUMERIC (decimal).
         escala: numeric_scale, usado por NUMERIC (decimal).
+        precisao_fracionaria: datetime_precision, usado por
+            TIMESTAMP/DATETIME/TIME (dígitos de fração de segundo, 0-6).
     """
     if data_type == "varchar":
         return TipoDeDado(
@@ -98,9 +104,22 @@ def mapear_tipo_mariadb(
     if data_type == "double":
         return TipoDeDado(categoria=CategoriaDeDado.FLOAT, com_precisao_dupla=True)
     if data_type == "datetime":
-        return TipoDeDado(categoria=CategoriaDeDado.TIMESTAMP, com_timezone=False)
+        return TipoDeDado(
+            categoria=CategoriaDeDado.TIMESTAMP,
+            com_timezone=False,
+            precisao_fracionaria=precisao_fracionaria,
+        )
     if data_type == "timestamp":
-        return TipoDeDado(categoria=CategoriaDeDado.TIMESTAMP, com_timezone=True)
+        return TipoDeDado(
+            categoria=CategoriaDeDado.TIMESTAMP,
+            com_timezone=True,
+            precisao_fracionaria=precisao_fracionaria,
+        )
+    if data_type == "time":
+        return TipoDeDado(
+            categoria=CategoriaDeDado.TIME,
+            precisao_fracionaria=precisao_fracionaria,
+        )
     if data_type == "enum":
         return TipoDeDado(
             categoria=CategoriaDeDado.ENUM,

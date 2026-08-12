@@ -295,7 +295,7 @@
       `AmostragemIntegral`, nos dois motores. Checklist completo (achados
       da banca, resultado do spike de validação, decisões fechadas com o
       usuário) em
-      `plan/registry-plan/issue-126-paralelismo-intra-tabela.md`. Resumo:
+      `plan/registry-plan/fase-3-extrator-concreto/issue-126-paralelismo-intra-tabela.md`. Resumo:
   - `extractors/comum/leitura_paralela_intra_tabela.py`
     (motor-agnóstico): `deve_paralelizar_leitura` (limiares candidatos:
     500.000 linhas / 500MB), `reservar_conexoes`/`liberar_conexoes`
@@ -719,7 +719,7 @@
       de revisão (Arquiteto de Software + Engenheiro de Dados + PO +
       especialista-ux-terminal) rodada sobre o plano antes da implementação
       — checklist completo em
-      `plan/registry-plan/issue-132-restringe-tabelas-do-escopo.md`:
+      `plan/registry-plan/fase-7-cli-wizard/issue-132-restringe-tabelas-do-escopo.md`:
   - `OrquestradorDeTabelas.extrair`: `escopos: list[str]` →
     `pares: list[tuple[str, str]]`, mudança de contrato não-aditiva —
     reabertura de escopo dentro da própria issue (não issue separada),

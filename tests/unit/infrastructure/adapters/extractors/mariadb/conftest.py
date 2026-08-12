@@ -47,7 +47,9 @@ def pool_classe_fake(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
 def montar_metadados_side_effect(
     tabela: str,
-    colunas: list[tuple[str, str, str, int | None, int | None, int | None, str]],
+    colunas: list[
+        tuple[str, str, str, int | None, int | None, int | None, int | None, str]
+    ],
     pks: list[str] | None = None,
     fks: list[tuple[str, str, str, str, str]] | None = None,
     unicas: list[tuple[str, str]] | None = None,

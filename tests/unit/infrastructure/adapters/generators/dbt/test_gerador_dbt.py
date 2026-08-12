@@ -30,6 +30,13 @@ _CAMINHO_MACRO_MATCHES_FORMAT = (
     / "matches_format"
     / "matches_format.sql"
 )
+_CAMINHO_MACRO_CAST_TYPE = (
+    Path(gerador_dbt_modulo.__file__).parent
+    / "templates"
+    / "macros"
+    / "cast_type"
+    / "cast_type.sql"
+)
 
 
 def _schema_yml(destino: Path, escopo: str = "escopo") -> dict[str, Any]:
@@ -152,18 +159,31 @@ class TestFeliz:
         ).read_text()
         linhas_sql = sql_clientes.splitlines()
         assert linhas_sql[0] == "select"
-        assert linhas_sql[1] == "    CAST(id AS INTEGER) as id,"
-        assert linhas_sql[2] == "    CAST(email AS VARCHAR(255)) as email,"
-        assert linhas_sql[3] == "    CAST(status AS VARCHAR(10)) as status,"
-        assert (
-            linhas_sql[4] == "    CAST(perfil_id AS INTEGER) as perfil_id"
+        assert linhas_sql[1] == (
+            "    CAST({{ adapter.quote('id') }} AS INTEGER)"
+            " as {{ adapter.quote('id') }},"
+        )
+        assert linhas_sql[2] == (
+            "    CAST({{ adapter.quote('email') }} AS VARCHAR(255))"
+            " as {{ adapter.quote('email') }},"
+        )
+        assert linhas_sql[3] == (
+            "    CAST({{ adapter.quote('status') }} AS VARCHAR(10))"
+            " as {{ adapter.quote('status') }},"
+        )
+        assert linhas_sql[4] == (
+            "    CAST({{ adapter.quote('perfil_id') }} AS INTEGER)"
+            " as {{ adapter.quote('perfil_id') }}"
         )  # sem vírgula
         assert linhas_sql[5] == "from {{ source('vendas', 'clientes') }}"
 
         sql_perfis = (
             tmp_path / "models" / "staging" / "rh" / "stg_rh__perfis.sql"
         ).read_text()
-        assert "CAST(id AS NUMERIC(10,2)) as id" in sql_perfis
+        assert (
+            "CAST({{ adapter.quote('id') }} AS DECIMAL(10,2))"
+            " as {{ adapter.quote('id') }}"
+        ) in sql_perfis
 
         schema_vendas = _schema_yml(tmp_path, "vendas")
         nomes_models_vendas = [m["name"] for m in schema_vendas["models"]]
@@ -179,17 +199,22 @@ class TestFeliz:
         assert "tests" not in coluna_id_yaml  # PK suprime unique/not_null redundante
 
         coluna_email_yaml = _coluna(modelo_clientes, "email")
-        assert "not_null" in coluna_email_yaml["tests"]
+        testes_email = coluna_email_yaml["tests"]
+        assert {"not_null": {"config": {"severity": "warn"}}} in testes_email
 
         coluna_status_yaml = _coluna(modelo_clientes, "status")
         testes_status = coluna_status_yaml["tests"]
-        accepted = next(t for t in testes_status if isinstance(t, dict))
+        accepted = next(
+            t for t in testes_status if isinstance(t, dict) and "accepted_values" in t
+        )
         assert accepted["accepted_values"]["values"] == ["ativo", "inativo"]
         assert accepted["accepted_values"]["config"]["severity"] == "warn"
 
         coluna_perfil_yaml = _coluna(modelo_clientes, "perfil_id")
         testes_perfil = coluna_perfil_yaml["tests"]
-        relacionamento = next(t for t in testes_perfil if isinstance(t, dict))
+        relacionamento = next(
+            t for t in testes_perfil if isinstance(t, dict) and "relationships" in t
+        )
         assert relacionamento["relationships"]["to"] == "ref('stg_rh__perfis')"
         assert relacionamento["relationships"]["field"] == "id"
 
@@ -200,7 +225,13 @@ class TestFeliz:
         construir_tabela: Callable[..., TabelaAnalisada],
         construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
     ) -> None:
-        """dbt_project.yml registra meta.generated_at (issue #56)."""
+        """dbt_project.yml registra models.ddf_staging.+meta.generated_at.
+
+        Não na raiz do arquivo — `meta` de projeto na raiz não é uma chave
+        válida no schema do `dbt_project.yml` (rejeitada por parsing
+        estrito em dbt-core moderno); `+meta` sob `models.<projeto>` é o
+        local suportado que ainda propaga pra todos os models do projeto.
+        """
         tabela = construir_tabela(colunas=[construir_coluna()])
         banco = construir_banco([tabela])
 
@@ -209,7 +240,7 @@ class TestFeliz:
         assert isinstance(resultado, Sucesso)
         projeto = yaml.safe_load((tmp_path / "dbt_project.yml").read_text())
         datetime.fromisoformat(
-            projeto["meta"]["generated_at"]
+            projeto["models"]["ddf_staging"]["+meta"]["generated_at"]
         )  # ValueError se malformado
 
     def test_readme_lista_escopos_e_tabelas_do_lote(
@@ -649,6 +680,83 @@ class TestFeliz:
         modelo = _modelo(schema, "stg_vendas__pedidos")
         assert "tests" not in modelo
 
+    def test_coluna_em_fk_composta_mantem_relationships_de_fk_propria(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Coluna com FK composta + FK single-column própria mantém relationships.
+
+        Achado 4 da issue #140: `tenant_id` participa de uma FK composta
+        `(tenant_id, user_id) → users(tenant_id, id)` **e** tem uma FK
+        single-column legítima e independente pra `tenants.id`.
+        `ColunaAnalisada.referencias` acumula as duas — a supressão de
+        `relationships` deve descartar só a entrada que corresponde à FK
+        composta, não a coluna inteira.
+        """
+        coluna_tenant = construir_coluna(
+            nome="tenant_id",
+            chave_estrangeira=True,
+            referencias=[
+                ReferenciaDeColuna(
+                    nome_escopo="vendas", nome_tabela="tenants", nome_coluna="id"
+                ),
+                ReferenciaDeColuna(
+                    nome_escopo="vendas", nome_tabela="users", nome_coluna="tenant_id"
+                ),
+            ],
+        )
+        coluna_user = construir_coluna(
+            nome="user_id",
+            chave_estrangeira=True,
+            referencias=[
+                ReferenciaDeColuna(
+                    nome_escopo="vendas", nome_tabela="users", nome_coluna="id"
+                ),
+            ],
+        )
+        tabela = construir_tabela(
+            colunas=[coluna_tenant, coluna_user],
+            nome_tabela="orders",
+            nome_escopo="vendas",
+            restricoes_fk_compostas=[
+                RestricaoDeFkComposta(
+                    colunas_locais=("tenant_id", "user_id"),
+                    nome_escopo_referenciado="vendas",
+                    nome_tabela_referenciada="users",
+                    colunas_referenciadas=("tenant_id", "id"),
+                )
+            ],
+        )
+        tabela_tenants = construir_tabela(
+            colunas=[construir_coluna(nome="id", chave_primaria=True)],
+            nome_tabela="tenants",
+            nome_escopo="vendas",
+        )
+        tabela_users = construir_tabela(
+            colunas=[construir_coluna(nome="id", chave_primaria=True)],
+            nome_tabela="users",
+            nome_escopo="vendas",
+        )
+        banco = construir_banco([tabela, tabela_tenants, tabela_users])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        assert resultado.avisos == []  # nada suprimido de fato, sem Aviso
+
+        schema = _schema_yml(tmp_path, "vendas")
+        modelo = _modelo(schema, "stg_vendas__orders")
+
+        coluna_tenant_yaml = _coluna(modelo, "tenant_id")
+        assert coluna_tenant_yaml["tests"] == [
+            {"relationships": {"to": "ref('stg_vendas__tenants')", "field": "id"}}
+        ]
+        coluna_user_yaml = _coluna(modelo, "user_id")
+        assert "tests" not in coluna_user_yaml  # só referência composta, suprimida
+
     def test_accepted_values_omitido_quando_top10_cobre_pouco_da_amostra(
         self,
         tmp_path: Path,
@@ -852,7 +960,9 @@ class TestFeliz:
         modelo = _modelo(schema, "stg_escopo__tabela")
         coluna_yaml = _coluna(modelo, "codigo")
         testes = coluna_yaml["tests"]
-        accepted = next(t for t in testes if isinstance(t, dict))
+        accepted = next(
+            t for t in testes if isinstance(t, dict) and "accepted_values" in t
+        )
         assert accepted["accepted_values"]["values"] == [str(v) for v in range(9)]
 
     def test_alta_cardinalidade_real_mascarada_por_nulos_nao_sugere_accepted_values(
@@ -911,7 +1021,10 @@ class TestFeliz:
         sql = (
             tmp_path / "models" / "staging" / "escopo" / "stg_escopo__tabela.sql"
         ).read_text()
-        assert "spatiallocation as spatiallocation" in sql
+        assert (
+            "{{ adapter.quote('spatiallocation') }}"
+            " as {{ adapter.quote('spatiallocation') }}"
+        ) in sql
         assert "CAST" not in sql
 
     def test_array_com_elemento_reconhecido_recebe_cast_de_array(
@@ -938,7 +1051,33 @@ class TestFeliz:
         sql = (
             tmp_path / "models" / "staging" / "escopo" / "stg_escopo__tabela.sql"
         ).read_text()
-        assert "CAST(tags AS INTEGER[])" in sql
+        assert "CAST({{ adapter.quote('tags') }} AS INTEGER[])" in sql
+
+    def test_coluna_com_nome_reservado_e_quotada_no_sql(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Coluna com nome de palavra reservada (`order`) sai sempre quotada.
+
+        `adapter.quote()` resolve o delimitador certo por motor em tempo de
+        compile (aspas duplas no Postgres, crase no MariaDB) — aspas duplas
+        fixas não funcionam no MariaDB sem `ANSI_QUOTES`.
+        """
+        coluna = construir_coluna(nome="order")
+        tabela = construir_tabela(colunas=[coluna])
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        sql = (
+            tmp_path / "models" / "staging" / "escopo" / "stg_escopo__tabela.sql"
+        ).read_text()
+        assert "CAST({{ adapter.quote('order') }} AS INTEGER)" in sql
+        assert "as {{ adapter.quote('order') }}" in sql
 
     def test_geracao_e_deterministica(
         self,
@@ -950,10 +1089,11 @@ class TestFeliz:
     ) -> None:
         """A mesma entrada produz exatamente os mesmos artefatos em duas execuções.
 
-        `dbt_project.yml` é comparado à parte, excluindo `meta.generated_at` —
-        esse campo captura o momento da geração de propósito (issue #56), então
-        difere entre as duas execuções mesmo com entrada idêntica; o resto do
-        arquivo continua determinístico.
+        `dbt_project.yml` é comparado à parte, excluindo
+        `models.ddf_staging.+meta.generated_at` — esse campo captura o
+        momento da geração de propósito, então difere entre as duas
+        execuções mesmo com entrada idêntica; o resto do arquivo continua
+        determinístico.
         """
         coluna = construir_coluna(nome="id", metricas=[metrica_coluna_completa])
         tabela = construir_tabela(colunas=[coluna])
@@ -977,9 +1117,9 @@ class TestFeliz:
 
         projeto_a = yaml.safe_load((destino_a / "dbt_project.yml").read_text())
         projeto_b = yaml.safe_load((destino_b / "dbt_project.yml").read_text())
-        assert "generated_at" in projeto_a["meta"]
-        del projeto_a["meta"]["generated_at"]
-        del projeto_b["meta"]["generated_at"]
+        assert "generated_at" in projeto_a["models"]["ddf_staging"]["+meta"]
+        del projeto_a["models"]["ddf_staging"]["+meta"]["generated_at"]
+        del projeto_b["models"]["ddf_staging"]["+meta"]["generated_at"]
         assert projeto_a == projeto_b
 
     def test_macro_matches_format_cobre_todos_os_formatos_do_detector(
@@ -1110,6 +1250,86 @@ class TestFeliz:
         coluna_yaml = _coluna(modelo, "id")
         assert "tests" not in coluna_yaml
 
+    def test_unique_not_null_amostral_com_amostra_no_piso_vira_warn(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Sem fato estrutural, amostra exatamente no piso já sugere unique/not_null.
+
+        Cenário do achado 3 da issue #140: 100% único/0% nulo só na amostra
+        (`coluna.unica`/`nao_nulavel` ambos False) não deve virar
+        `severity: error` — o piso não elimina o risco de falso-positivo
+        para um teste de valor extremo (diferente dos testes de faixa
+        10%/95%), só o `severity: warn` protege o build.
+        """
+        metrica = MetricasBaseColuna(
+            percentual_nulo=0.0, percentual_unico=100.0, valores_frequentes=[]
+        )
+        coluna = construir_coluna(nome="email", metricas=[metrica])
+        tabela = construir_tabela(colunas=[coluna], tamanho_amostra=100)
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        schema = _schema_yml(tmp_path)
+        modelo = _modelo(schema, "stg_escopo__tabela")
+        testes = _coluna(modelo, "email")["tests"]
+        assert {"unique": {"config": {"severity": "warn"}}} in testes
+        assert {"not_null": {"config": {"severity": "warn"}}} in testes
+
+    def test_unique_not_null_amostral_abaixo_do_piso_nao_e_sugerido(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Amostra abaixo do piso (99) não sugere unique/not_null amostral."""
+        metrica = MetricasBaseColuna(
+            percentual_nulo=0.0, percentual_unico=100.0, valores_frequentes=[]
+        )
+        coluna = construir_coluna(nome="email", metricas=[metrica])
+        tabela = construir_tabela(colunas=[coluna], tamanho_amostra=99)
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        schema = _schema_yml(tmp_path)
+        modelo = _modelo(schema, "stg_escopo__tabela")
+        coluna_yaml = _coluna(modelo, "email")
+        assert "tests" not in coluna_yaml
+
+    def test_unique_not_null_estrutural_prevalece_sobre_amostral(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Fato estrutural do schema sempre gera severity: error, não warn."""
+        metrica = MetricasBaseColuna(
+            percentual_nulo=0.0, percentual_unico=100.0, valores_frequentes=[]
+        )
+        coluna = construir_coluna(
+            nome="email", unica=True, nao_nulavel=True, metricas=[metrica]
+        )
+        tabela = construir_tabela(colunas=[coluna], tamanho_amostra=100)
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        schema = _schema_yml(tmp_path)
+        modelo = _modelo(schema, "stg_escopo__tabela")
+        testes = _coluna(modelo, "email")["tests"]
+        assert "unique" in testes
+        assert "not_null" in testes
+
     def test_teste_soft_unico_sugerido_entre_limite_e_cem(
         self,
         tmp_path: Path,
@@ -1207,6 +1427,157 @@ class TestFeliz:
         )
         assert (pasta / "postgres__validate_format.sql").exists()
         assert (pasta / "mariadb__validate_format.sql").exists()
+
+    def test_macros_cast_type_nao_gerados_sem_categoria_dispatchada(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Só com categorias já portáveis (INTEGER), macros/cast_type/ não sai."""
+        tabela = construir_tabela(colunas=[construir_coluna()])
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        assert not (tmp_path / "macros" / "cast_type").exists()
+
+    def test_macros_cast_type_gerados_com_categoria_dispatchada(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Com coluna BIGINT no lote, os 3 arquivos de cast_type/ existem."""
+        coluna = construir_coluna(
+            nome="id_externo", tipo_dado=TipoDeDado(categoria=CategoriaDeDado.BIGINT)
+        )
+        tabela = construir_tabela(colunas=[coluna])
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        pasta = tmp_path / "macros" / "cast_type"
+        assert (pasta / "cast_type.sql").read_text() == (
+            _CAMINHO_MACRO_CAST_TYPE.read_text()
+        )
+        assert (pasta / "postgres__cast_type.sql").exists()
+        assert (pasta / "mariadb__cast_type.sql").exists()
+
+    def test_readme_alerta_bigint_unsigned_com_coluna_bigint_no_lote(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Com coluna BIGINT no lote, o README alerta sobre BIGINT UNSIGNED.
+
+        ddf não sabe em tempo de geração se o destino real será MariaDB
+        (única engine da v1 onde `BIGINT UNSIGNED` > 2^63-1 vira negativo em
+        silêncio) — a nota aparece sempre que há BIGINT no lote, pra quem lê
+        o artefato gerado (não só o registry-plan interno) ter como saber
+        da limitação antes de confiar no resultado.
+        """
+        coluna = construir_coluna(
+            nome="id_externo", tipo_dado=TipoDeDado(categoria=CategoriaDeDado.BIGINT)
+        )
+        tabela = construir_tabela(colunas=[coluna])
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        readme = (tmp_path / "README.md").read_text()
+        assert "BIGINT UNSIGNED" in readme
+
+    def test_readme_sem_alerta_bigint_unsigned_sem_coluna_bigint_no_lote(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Sem coluna BIGINT no lote, o README não menciona a limitação."""
+        tabela = construir_tabela(colunas=[construir_coluna()])
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        readme = (tmp_path / "README.md").read_text()
+        assert "BIGINT UNSIGNED" not in readme
+
+    def test_sql_de_coluna_bigint_chama_macro_cast_type(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Coluna BIGINT vira `{{ cast_type(...) }}` no SQL, não CAST literal."""
+        coluna = construir_coluna(
+            nome="id_externo", tipo_dado=TipoDeDado(categoria=CategoriaDeDado.BIGINT)
+        )
+        tabela = construir_tabela(
+            colunas=[coluna], nome_tabela="pedidos", nome_escopo="vendas"
+        )
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        sql = (
+            tmp_path
+            / "models"
+            / "staging"
+            / "vendas"
+            / "stg_vendas__pedidos.sql"
+        ).read_text()
+        assert (
+            "{{ cast_type(adapter.quote('id_externo'), 'BIGINT') }}" in sql
+        )
+        assert "CAST(id_externo AS BIGINT)" not in sql
+
+    def test_sql_de_coluna_timestamp_com_precisao_passa_precisao_ao_macro(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """precisao_fracionaria vira 3º argumento posicional do macro."""
+        coluna = construir_coluna(
+            nome="criado_em",
+            tipo_dado=TipoDeDado(
+                categoria=CategoriaDeDado.TIMESTAMP,
+                com_timezone=True,
+                precisao_fracionaria=3,
+            ),
+        )
+        tabela = construir_tabela(
+            colunas=[coluna], nome_tabela="pedidos", nome_escopo="vendas"
+        )
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        sql = (
+            tmp_path
+            / "models"
+            / "staging"
+            / "vendas"
+            / "stg_vendas__pedidos.sql"
+        ).read_text()
+        assert (
+            "{{ cast_type(adapter.quote('criado_em'), "
+            "'TIMESTAMP WITH TIME ZONE', 3) }}" in sql
+        )
 
     def test_macro_unique_percentage_nao_gerado_sem_consumidor(
         self,
@@ -1321,8 +1692,70 @@ class TestFeliz:
         assert (tmp_path / "packages.yml").exists()
 
 
+class TestErro:
+    """Erro esperado."""
+
+    def test_nome_de_tabela_com_espaco_falha_antes_de_escrever(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Tabela com espaço no nome vira model inválido — Falha, não normalização."""
+        tabela = construir_tabela(
+            colunas=[construir_coluna()], nome_tabela="order items"
+        )
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Falha)
+        assert "stg_escopo__order items" in resultado.erro
+        assert not (tmp_path / "dbt_project.yml").exists()
+
+    def test_nome_de_escopo_com_hifen_falha_antes_de_escrever(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Escopo com hífen no nome vira model inválido — Falha, não normalização."""
+        tabela = construir_tabela(
+            colunas=[construir_coluna()], nome_escopo="sales-eu"
+        )
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Falha)
+        assert "stg_sales-eu__tabela" in resultado.erro
+        assert not (tmp_path / "dbt_project.yml").exists()
+
+
 class TestBorda:
     """Bordas."""
+
+    def test_coluna_com_apostrofo_no_nome_escapa_o_literal_jinja(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Apóstrofo no nome não quebra o literal Jinja de `adapter.quote()`."""
+        coluna = construir_coluna(nome="d'agua")
+        tabela = construir_tabela(colunas=[coluna])
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        sql = (
+            tmp_path / "models" / "staging" / "escopo" / "stg_escopo__tabela.sql"
+        ).read_text()
+        assert "adapter.quote('d\\'agua')" in sql
 
     def test_packages_yml_orfao_e_removido_quando_restricao_some(
         self,
@@ -1421,7 +1854,9 @@ class TestBorda:
         sql = (
             tmp_path / "models" / "staging" / "escopo" / "stg_escopo__tabela.sql"
         ).read_text()
-        assert "pontos as pontos" in sql
+        assert (
+            "{{ adapter.quote('pontos') }} as {{ adapter.quote('pontos') }}"
+        ) in sql
         assert "CAST" not in sql
 
     def test_teste_soft_nulo_omitido_com_amostra_abaixo_do_piso(
@@ -1557,6 +1992,25 @@ class TestBorda:
         pasta = tmp_path / "macros" / "matches_format"
         pasta.mkdir(parents=True)
         (pasta / "matches_format.sql").write_text("-- execução anterior")
+        tabela = construir_tabela(colunas=[construir_coluna()])
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        assert not pasta.exists()
+
+    def test_macros_cast_type_orfaos_sao_removidos(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """macros/cast_type/ de execução anterior é removido sem consumidor."""
+        pasta = tmp_path / "macros" / "cast_type"
+        pasta.mkdir(parents=True)
+        (pasta / "cast_type.sql").write_text("-- execução anterior")
         tabela = construir_tabela(colunas=[construir_coluna()])
         banco = construir_banco([tabela])
 

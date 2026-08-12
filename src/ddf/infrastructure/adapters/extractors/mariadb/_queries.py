@@ -18,7 +18,7 @@ _LISTAR_TABELAS_SQL = """
 _COLUNAS_SQL = """
     SELECT table_name, column_name, data_type, column_type,
            character_maximum_length, numeric_precision, numeric_scale,
-           is_nullable
+           datetime_precision, is_nullable
     FROM information_schema.columns
     WHERE table_schema = %s
     ORDER BY table_name, ordinal_position

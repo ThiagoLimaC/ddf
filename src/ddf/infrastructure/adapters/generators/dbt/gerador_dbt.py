@@ -21,8 +21,15 @@ from ddf.domain.model.analysis import BancoAnalisado, MetricasBaseColuna, TipoDe
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.generators.comum._escrita import escrever_arquivo
-from ddf.infrastructure.adapters.generators.dbt._sql import _nome_model, _renderizar_sql
+from ddf.infrastructure.adapters.generators.dbt._sql import (
+    _nome_model,
+    _precisa_cast_type,
+    _renderizar_sql,
+    _tabela_com_nome_model_invalido,
+    _tem_coluna_bigint,
+)
 from ddf.infrastructure.adapters.generators.dbt._templates import (
+    _CONTEUDO_CAST_TYPE,
     _CONTEUDO_COMPOSITE_RELATIONSHIPS,
     _CONTEUDO_MATCHES_FORMAT,
     _CONTEUDO_UNIQUE_PERCENTAGE_AT_LEAST,
@@ -86,14 +93,33 @@ class GeradorDbt:
         Returns:
             Sucesso(None) com um Aviso agregado por categoria (FK composta,
             FK polimórfica, FK fora do lote) quando aplicável — não um
-            Aviso por ocorrência, ver `ContadoresDeAviso` — ou Falha na
-            primeira escrita em disco que falhar.
+            Aviso por ocorrência, ver `ContadoresDeAviso` — ou Falha se
+            algum nome de model gerado não for um identificador dbt válido
+            (verificado antes de qualquer escrita, sem normalização
+            silenciosa) ou na primeira escrita em disco que falhar.
         """
         contadores = ContadoresDeAviso()
         tabelas = sorted(entrada.tabelas, key=lambda t: (t.nome_escopo, t.nome_tabela))
+
+        tabela_invalida = _tabela_com_nome_model_invalido(tabelas)
+        if tabela_invalida is not None:
+            nome_model = _nome_model(
+                tabela_invalida.nome_escopo, tabela_invalida.nome_tabela
+            )
+            return Falha(
+                f"Nome de model '{nome_model}' (escopo "
+                f"'{tabela_invalida.nome_escopo}', tabela "
+                f"'{tabela_invalida.nome_tabela}') não é um identificador dbt "
+                "válido — só letras, dígitos e underscore, sem começar por "
+                "dígito. Renomeie o escopo/tabela na fonte ou use um override "
+                "antes de gerar o projeto dbt."
+            )
+
         presentes = {(tabela.nome_escopo, tabela.nome_tabela) for tabela in tabelas}
         tabelas_por_escopo = _agrupar_por_escopo(tabelas)
         usa_dbt_utils = _precisa_dbt_utils(tabelas)
+        usa_cast_type = _precisa_cast_type(tabelas)
+        usa_bigint = _tem_coluna_bigint(tabelas)
         usa_matches_format = _precisa_matches_format(tabelas)
         usa_unique_percentage_at_least = _precisa_unique_percentage_at_least(tabelas)
         usa_composite_relationships = _precisa_composite_relationships(
@@ -101,7 +127,15 @@ class GeradorDbt:
         )
 
         gerado_em = datetime.now(UTC).isoformat()
-        projeto = {**_DBT_PROJECT, "meta": {"generated_at": gerado_em}}
+        projeto = {
+            **_DBT_PROJECT,
+            "models": {
+                "ddf_staging": {
+                    **_DBT_PROJECT["models"]["ddf_staging"],
+                    "+meta": {"generated_at": gerado_em},
+                },
+            },
+        }
         resultado_projeto = escrever_arquivo(
             destino / "dbt_project.yml", _dump_yaml(projeto)
         )
@@ -122,6 +156,21 @@ class GeradorDbt:
                 return resultado_packages
         else:
             caminho_packages.unlink(missing_ok=True)
+
+        # macros/cast_type/: mesmo princípio de órfão condicional dos demais
+        # macros — só existe com consumidor real (coluna cujo tipo canônico
+        # exige tradução por adapter, ver _CATEGORIAS_DISPATCHADAS),
+        # removido explicitamente quando fica órfão.
+        pasta_cast_type = destino / "macros" / "cast_type"
+        if usa_cast_type:
+            for nome_arquivo, conteudo in _CONTEUDO_CAST_TYPE.items():
+                resultado_macro_cast = escrever_arquivo(
+                    pasta_cast_type / nome_arquivo, conteudo
+                )
+                if isinstance(resultado_macro_cast, Falha):
+                    return resultado_macro_cast
+        elif pasta_cast_type.exists():
+            shutil.rmtree(pasta_cast_type)
 
         # macros/matches_format/ e macros/unique_percentage_at_least.sql
         # seguem o mesmo princípio do packages.yml acima: só existem com
@@ -169,7 +218,11 @@ class GeradorDbt:
         resultado_readme = escrever_arquivo(
             destino / "README.md",
             _renderizar_readme(
-                tabelas_por_escopo, gerado_em, usa_dbt_utils, usa_matches_format
+                tabelas_por_escopo,
+                gerado_em,
+                usa_dbt_utils,
+                usa_matches_format,
+                usa_bigint,
             ),
         )
         if isinstance(resultado_readme, Falha):

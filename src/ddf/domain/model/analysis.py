@@ -60,11 +60,14 @@ class ColunaAnalisada(BaseModel):
     referencias: list[ReferenciaDeColuna] = Field(
         default_factory=list,
         description=(
-            "Uma entrada por constraint FK de coluna única que referencia "
-            "esta coluna — pode ter 2+ quando a coluna é FK polimórfica "
-            "(2+ constraints distintas apontando pra tabelas diferentes). "
-            "FK composta (2+ colunas locais numa mesma constraint) não "
-            "aparece aqui, ver TabelaAnalisada.restricoes_fk_compostas."
+            "Uma entrada por constraint FK da qual esta coluna participa, "
+            "de coluna única ou composta — pode ter 2+ tanto por FK "
+            "polimórfica (2+ constraints distintas apontando pra tabelas "
+            "diferentes) quanto por participar de uma FK composta (a "
+            "constraint decomposta por coluna aparece aqui também, além de "
+            "qualquer FK single-column própria que a coluna tenha). O "
+            "agrupamento por constraint composta vive à parte, em "
+            "TabelaAnalisada.restricoes_fk_compostas."
         ),
     )
     nao_nulavel: bool = Field(
