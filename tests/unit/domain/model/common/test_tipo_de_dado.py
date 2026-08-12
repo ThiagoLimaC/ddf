@@ -47,6 +47,16 @@ class TestFeliz:
         assert com_tz.com_timezone is True
         assert sem_tz.com_timezone is False
 
+    def test_cria_tipo_timestamp_com_precisao_fracionaria(self) -> None:
+        """TIMESTAMP e TIME compartilham o atributo precisao_fracionaria."""
+        timestamp = TipoDeDado(
+            categoria=CategoriaDeDado.TIMESTAMP, precisao_fracionaria=6
+        )
+        time = TipoDeDado(categoria=CategoriaDeDado.TIME, precisao_fracionaria=0)
+
+        assert timestamp.precisao_fracionaria == 6
+        assert time.precisao_fracionaria == 0
+
     def test_cria_tipo_enum_com_valores_permitidos(self) -> None:
         """ENUM guarda a lista de valores aceitos."""
         tipo = TipoDeDado(
@@ -127,6 +137,11 @@ class TestErro:
         """com_precisao_dupla é exclusivo de FLOAT, não de NUMERIC."""
         with pytest.raises(ValidationError, match="NUMERIC"):
             TipoDeDado(categoria=CategoriaDeDado.NUMERIC, com_precisao_dupla=True)
+
+    def test_date_com_precisao_fracionaria_levanta_validation_error(self) -> None:
+        """precisao_fracionaria é exclusivo de TIMESTAMP/TIME, não de DATE."""
+        with pytest.raises(ValidationError, match="DATE"):
+            TipoDeDado(categoria=CategoriaDeDado.DATE, precisao_fracionaria=3)
 
     def test_varchar_com_valores_permitidos_levanta_validation_error(self) -> None:
         """valores_permitidos é exclusivo de ENUM/SET, não de VARCHAR."""

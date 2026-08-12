@@ -109,6 +109,22 @@ class TestFeliz:
         """Time vira TIME."""
         assert mapear_tipo_mariadb("time", "time").categoria == CategoriaDeDado.TIME
 
+    def test_mapeia_precisao_fracionaria_para_datetime_timestamp_e_time(
+        self,
+    ) -> None:
+        """datetime_precision propaga pra TipoDeDado.precisao_fracionaria."""
+        datetime_ = mapear_tipo_mariadb(
+            "datetime", "datetime(3)", precisao_fracionaria=3
+        )
+        timestamp = mapear_tipo_mariadb(
+            "timestamp", "timestamp(6)", precisao_fracionaria=6
+        )
+        time = mapear_tipo_mariadb("time", "time(2)", precisao_fracionaria=2)
+
+        assert datetime_.precisao_fracionaria == 3
+        assert timestamp.precisao_fracionaria == 6
+        assert time.precisao_fracionaria == 2
+
     def test_extrai_coluna_de_check_clause_json_valid(
         self,
     ) -> None:

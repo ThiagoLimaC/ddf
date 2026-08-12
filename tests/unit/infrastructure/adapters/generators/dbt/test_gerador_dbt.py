@@ -30,6 +30,13 @@ _CAMINHO_MACRO_MATCHES_FORMAT = (
     / "matches_format"
     / "matches_format.sql"
 )
+_CAMINHO_MACRO_CAST_TYPE = (
+    Path(gerador_dbt_modulo.__file__).parent
+    / "templates"
+    / "macros"
+    / "cast_type"
+    / "cast_type.sql"
+)
 
 
 def _schema_yml(destino: Path, escopo: str = "escopo") -> dict[str, Any]:
@@ -163,7 +170,7 @@ class TestFeliz:
         sql_perfis = (
             tmp_path / "models" / "staging" / "rh" / "stg_rh__perfis.sql"
         ).read_text()
-        assert "CAST(id AS NUMERIC(10,2)) as id" in sql_perfis
+        assert "CAST(id AS DECIMAL(10,2)) as id" in sql_perfis
 
         schema_vendas = _schema_yml(tmp_path, "vendas")
         nomes_models_vendas = [m["name"] for m in schema_vendas["models"]]
@@ -1208,6 +1215,110 @@ class TestFeliz:
         assert (pasta / "postgres__validate_format.sql").exists()
         assert (pasta / "mariadb__validate_format.sql").exists()
 
+    def test_macros_cast_type_nao_gerados_sem_categoria_dispatchada(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Só com categorias já portáveis (INTEGER), macros/cast_type/ não sai."""
+        tabela = construir_tabela(colunas=[construir_coluna()])
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        assert not (tmp_path / "macros" / "cast_type").exists()
+
+    def test_macros_cast_type_gerados_com_categoria_dispatchada(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Com coluna BIGINT no lote, os 3 arquivos de cast_type/ existem."""
+        coluna = construir_coluna(
+            nome="id_externo", tipo_dado=TipoDeDado(categoria=CategoriaDeDado.BIGINT)
+        )
+        tabela = construir_tabela(colunas=[coluna])
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        pasta = tmp_path / "macros" / "cast_type"
+        assert (pasta / "cast_type.sql").read_text() == (
+            _CAMINHO_MACRO_CAST_TYPE.read_text()
+        )
+        assert (pasta / "postgres__cast_type.sql").exists()
+        assert (pasta / "mariadb__cast_type.sql").exists()
+
+    def test_sql_de_coluna_bigint_chama_macro_cast_type(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Coluna BIGINT vira `{{ cast_type(...) }}` no SQL, não CAST literal."""
+        coluna = construir_coluna(
+            nome="id_externo", tipo_dado=TipoDeDado(categoria=CategoriaDeDado.BIGINT)
+        )
+        tabela = construir_tabela(
+            colunas=[coluna], nome_tabela="pedidos", nome_escopo="vendas"
+        )
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        sql = (
+            tmp_path
+            / "models"
+            / "staging"
+            / "vendas"
+            / "stg_vendas__pedidos.sql"
+        ).read_text()
+        assert "{{ cast_type('id_externo', 'BIGINT') }}" in sql
+        assert "CAST(id_externo AS BIGINT)" not in sql
+
+    def test_sql_de_coluna_timestamp_com_precisao_passa_precisao_ao_macro(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """precisao_fracionaria vira 3º argumento posicional do macro."""
+        coluna = construir_coluna(
+            nome="criado_em",
+            tipo_dado=TipoDeDado(
+                categoria=CategoriaDeDado.TIMESTAMP,
+                com_timezone=True,
+                precisao_fracionaria=3,
+            ),
+        )
+        tabela = construir_tabela(
+            colunas=[coluna], nome_tabela="pedidos", nome_escopo="vendas"
+        )
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        sql = (
+            tmp_path
+            / "models"
+            / "staging"
+            / "vendas"
+            / "stg_vendas__pedidos.sql"
+        ).read_text()
+        assert (
+            "{{ cast_type('criado_em', 'TIMESTAMP WITH TIME ZONE', 3) }}" in sql
+        )
+
     def test_macro_unique_percentage_nao_gerado_sem_consumidor(
         self,
         tmp_path: Path,
@@ -1557,6 +1668,25 @@ class TestBorda:
         pasta = tmp_path / "macros" / "matches_format"
         pasta.mkdir(parents=True)
         (pasta / "matches_format.sql").write_text("-- execução anterior")
+        tabela = construir_tabela(colunas=[construir_coluna()])
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        assert not pasta.exists()
+
+    def test_macros_cast_type_orfaos_sao_removidos(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """macros/cast_type/ de execução anterior é removido sem consumidor."""
+        pasta = tmp_path / "macros" / "cast_type"
+        pasta.mkdir(parents=True)
+        (pasta / "cast_type.sql").write_text("-- execução anterior")
         tabela = construir_tabela(colunas=[construir_coluna()])
         banco = construir_banco([tabela])
 
