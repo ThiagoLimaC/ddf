@@ -1,7 +1,7 @@
 """Construção de ColunaExtraida e agrupamento de metadados de catálogo do MariaDB."""
 
 from collections import defaultdict
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import polars as pl
 
@@ -10,6 +10,12 @@ from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkCompos
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.domain.model.extraction import ColunaExtraida
+from ddf.infrastructure.adapters.extractors.comum.construir_restricoes_fk_compostas import (  # noqa: E501
+    construir_restricoes_fk_compostas,
+)
+from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
+    LARGURA_MEDIA_PADRAO_BYTES,
+)
 from ddf.infrastructure.adapters.extractors.mariadb.mapeamento_de_tipos import (
     _extrair_coluna_json_valid,
     mapear_tipo_mariadb,
@@ -329,3 +335,75 @@ def _promover_booleanos_pela_amostra(
                 )
         colunas_promovidas.append(coluna)
     return colunas_promovidas
+
+
+def montar_metadados_do_schema(
+    linhas_colunas: list[tuple[Any, ...]],
+    linhas_pks: list[tuple[Any, ...]],
+    linhas_fks: list[tuple[Any, ...]],
+    linhas_unicas: list[tuple[str, str, str]],
+    linhas_json: list[tuple[str, str]],
+    linhas_total_linhas: list[tuple[Any, ...]],
+) -> _MetadadosDoSchema:
+    """Agrupa as 6 linhas cruas de `cursor.fetchall()` em `_MetadadosDoSchema`.
+
+    Cada parâmetro `linhas_*` é a saída bruta de uma das 6 queries de
+    `_obter_metadados_schema`, na ordem em que são executadas — esta função
+    só agrupa por tabela e monta os `dict` finais, sem tocar conexão/cursor.
+    `linhas_total_linhas` já vem com `(nome_tabela, linhas_estimadas,
+    largura_media)` — MariaDB expõe as duas estimativas na mesma linha de
+    `information_schema.tables`, diferente do Postgres (2 queries
+    separadas).
+    """
+    colunas_por_tabela: dict[str, list[_LinhaColuna]] = defaultdict(list)
+    for linha_bruta in linhas_colunas:
+        nome_tabela, *resto_colunas = linha_bruta
+        colunas_por_tabela[nome_tabela].append(_LinhaColuna(*resto_colunas))
+
+    pks_por_tabela: dict[str, set[str]] = defaultdict(set)
+    for nome_tabela, nome_coluna_pk in linhas_pks:
+        pks_por_tabela[nome_tabela].add(nome_coluna_pk)
+
+    fks_por_tabela: dict[str, list[tuple[str, str, str, str, str]]] = defaultdict(list)
+    for linha_fk in linhas_fks:
+        nome_tabela, *resto_fk = linha_fk
+        fks_por_tabela[nome_tabela].append(tuple(resto_fk))
+
+    restricoes_fk_compostas_por_tabela: dict[str, list[RestricaoDeFkComposta]] = {
+        nome_tabela: construir_restricoes_fk_compostas(linhas)
+        for nome_tabela, linhas in fks_por_tabela.items()
+    }
+
+    unicas_por_tabela, restricoes_unicas_por_tabela = (
+        _agrupar_colunas_unicas_por_tabela(linhas_unicas)
+    )
+
+    check_clauses_por_tabela = _agrupar_colunas_json_por_tabela(linhas_json)
+    colunas_json_por_tabela: dict[str, set[str]] = {}
+    for nome_tabela, linhas_da_tabela in colunas_por_tabela.items():
+        nomes_colunas_reais = {linha.nome for linha in linhas_da_tabela}
+        colunas_json_por_tabela[nome_tabela] = _colunas_json_de_check_clauses(
+            check_clauses_por_tabela.get(nome_tabela, []), nomes_colunas_reais
+        )
+
+    total_linhas_por_tabela: dict[str, int] = {}
+    largura_media_por_tabela: dict[str, int] = {}
+    for nome_tabela, linhas_estimadas, largura_media in linhas_total_linhas:
+        total_linhas_por_tabela[nome_tabela] = (
+            max(0, round(linhas_estimadas)) if linhas_estimadas is not None else 0
+        )
+        largura_media_por_tabela[nome_tabela] = (
+            int(largura_media) if largura_media else LARGURA_MEDIA_PADRAO_BYTES
+        )
+
+    return _MetadadosDoSchema(
+        colunas_por_tabela=dict(colunas_por_tabela),
+        pks_por_tabela=dict(pks_por_tabela),
+        fks_por_tabela=dict(fks_por_tabela),
+        unicas_por_tabela=unicas_por_tabela,
+        restricoes_unicas_por_tabela=restricoes_unicas_por_tabela,
+        restricoes_fk_compostas_por_tabela=restricoes_fk_compostas_por_tabela,
+        colunas_json_por_tabela=colunas_json_por_tabela,
+        total_linhas_por_tabela=total_linhas_por_tabela,
+        largura_media_por_tabela=largura_media_por_tabela,
+    )

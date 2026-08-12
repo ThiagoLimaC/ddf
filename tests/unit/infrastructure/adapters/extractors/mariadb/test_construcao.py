@@ -14,6 +14,7 @@ from ddf.infrastructure.adapters.extractors.mariadb._construcao import (
     _PkElegivel,
     _PkNaoElegivel,
     _quotar_identificador,
+    montar_metadados_do_schema,
     particionar_faixas_exaustivas,
 )
 
@@ -54,6 +55,27 @@ class TestFeliz:
         faixas = particionar_faixas_exaustivas(minimo=1, maximo=100, n=2)
 
         assert faixas[-1][1] is None
+
+    def test_montar_metadados_do_schema_agrupa_por_tabela(self) -> None:
+        """PK, FK simples, JSON e total_linhas/largura ficam sob a tabela certa."""
+        metadados = montar_metadados_do_schema(
+            linhas_colunas=[
+                ("pedidos", "id", "int", "int", None, None, None, "NO"),
+                ("pedidos", "dados", "longtext", "longtext", None, None, None, "NO"),
+            ],
+            linhas_pks=[("pedidos", "id")],
+            linhas_fks=[
+                ("pedidos", "cliente_id", "vendas", "clientes", "id", "fk_cliente")
+            ],
+            linhas_unicas=[],
+            linhas_json=[("pedidos", "json_valid(`dados`)")],
+            linhas_total_linhas=[("pedidos", 42.0, 120)],
+        )
+
+        assert metadados.pks_por_tabela == {"pedidos": {"id"}}
+        assert metadados.total_linhas_por_tabela == {"pedidos": 42}
+        assert metadados.largura_media_por_tabela == {"pedidos": 120}
+        assert metadados.colunas_json_por_tabela["pedidos"] == {"dados"}
 
 
 class TestBorda:
@@ -142,6 +164,32 @@ class TestBorda:
         faixas = particionar_faixas_exaustivas(minimo=1000, maximo=1999, n=2)
 
         assert faixas == [(1000, 1500), (1500, None)]
+
+    def test_montar_metadados_linhas_estimadas_none_vira_zero(self) -> None:
+        """`linhas_estimadas is None` (tabela nunca analisada) não quebra o round."""
+        metadados = montar_metadados_do_schema(
+            linhas_colunas=[],
+            linhas_pks=[],
+            linhas_fks=[],
+            linhas_unicas=[],
+            linhas_json=[],
+            linhas_total_linhas=[("pedidos", None, 120)],
+        )
+
+        assert metadados.total_linhas_por_tabela == {"pedidos": 0}
+
+    def test_montar_metadados_largura_media_none_usa_padrao(self) -> None:
+        """largura_media None/0 (sem estatística real) cai pro padrão, não fica 0."""
+        metadados = montar_metadados_do_schema(
+            linhas_colunas=[],
+            linhas_pks=[],
+            linhas_fks=[],
+            linhas_unicas=[],
+            linhas_json=[],
+            linhas_total_linhas=[("pedidos", 10.0, None)],
+        )
+
+        assert metadados.largura_media_por_tabela["pedidos"] > 0
 
 
 class TestErro:

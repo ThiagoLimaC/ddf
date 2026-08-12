@@ -3,7 +3,6 @@
 import logging
 import random
 import threading
-from collections import defaultdict
 from typing import assert_never
 from urllib.parse import quote
 
@@ -18,7 +17,6 @@ from ddf.domain.model.common.requisicao_de_amostragem import (
     RequisicaoDeAmostragem,
     RequisicaoPorFaixa,
 )
-from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
@@ -27,9 +25,6 @@ from ddf.infrastructure.adapters.extractors.comum.construir_colunas_fk import (
 )
 from ddf.infrastructure.adapters.extractors.comum.construir_metadados_de_amostra import (  # noqa: E501
     construir_metadados_de_amostra,
-)
-from ddf.infrastructure.adapters.extractors.comum.construir_restricoes_fk_compostas import (  # noqa: E501
-    construir_restricoes_fk_compostas,
 )
 from ddf.infrastructure.adapters.extractors.comum.leitura_paralela_intra_tabela import (  # noqa: E501
     deve_paralelizar_leitura,
@@ -47,17 +42,14 @@ from ddf.infrastructure.adapters.extractors.mariadb._conexoes import (
     _GerenciadorDeConexoesMariaDB,
 )
 from ddf.infrastructure.adapters.extractors.mariadb._construcao import (
-    _agrupar_colunas_json_por_tabela,
-    _agrupar_colunas_unicas_por_tabela,
-    _colunas_json_de_check_clauses,
     _construir_coluna,
     _elegibilidade_de_pk_para_faixa,
-    _LinhaColuna,
     _MetadadosDoSchema,
     _PkElegivel,
     _PkNaoElegivel,
     _promover_booleanos_pela_amostra,
     _quotar_identificador,
+    montar_metadados_do_schema,
     particionar_faixas_exaustivas,
 )
 from ddf.infrastructure.adapters.extractors.mariadb._queries import (
@@ -216,81 +208,25 @@ class ExtratorMariaDB:
                 conexao = resultado_conexao.valor
                 with conexao.cursor() as cursor:
                     cursor.execute(_COLUNAS_SQL, (escopo,))
-                    colunas_por_tabela: dict[str, list[_LinhaColuna]] = defaultdict(
-                        list
-                    )
-                    for linha_bruta in cursor.fetchall():
-                        nome_tabela, *resto_colunas = linha_bruta
-                        colunas_por_tabela[nome_tabela].append(
-                            _LinhaColuna(*resto_colunas)
-                        )
-
+                    linhas_colunas = cursor.fetchall()
                     cursor.execute(_CHAVES_PRIMARIAS_SQL, (escopo,))
-                    pks_por_tabela: dict[str, set[str]] = defaultdict(set)
-                    for nome_tabela, nome_coluna_pk in cursor.fetchall():
-                        pks_por_tabela[nome_tabela].add(nome_coluna_pk)
-
+                    linhas_pks = cursor.fetchall()
                     cursor.execute(_CHAVES_ESTRANGEIRAS_SQL, (escopo,))
-                    fks_por_tabela: dict[str, list[tuple[str, str, str, str, str]]] = (
-                        defaultdict(list)
-                    )
-                    for linha_fk in cursor.fetchall():
-                        nome_tabela, *resto_fk = linha_fk
-                        fks_por_tabela[nome_tabela].append(tuple(resto_fk))
-
-                    restricoes_fk_compostas_por_tabela: dict[
-                        str, list[RestricaoDeFkComposta]
-                    ] = {
-                        nome_tabela: construir_restricoes_fk_compostas(linhas)
-                        for nome_tabela, linhas in fks_por_tabela.items()
-                    }
-
+                    linhas_fks = cursor.fetchall()
                     cursor.execute(_COLUNAS_UNICAS_SQL, (escopo,))
-                    unicas_por_tabela, restricoes_unicas_por_tabela = (
-                        _agrupar_colunas_unicas_por_tabela(list(cursor.fetchall()))
-                    )
-
+                    linhas_unicas = cursor.fetchall()
                     cursor.execute(_COLUNAS_JSON_SQL, (escopo,))
-                    check_clauses_por_tabela = _agrupar_colunas_json_por_tabela(
-                        list(cursor.fetchall())
-                    )
-                    colunas_json_por_tabela: dict[str, set[str]] = {}
-                    for nome_tabela, linhas_colunas in colunas_por_tabela.items():
-                        nomes_colunas_reais = {linha.nome for linha in linhas_colunas}
-                        colunas_json_por_tabela[nome_tabela] = (
-                            _colunas_json_de_check_clauses(
-                                check_clauses_por_tabela.get(nome_tabela, []),
-                                nomes_colunas_reais,
-                            )
-                        )
-
+                    linhas_json = cursor.fetchall()
                     cursor.execute(_TOTAL_LINHAS_SQL, (escopo,))
-                    total_linhas_por_tabela: dict[str, int] = {}
-                    largura_media_por_tabela: dict[str, int] = {}
-                    for nome_tabela, linhas_estimadas, largura_media in (
-                        cursor.fetchall()
-                    ):
-                        total_linhas_por_tabela[nome_tabela] = (
-                            max(0, round(linhas_estimadas))
-                            if linhas_estimadas is not None
-                            else 0
-                        )
-                        largura_media_por_tabela[nome_tabela] = (
-                            int(largura_media)
-                            if largura_media
-                            else LARGURA_MEDIA_PADRAO_BYTES
-                        )
+                    linhas_total_linhas = cursor.fetchall()
 
-            metadados = _MetadadosDoSchema(
-                colunas_por_tabela=dict(colunas_por_tabela),
-                pks_por_tabela=dict(pks_por_tabela),
-                fks_por_tabela=dict(fks_por_tabela),
-                unicas_por_tabela=unicas_por_tabela,
-                restricoes_unicas_por_tabela=restricoes_unicas_por_tabela,
-                restricoes_fk_compostas_por_tabela=restricoes_fk_compostas_por_tabela,
-                colunas_json_por_tabela=colunas_json_por_tabela,
-                total_linhas_por_tabela=total_linhas_por_tabela,
-                largura_media_por_tabela=largura_media_por_tabela,
+            metadados = montar_metadados_do_schema(
+                linhas_colunas,
+                linhas_pks,
+                linhas_fks,
+                linhas_unicas,
+                linhas_json,
+                linhas_total_linhas,
             )
             self._cache_schemas[escopo] = metadados
             return Sucesso(metadados)
