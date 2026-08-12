@@ -1468,6 +1468,50 @@ class TestFeliz:
         assert (pasta / "postgres__cast_type.sql").exists()
         assert (pasta / "mariadb__cast_type.sql").exists()
 
+    def test_readme_alerta_bigint_unsigned_com_coluna_bigint_no_lote(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Com coluna BIGINT no lote, o README alerta sobre BIGINT UNSIGNED.
+
+        ddf não sabe em tempo de geração se o destino real será MariaDB
+        (única engine da v1 onde `BIGINT UNSIGNED` > 2^63-1 vira negativo em
+        silêncio) — a nota aparece sempre que há BIGINT no lote, pra quem lê
+        o artefato gerado (não só o registry-plan interno) ter como saber
+        da limitação antes de confiar no resultado.
+        """
+        coluna = construir_coluna(
+            nome="id_externo", tipo_dado=TipoDeDado(categoria=CategoriaDeDado.BIGINT)
+        )
+        tabela = construir_tabela(colunas=[coluna])
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        readme = (tmp_path / "README.md").read_text()
+        assert "BIGINT UNSIGNED" in readme
+
+    def test_readme_sem_alerta_bigint_unsigned_sem_coluna_bigint_no_lote(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Sem coluna BIGINT no lote, o README não menciona a limitação."""
+        tabela = construir_tabela(colunas=[construir_coluna()])
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        readme = (tmp_path / "README.md").read_text()
+        assert "BIGINT UNSIGNED" not in readme
+
     def test_sql_de_coluna_bigint_chama_macro_cast_type(
         self,
         tmp_path: Path,
