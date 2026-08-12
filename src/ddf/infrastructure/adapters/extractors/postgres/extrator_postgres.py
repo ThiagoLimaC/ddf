@@ -440,15 +440,14 @@ class ExtratorPostgres:
         )
         # Sonda total_blocos ANTES de reservar, de propósito: _total_blocos usa
         # self._conexoes.conexao() (acquire normal do semáforo) — chamada de
-        # dentro da janela já reservada por self._conexoes.reservar() podia
-        # causar self-deadlock quando max_conexoes_por_tabela == max_conexoes
-        # (a reserva esgota o semáforo inteiro, e a sonda ficaria esperando
-        # um permit que só a própria thread, já travada, poderia devolver) —
-        # achado da banca da issue #135, mesmo padrão já usado no MariaDB
-        # pra _dominio_de_pk. Falha na sonda cai pro caminho sequencial,
-        # silenciosamente — mesmo tratamento que o MariaDB já dá pra
-        # _dominio_de_pk falho, não é uma falha "de leitura paralela em si"
-        # que mereça Aviso pro usuário.
+        # dentro da janela já reservada por self._conexoes.reservar() causaria
+        # self-deadlock quando max_conexoes_por_tabela == max_conexoes (a
+        # reserva esgota o semáforo inteiro, e a sonda ficaria esperando um
+        # permit que só a própria thread, já travada, poderia devolver) —
+        # mesmo padrão já usado no MariaDB pra _dominio_de_pk. Falha na sonda
+        # cai pro caminho sequencial, silenciosamente — mesmo tratamento que
+        # o MariaDB já dá pra _dominio_de_pk falho, não é uma falha "de
+        # leitura paralela em si" que mereça Aviso pro usuário.
         total_blocos: int | None = None
         if elegivel_paralelo:
             resultado_blocos = self._total_blocos(schema, tabela)
