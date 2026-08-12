@@ -26,12 +26,6 @@ from ddf.infrastructure.adapters.extractors.comum.construir_metadados_de_amostra
 from ddf.infrastructure.adapters.extractors.comum.leitura_paralela_intra_tabela import (  # noqa: E501
     deve_paralelizar_leitura,
 )
-from ddf.infrastructure.adapters.extractors.comum.leitura_paralela_intra_tabela import (  # noqa: E501
-    MINIMO_CONEXOES_PARALELISMO,
-    deve_paralelizar_leitura,
-    liberar_conexoes,
-    reservar_conexoes,
-)
 from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
     LARGURA_MEDIA_PADRAO_BYTES,
     calcular_tamanho_lote,
@@ -134,7 +128,6 @@ class ExtratorPostgres:
         )
         self._cache_schemas: dict[str, _MetadadosDoSchema] = {}
         self._lock_cache_schemas = threading.Lock()
-        self._lock_reserva_paralelismo = threading.Lock()
 
     def listar_escopos(self) -> Resultado[list[str]]:
         """Lista os escopos (schemas) disponíveis, ordenados por nome."""
