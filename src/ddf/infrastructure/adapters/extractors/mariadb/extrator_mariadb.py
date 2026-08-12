@@ -29,6 +29,12 @@ from ddf.infrastructure.adapters.extractors.comum.construir_metadados_de_amostra
 from ddf.infrastructure.adapters.extractors.comum.leitura_paralela_intra_tabela import (  # noqa: E501
     deve_paralelizar_leitura,
 )
+from ddf.infrastructure.adapters.extractors.comum.leitura_paralela_intra_tabela import (  # noqa: E501
+    MINIMO_CONEXOES_PARALELISMO,
+    deve_paralelizar_leitura,
+    liberar_conexoes,
+    reservar_conexoes,
+)
 from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
     LARGURA_MEDIA_PADRAO_BYTES,
     calcular_tamanho_lote,
