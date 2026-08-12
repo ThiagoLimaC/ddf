@@ -1,8 +1,12 @@
 """Cast/render de SQL e convenção de nomenclatura de model do GeradorDbt."""
 
+import re
+
 from ddf.domain.model.analysis import ColunaAnalisada, TabelaAnalisada
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
 from ddf.infrastructure.adapters.generators.dbt._templates import _TEMPLATE_SQL
+
+_IDENTIFICADOR_DBT_VALIDO = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 _CATEGORIAS_COM_TIMEZONE = {CategoriaDeDado.TIMESTAMP, CategoriaDeDado.TIME}
 _CATEGORIAS_SEM_EQUIVALENTE_ANSI = {CategoriaDeDado.ENUM, CategoriaDeDado.SET}
@@ -46,6 +50,23 @@ def _nome_model(escopo: str, tabela: str) -> str:
     return f"stg_{escopo}__{tabela}"
 
 
+def _nome_model_invalido(nome_model: str) -> bool:
+    """Decide se `nome_model` não é um identificador dbt válido.
+
+    Args:
+        nome_model: resultado de `_nome_model(escopo, tabela)`.
+
+    Returns:
+        True quando `nome_model` contém qualquer caractere fora de
+        `[A-Za-z0-9_]` ou começa com dígito — espaço e hífen são os casos
+        reais mais comuns (schema/tabela criados por ferramenta que não
+        segue a convenção `snake_case`). `stg_`/`__` do próprio `ddf` nunca
+        introduzem um caractere inválido por si só, então um `nome_model`
+        inválido sempre vem de `escopo`/`tabela` da fonte.
+    """
+    return not _IDENTIFICADOR_DBT_VALIDO.match(nome_model)
+
+
 def _tipo_sql(tipo: TipoDeDado) -> str:
     """Mapeia TipoDeDado para o tipo SQL canônico usado no CAST.
 
@@ -87,6 +108,37 @@ def _tipo_sql(tipo: TipoDeDado) -> str:
     return str(categoria.value)
 
 
+def _expressao_quote(nome: str) -> str:
+    """Expressão Jinja `adapter.quote('<nome>')`, sem `{{ }}` ao redor.
+
+    Args:
+        nome: identificador de coluna do lote analisado.
+
+    Returns:
+        Chamada ao builtin `adapter.quote()` do dbt-core — resolve o
+        delimitador certo por motor (aspas duplas no Postgres, crase no
+        MariaDB) sem exigir dispatch próprio. Usada tanto como argumento de
+        outro macro (`cast_type`, que precisa de uma expressão Jinja
+        avaliável, não de texto já renderizado) quanto, envolta em `{{ }}`
+        por quem chama, como saída direta de SQL.
+    """
+    nome_escapado = nome.replace("'", "\\'")
+    return f"adapter.quote('{nome_escapado}')"
+
+
+def _nome_quotado(nome: str) -> str:
+    """Texto literal `{{ adapter.quote('<nome>') }}`, interpretado só pelo Jinja do dbt.
+
+    Args:
+        nome: identificador de coluna do lote analisado.
+
+    Returns:
+        Mesmo padrão de `cast_type`/`{{ source(...) }}` — texto puro no SQL
+        gerado, nunca avaliado pelo Jinja do `ddf`.
+    """
+    return f"{{{{ {_expressao_quote(nome)} }}}}"
+
+
 def _tem_cast_seguro(tipo: TipoDeDado) -> bool:
     """Decide se `tipo` tem um CAST SQL seguro a fazer.
 
@@ -110,23 +162,46 @@ def _expressao_coluna(coluna: ColunaAnalisada) -> str:
         coluna: coluna analisada a projetar no SELECT.
 
     Returns:
-        `CAST(<coluna> AS <tipo>)` para tipos já portáveis entre Postgres e
-        MariaDB; uma chamada ao macro dbt `cast_type(...)` — texto literal,
-        interpretado só pelo Jinja do dbt em tempo de `dbt compile`, nunca
-        pelo Jinja do `ddf` — para as categorias em
-        `_CATEGORIAS_DISPATCHADAS`; ou o nome puro da coluna quando não há
-        CAST seguro a fazer (ver `_tem_cast_seguro`).
+        `CAST(<coluna quotada> AS <tipo>)` para tipos já portáveis entre
+        Postgres e MariaDB; uma chamada ao macro dbt `cast_type(...)` —
+        texto literal, interpretado só pelo Jinja do dbt em tempo de `dbt
+        compile`, nunca pelo Jinja do `ddf` — para as categorias em
+        `_CATEGORIAS_DISPATCHADAS`; ou o nome quotado da coluna quando não
+        há CAST seguro a fazer (ver `_tem_cast_seguro`). O nome sempre passa
+        por `adapter.quote()` (builtin do dbt-core) — sem isso, coluna com
+        palavra reservada ou espaço quebra o SQL, e aspas duplas fixas não
+        funcionam no MariaDB sem `ANSI_QUOTES`.
     """
     if not _tem_cast_seguro(coluna.tipo_dado):
-        return coluna.nome
+        return _nome_quotado(coluna.nome)
     tipo_canonico = _tipo_sql(coluna.tipo_dado)
     if tipo_canonico in _CATEGORIAS_DISPATCHADAS:
         precisao_fracionaria = coluna.tipo_dado.precisao_fracionaria
-        argumentos = f"'{coluna.nome}', '{tipo_canonico}'"
+        argumentos = f"{_expressao_quote(coluna.nome)}, '{tipo_canonico}'"
         if precisao_fracionaria is not None:
             argumentos += f", {precisao_fracionaria}"
         return f"{{{{ cast_type({argumentos}) }}}}"
-    return f"CAST({coluna.nome} AS {tipo_canonico})"
+    return f"CAST({_nome_quotado(coluna.nome)} AS {tipo_canonico})"
+
+
+def _tabela_com_nome_model_invalido(
+    tabelas: list[TabelaAnalisada],
+) -> TabelaAnalisada | None:
+    """Encontra a 1ª tabela do lote cujo nome de model gerado é inválido.
+
+    Args:
+        tabelas: tabelas do lote analisado.
+
+    Returns:
+        A `TabelaAnalisada` problemática, ou `None` se todos os nomes de
+        model do lote forem identificadores dbt válidos. `GeradorDbt.__call__`
+        falha explícito com essa tabela em vez de normalizar o nome em
+        silêncio — nada aplicado "por trás" do usuário.
+    """
+    for tabela in tabelas:
+        if _nome_model_invalido(_nome_model(tabela.nome_escopo, tabela.nome_tabela)):
+            return tabela
+    return None
 
 
 def _precisa_cast_type(tabelas: list[TabelaAnalisada]) -> bool:
@@ -163,7 +238,7 @@ def _renderizar_sql(tabela: TabelaAnalisada) -> str:
     colunas = [
         {
             "expressao": _expressao_coluna(coluna),
-            "nome": coluna.nome,
+            "nome": _nome_quotado(coluna.nome),
             "sufixo": "," if indice < total - 1 else "",
         }
         for indice, coluna in enumerate(tabela.colunas)

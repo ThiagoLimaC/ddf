@@ -25,6 +25,7 @@ from ddf.infrastructure.adapters.generators.dbt._sql import (
     _nome_model,
     _precisa_cast_type,
     _renderizar_sql,
+    _tabela_com_nome_model_invalido,
 )
 from ddf.infrastructure.adapters.generators.dbt._templates import (
     _CONTEUDO_CAST_TYPE,
@@ -91,11 +92,28 @@ class GeradorDbt:
         Returns:
             Sucesso(None) com um Aviso agregado por categoria (FK composta,
             FK polimórfica, FK fora do lote) quando aplicável — não um
-            Aviso por ocorrência, ver `ContadoresDeAviso` — ou Falha na
-            primeira escrita em disco que falhar.
+            Aviso por ocorrência, ver `ContadoresDeAviso` — ou Falha se
+            algum nome de model gerado não for um identificador dbt válido
+            (verificado antes de qualquer escrita, sem normalização
+            silenciosa) ou na primeira escrita em disco que falhar.
         """
         contadores = ContadoresDeAviso()
         tabelas = sorted(entrada.tabelas, key=lambda t: (t.nome_escopo, t.nome_tabela))
+
+        tabela_invalida = _tabela_com_nome_model_invalido(tabelas)
+        if tabela_invalida is not None:
+            nome_model = _nome_model(
+                tabela_invalida.nome_escopo, tabela_invalida.nome_tabela
+            )
+            return Falha(
+                f"Nome de model '{nome_model}' (escopo "
+                f"'{tabela_invalida.nome_escopo}', tabela "
+                f"'{tabela_invalida.nome_tabela}') não é um identificador dbt "
+                "válido — só letras, dígitos e underscore, sem começar por "
+                "dígito. Renomeie o escopo/tabela na fonte ou use um override "
+                "antes de gerar o projeto dbt."
+            )
+
         presentes = {(tabela.nome_escopo, tabela.nome_tabela) for tabela in tabelas}
         tabelas_por_escopo = _agrupar_por_escopo(tabelas)
         usa_dbt_utils = _precisa_dbt_utils(tabelas)
