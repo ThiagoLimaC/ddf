@@ -225,7 +225,13 @@ class TestFeliz:
         construir_tabela: Callable[..., TabelaAnalisada],
         construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
     ) -> None:
-        """dbt_project.yml registra meta.generated_at (issue #56)."""
+        """dbt_project.yml registra models.ddf_staging.+meta.generated_at.
+
+        Não na raiz do arquivo — `meta` de projeto na raiz não é uma chave
+        válida no schema do `dbt_project.yml` (rejeitada por parsing
+        estrito em dbt-core moderno); `+meta` sob `models.<projeto>` é o
+        local suportado que ainda propaga pra todos os models do projeto.
+        """
         tabela = construir_tabela(colunas=[construir_coluna()])
         banco = construir_banco([tabela])
 
@@ -234,7 +240,7 @@ class TestFeliz:
         assert isinstance(resultado, Sucesso)
         projeto = yaml.safe_load((tmp_path / "dbt_project.yml").read_text())
         datetime.fromisoformat(
-            projeto["meta"]["generated_at"]
+            projeto["models"]["ddf_staging"]["+meta"]["generated_at"]
         )  # ValueError se malformado
 
     def test_readme_lista_escopos_e_tabelas_do_lote(
@@ -1083,10 +1089,11 @@ class TestFeliz:
     ) -> None:
         """A mesma entrada produz exatamente os mesmos artefatos em duas execuções.
 
-        `dbt_project.yml` é comparado à parte, excluindo `meta.generated_at` —
-        esse campo captura o momento da geração de propósito (issue #56), então
-        difere entre as duas execuções mesmo com entrada idêntica; o resto do
-        arquivo continua determinístico.
+        `dbt_project.yml` é comparado à parte, excluindo
+        `models.ddf_staging.+meta.generated_at` — esse campo captura o
+        momento da geração de propósito, então difere entre as duas
+        execuções mesmo com entrada idêntica; o resto do arquivo continua
+        determinístico.
         """
         coluna = construir_coluna(nome="id", metricas=[metrica_coluna_completa])
         tabela = construir_tabela(colunas=[coluna])
@@ -1110,9 +1117,9 @@ class TestFeliz:
 
         projeto_a = yaml.safe_load((destino_a / "dbt_project.yml").read_text())
         projeto_b = yaml.safe_load((destino_b / "dbt_project.yml").read_text())
-        assert "generated_at" in projeto_a["meta"]
-        del projeto_a["meta"]["generated_at"]
-        del projeto_b["meta"]["generated_at"]
+        assert "generated_at" in projeto_a["models"]["ddf_staging"]["+meta"]
+        del projeto_a["models"]["ddf_staging"]["+meta"]["generated_at"]
+        del projeto_b["models"]["ddf_staging"]["+meta"]["generated_at"]
         assert projeto_a == projeto_b
 
     def test_macro_matches_format_cobre_todos_os_formatos_do_detector(
