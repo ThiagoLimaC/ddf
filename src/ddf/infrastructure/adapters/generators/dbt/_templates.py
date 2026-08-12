@@ -33,6 +33,15 @@ _CONTEUDO_MATCHES_FORMAT: dict[str, str] = {
     nome: (_TEMPLATES_DIR / "macros" / "matches_format" / nome).read_text()
     for nome in _ARQUIVOS_MATCHES_FORMAT
 }
+_ARQUIVOS_CAST_TYPE = (
+    "cast_type.sql",
+    "postgres__cast_type.sql",
+    "mariadb__cast_type.sql",
+)
+_CONTEUDO_CAST_TYPE: dict[str, str] = {
+    nome: (_TEMPLATES_DIR / "macros" / "cast_type" / nome).read_text()
+    for nome in _ARQUIVOS_CAST_TYPE
+}
 _CONTEUDO_UNIQUE_PERCENTAGE_AT_LEAST = (
     _TEMPLATES_DIR / "macros" / "unique_percentage_at_least.sql"
 ).read_text()

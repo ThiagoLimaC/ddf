@@ -21,8 +21,13 @@ from ddf.domain.model.analysis import BancoAnalisado, MetricasBaseColuna, TipoDe
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.generators.comum._escrita import escrever_arquivo
-from ddf.infrastructure.adapters.generators.dbt._sql import _nome_model, _renderizar_sql
+from ddf.infrastructure.adapters.generators.dbt._sql import (
+    _nome_model,
+    _precisa_cast_type,
+    _renderizar_sql,
+)
 from ddf.infrastructure.adapters.generators.dbt._templates import (
+    _CONTEUDO_CAST_TYPE,
     _CONTEUDO_COMPOSITE_RELATIONSHIPS,
     _CONTEUDO_MATCHES_FORMAT,
     _CONTEUDO_UNIQUE_PERCENTAGE_AT_LEAST,
@@ -94,6 +99,7 @@ class GeradorDbt:
         presentes = {(tabela.nome_escopo, tabela.nome_tabela) for tabela in tabelas}
         tabelas_por_escopo = _agrupar_por_escopo(tabelas)
         usa_dbt_utils = _precisa_dbt_utils(tabelas)
+        usa_cast_type = _precisa_cast_type(tabelas)
         usa_matches_format = _precisa_matches_format(tabelas)
         usa_unique_percentage_at_least = _precisa_unique_percentage_at_least(tabelas)
         usa_composite_relationships = _precisa_composite_relationships(
@@ -122,6 +128,21 @@ class GeradorDbt:
                 return resultado_packages
         else:
             caminho_packages.unlink(missing_ok=True)
+
+        # macros/cast_type/: mesmo princípio de órfão condicional dos demais
+        # macros — só existe com consumidor real (coluna cujo tipo canônico
+        # exige tradução por adapter, ver _CATEGORIAS_DISPATCHADAS),
+        # removido explicitamente quando fica órfão.
+        pasta_cast_type = destino / "macros" / "cast_type"
+        if usa_cast_type:
+            for nome_arquivo, conteudo in _CONTEUDO_CAST_TYPE.items():
+                resultado_macro_cast = escrever_arquivo(
+                    pasta_cast_type / nome_arquivo, conteudo
+                )
+                if isinstance(resultado_macro_cast, Falha):
+                    return resultado_macro_cast
+        elif pasta_cast_type.exists():
+            shutil.rmtree(pasta_cast_type)
 
         # macros/matches_format/ e macros/unique_percentage_at_least.sql
         # seguem o mesmo princípio do packages.yml acima: só existem com

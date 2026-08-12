@@ -32,8 +32,8 @@ _ATRIBUTOS_PERMITIDOS: dict[CategoriaDeDado, set[str]] = {
     CategoriaDeDado.NUMERIC: {"precisao", "escala"},
     CategoriaDeDado.VARCHAR: {"tamanho_maximo"},
     CategoriaDeDado.CHAR: {"tamanho_fixo"},
-    CategoriaDeDado.TIMESTAMP: {"com_timezone"},
-    CategoriaDeDado.TIME: {"com_timezone"},
+    CategoriaDeDado.TIMESTAMP: {"com_timezone", "precisao_fracionaria"},
+    CategoriaDeDado.TIME: {"com_timezone", "precisao_fracionaria"},
     CategoriaDeDado.FLOAT: {"com_precisao_dupla"},
     CategoriaDeDado.ENUM: {"valores_permitidos"},
     CategoriaDeDado.SET: {"valores_permitidos"},
@@ -52,6 +52,7 @@ class TipoDeDado(BaseModel):
     tamanho_maximo: int | None = None
     tamanho_fixo: int | None = None
     com_timezone: bool | None = None
+    precisao_fracionaria: int | None = None
     com_precisao_dupla: bool | None = None
     valores_permitidos: tuple[str, ...] | None = None
     # Só a categoria do elemento (ARRAY) — sem precisão/tamanho do elemento
@@ -69,6 +70,7 @@ class TipoDeDado(BaseModel):
                 "tamanho_maximo",
                 "tamanho_fixo",
                 "com_timezone",
+                "precisao_fracionaria",
                 "com_precisao_dupla",
                 "valores_permitidos",
                 "elemento",

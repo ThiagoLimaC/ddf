@@ -32,6 +32,7 @@ def mapear_tipo_postgres(
     tamanho_maximo: int | None = None,
     precisao: int | None = None,
     escala: int | None = None,
+    precisao_fracionaria: int | None = None,
 ) -> TipoDeDado:
     """Mapeia um tipo de coluna do Postgres para TipoDeDado.
 
@@ -45,6 +46,8 @@ def mapear_tipo_postgres(
         tamanho_maximo: character_maximum_length, usado por VARCHAR/CHAR.
         precisao: numeric_precision, usado por NUMERIC.
         escala: numeric_scale, usado por NUMERIC.
+        precisao_fracionaria: datetime_precision, usado por
+            TIMESTAMP/TIME (dígitos de fração de segundo, 0-6).
 
     Returns:
         TipoDeDado mapeado. Para udt_name com prefixo "_", categoria é
@@ -67,13 +70,29 @@ def mapear_tipo_postgres(
             categoria=CategoriaDeDado.NUMERIC, precisao=precisao, escala=escala
         )
     if udt_name == "timestamp":
-        return TipoDeDado(categoria=CategoriaDeDado.TIMESTAMP, com_timezone=False)
+        return TipoDeDado(
+            categoria=CategoriaDeDado.TIMESTAMP,
+            com_timezone=False,
+            precisao_fracionaria=precisao_fracionaria,
+        )
     if udt_name == "timestamptz":
-        return TipoDeDado(categoria=CategoriaDeDado.TIMESTAMP, com_timezone=True)
+        return TipoDeDado(
+            categoria=CategoriaDeDado.TIMESTAMP,
+            com_timezone=True,
+            precisao_fracionaria=precisao_fracionaria,
+        )
     if udt_name == "time":
-        return TipoDeDado(categoria=CategoriaDeDado.TIME, com_timezone=False)
+        return TipoDeDado(
+            categoria=CategoriaDeDado.TIME,
+            com_timezone=False,
+            precisao_fracionaria=precisao_fracionaria,
+        )
     if udt_name == "timetz":
-        return TipoDeDado(categoria=CategoriaDeDado.TIME, com_timezone=True)
+        return TipoDeDado(
+            categoria=CategoriaDeDado.TIME,
+            com_timezone=True,
+            precisao_fracionaria=precisao_fracionaria,
+        )
     if udt_name == "float4":
         return TipoDeDado(categoria=CategoriaDeDado.FLOAT, com_precisao_dupla=False)
     if udt_name == "float8":

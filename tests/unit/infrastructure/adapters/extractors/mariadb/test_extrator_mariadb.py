@@ -145,10 +145,10 @@ class TestFeliz:
             *montar_metadados_side_effect(
                 tabela="pedidos",
                 colunas=[
-                    ("id", "int", "int(11)", None, None, None, "NO"),
-                    ("nome", "varchar", "varchar(100)", 100, None, None, "YES"),
-                    ("ativo", "tinyint", "tinyint(1)", None, None, None, "NO"),
-                    ("cliente_id", "int", "int(11)", None, None, None, "NO"),
+                    ("id", "int", "int(11)", None, None, None, None, "NO"),
+                    ("nome", "varchar", "varchar(100)", 100, None, None, None, "YES"),
+                    ("ativo", "tinyint", "tinyint(1)", None, None, None, None, "NO"),
+                    ("cliente_id", "int", "int(11)", None, None, None, None, "NO"),
                 ],
                 pks=["id"],
                 fks=[("cliente_id", "vendas", "clientes", "id", "fk_pedidos_cliente")],
@@ -207,7 +207,7 @@ class TestFeliz:
         cursor_fake.fetchall.side_effect = [
             *montar_metadados_side_effect(
                 tabela="grande",
-                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                colunas=[("id", "int", "int(11)", None, None, None, None, "NO")],
                 pks=["id"],
                 total_linhas=200_000,  # acima de 100_000
             ),
@@ -243,8 +243,8 @@ class TestFeliz:
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
             [
-                ("pedidos", "id", "int", "int(11)", None, None, None, "NO"),
-                ("clientes", "id", "int", "int(11)", None, None, None, "NO"),
+                ("pedidos", "id", "int", "int(11)", None, None, None, None, "NO"),
+                ("clientes", "id", "int", "int(11)", None, None, None, None, "NO"),
             ],  # colunas — as 2 tabelas do escopo, lidas de uma vez
             [("pedidos", "id"), ("clientes", "id")],  # PK
             [],  # FK
@@ -287,8 +287,8 @@ class TestFeliz:
             *montar_metadados_side_effect(
                 tabela="pedidos",
                 colunas=[
-                    ("id", "int", "int(11)", None, None, None, "NO"),
-                    ("dados", "longtext", "longtext", None, None, None, "YES"),
+                    ("id", "int", "int(11)", None, None, None, None, "NO"),
+                    ("dados", "longtext", "longtext", None, None, None, None, "YES"),
                 ],
                 pks=["id"],
                 check_clauses=["json_valid(`dados`)"],
@@ -321,6 +321,7 @@ class TestFeliz:
                         "ativo",
                         "tinyint",
                         "tinyint(1) unsigned",
+                        None,
                         None,
                         None,
                         None,
@@ -357,13 +358,24 @@ class TestFeliz:
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
             [
-                ("clientes", "email", "varchar", "varchar(255)", 255, None, None, "NO"),
+                (
+                    "clientes",
+                    "email",
+                    "varchar",
+                    "varchar(255)",
+                    255,
+                    None,
+                    None,
+                    None,
+                    "NO",
+                ),
                 (
                     "fornecedores",
                     "email",
                     "varchar",
                     "varchar(255)",
                     255,
+                    None,
                     None,
                     None,
                     "NO",
@@ -418,9 +430,20 @@ class TestFeliz:
                     None,
                     None,
                     None,
+                    None,
                     "YES",
                 ),
-                ("pedidos", "quantidade", "int", "int(11)", None, None, None, "NO"),
+                (
+                    "pedidos",
+                    "quantidade",
+                    "int",
+                    "int(11)",
+                    None,
+                    None,
+                    None,
+                    None,
+                    "NO",
+                ),
             ],  # colunas
             [],  # PK
             [],  # FK
@@ -472,7 +495,7 @@ class TestErro:
         cursor_fake.fetchall.side_effect = [
             *montar_metadados_side_effect(
                 tabela="grande",
-                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                colunas=[("id", "int", "int(11)", None, None, None, None, "NO")],
                 pks=["id"],
                 total_linhas=200_000,  # acima do limiar
             ),
@@ -606,7 +629,7 @@ class TestBorda:
         cursor_fake.fetchall.side_effect = [
             *montar_metadados_side_effect(
                 tabela="tabela",
-                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                colunas=[("id", "int", "int(11)", None, None, None, None, "NO")],
                 pks=["id"],
                 total_linhas=100_000,  # exatamente no limiar
             ),
@@ -666,7 +689,7 @@ class TestBorda:
             *montar_metadados_side_effect(
                 tabela="movimentos",
                 colunas=[
-                    ("entidade_id", "int", "int(11)", None, None, None, "YES"),
+                    ("entidade_id", "int", "int(11)", None, None, None, None, "YES"),
                 ],
                 fks=[
                     (
@@ -735,7 +758,7 @@ class TestBorda:
         cursor_fake.fetchall.side_effect = [
             *montar_metadados_side_effect(
                 tabela="tabela_nova",
-                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                colunas=[("id", "int", "int(11)", None, None, None, None, "NO")],
                 pks=["id"],
                 total_linhas=None,
             ),
@@ -762,7 +785,7 @@ class TestBorda:
         cursor_fake.fetchall.side_effect = [
             *montar_metadados_side_effect(
                 tabela="tabela_nova",
-                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                colunas=[("id", "int", "int(11)", None, None, None, None, "NO")],
                 pks=["id"],
                 total_linhas=10,
                 largura_media=None,
@@ -790,7 +813,7 @@ class TestBorda:
         cursor_fake.fetchall.side_effect = [
             *montar_metadados_side_effect(
                 tabela="tabela",
-                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                colunas=[("id", "int", "int(11)", None, None, None, None, "NO")],
                 pks=["id"],
                 total_linhas=10,
                 largura_media=84,
@@ -820,7 +843,7 @@ class TestBorda:
         cursor_fake.fetchall.side_effect = [
             *montar_metadados_side_effect(
                 tabela="tabela_recem_carregada",
-                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                colunas=[("id", "int", "int(11)", None, None, None, None, "NO")],
                 pks=["id"],
                 total_linhas=1,  # desatualizado
             ),
@@ -856,7 +879,7 @@ class TestBorda:
         cursor_fake.fetchall.side_effect = [
             *montar_metadados_side_effect(
                 tabela="tabela",
-                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                colunas=[("id", "int", "int(11)", None, None, None, None, "NO")],
                 pks=["id"],
                 total_linhas=3,  # de catálogo, desatualizado
             ),
@@ -896,7 +919,7 @@ class TestBorda:
         cursor_fake.fetchall.side_effect = [
             *montar_metadados_side_effect(
                 tabela="tabela",
-                colunas=[("id", "int", "int(11)", None, None, None, "NO")],
+                colunas=[("id", "int", "int(11)", None, None, None, None, "NO")],
                 pks=["id"],
                 total_linhas=100,
             ),
@@ -932,7 +955,7 @@ class TestBorda:
         cursor_fake.fetchall.side_effect = [
             *montar_metadados_side_effect(
                 tabela="tabela",
-                colunas=[("id", "bigint", "bigint(20)", None, None, None, "NO")],
+                colunas=[("id", "bigint", "bigint(20)", None, None, None, None, "NO")],
                 pks=["id"],
                 total_linhas=20,  # n_pedido pequeno (2), 3 linhas não é "gap denso"
             ),
@@ -974,7 +997,7 @@ class TestBorda:
         cursor_fake.fetchall.side_effect = [
             *montar_metadados_side_effect(
                 tabela="tabela_sem_pk",
-                colunas=[("valor", "int", "int(11)", None, None, None, "NO")],
+                colunas=[("valor", "int", "int(11)", None, None, None, None, "NO")],
                 total_linhas=1_000,
             ),
             [(1,), (2,)],  # amostra
@@ -1018,7 +1041,7 @@ class TestBorda:
         cursor_fake.fetchall.side_effect = [
             *montar_metadados_side_effect(
                 tabela="tabela",
-                colunas=[("id", "bigint", "bigint(20)", None, None, None, "NO")],
+                colunas=[("id", "bigint", "bigint(20)", None, None, None, None, "NO")],
                 pks=["id"],
                 total_linhas=1_000,
             ),
@@ -1050,7 +1073,16 @@ class TestBorda:
             *montar_metadados_side_effect(
                 tabela="contadores",
                 colunas=[
-                    ("contador", "tinyint", "tinyint(1)", None, None, None, "YES"),
+                    (
+                        "contador",
+                        "tinyint",
+                        "tinyint(1)",
+                        None,
+                        None,
+                        None,
+                        None,
+                        "YES",
+                    ),
                 ],
             ),
             [(0,), (1,), (2,)],  # amostra com valor atípico
@@ -1076,7 +1108,7 @@ class TestBorda:
             *montar_metadados_side_effect(
                 tabela="flags",
                 colunas=[
-                    ("ativo", "tinyint", "tinyint(1)", None, None, None, "YES"),
+                    ("ativo", "tinyint", "tinyint(1)", None, None, None, None, "YES"),
                 ],
             ),
             [],  # amostra vazia
@@ -1102,8 +1134,17 @@ class TestBorda:
             *montar_metadados_side_effect(
                 tabela="enderecos",
                 colunas=[
-                    ("codigo_pais", "varchar", "varchar(2)", 2, None, None, "NO"),
-                    ("codigo_local", "varchar", "varchar(10)", 10, None, None, "NO"),
+                    ("codigo_pais", "varchar", "varchar(2)", 2, None, None, None, "NO"),
+                    (
+                        "codigo_local",
+                        "varchar",
+                        "varchar(10)",
+                        10,
+                        None,
+                        None,
+                        None,
+                        "NO",
+                    ),
                 ],
                 unicas=[
                     ("uk_pais_local", "codigo_pais"),
@@ -1144,9 +1185,9 @@ class TestBorda:
             *montar_metadados_side_effect(
                 tabela="pedidos",
                 colunas=[
-                    ("pais_id", "int", "int(11)", None, None, None, "NO"),
-                    ("estado_id", "int", "int(11)", None, None, None, "NO"),
-                    ("cliente_id", "int", "int(11)", None, None, None, "NO"),
+                    ("pais_id", "int", "int(11)", None, None, None, None, "NO"),
+                    ("estado_id", "int", "int(11)", None, None, None, None, "NO"),
+                    ("cliente_id", "int", "int(11)", None, None, None, None, "NO"),
                 ],
                 fks=[
                     ("pais_id", "geografia", "estados", "pais_id", "fk_estado"),
@@ -1205,7 +1246,9 @@ class TestBorda:
         cursor_fake.fetchall.side_effect = [
             *montar_metadados_side_effect(
                 tabela="pedidos",
-                colunas=[("nome", "varchar", "varchar(50)", 50, None, None, "YES")],
+                colunas=[
+                    ("nome", "varchar", "varchar(50)", 50, None, None, None, "YES")
+                ],
                 check_clauses=["json_valid(`coluna_inexistente`)"],
             ),
             [],  # amostra
@@ -1254,7 +1297,7 @@ class TestBorda:
         respostas = iter(
             [
                 [
-                    ("pedidos", "id", "int", "int(11)", None, None, None, "NO")
+                    ("pedidos", "id", "int", "int(11)", None, None, None, None, "NO")
                 ],  # colunas
                 [("pedidos", "id")],  # PK
                 [],  # FK

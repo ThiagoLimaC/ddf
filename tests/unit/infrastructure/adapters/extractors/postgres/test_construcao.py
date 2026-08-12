@@ -46,8 +46,8 @@ class TestFeliz:
         """PK, FK simples, total_linhas e largura ficam sob a tabela certa."""
         metadados = montar_metadados_do_schema(
             linhas_colunas=[
-                ("pedidos", "id", "int4", None, None, None, "NO"),
-                ("pedidos", "cliente_id", "int4", None, None, None, "NO"),
+                ("pedidos", "id", "int4", None, None, None, None, "NO"),
+                ("pedidos", "cliente_id", "int4", None, None, None, None, "NO"),
             ],
             linhas_pks=[("pedidos", "id")],
             linhas_fks=[
@@ -128,8 +128,8 @@ class TestBorda:
         """Mesmo indexrelid com 2 colunas vira RestricaoUnica, não coluna única."""
         metadados = montar_metadados_do_schema(
             linhas_colunas=[
-                ("pedidos", "a", "int4", None, None, None, "NO"),
-                ("pedidos", "b", "int4", None, None, None, "NO"),
+                ("pedidos", "a", "int4", None, None, None, None, "NO"),
+                ("pedidos", "b", "int4", None, None, None, None, "NO"),
             ],
             linhas_pks=[],
             linhas_fks=[],
