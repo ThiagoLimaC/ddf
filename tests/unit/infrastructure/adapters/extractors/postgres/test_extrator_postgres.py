@@ -777,11 +777,11 @@ class TestBorda:
             dsn="postgresql://fake", configuracao=configuracao, max_conexoes=10
         )
 
-        thread_lenta = threading.Thread(target=extrator._obter_pool)
+        thread_lenta = threading.Thread(target=extrator._conexoes._obter_pool)
         thread_lenta.start()
         assert primeira_thread_entrou.wait(timeout=1) is True
 
-        resultado_concorrente = extrator._obter_pool()
+        resultado_concorrente = extrator._conexoes._obter_pool()
         pode_prosseguir.set()
         thread_lenta.join(timeout=1)
 
@@ -1114,12 +1114,16 @@ class TestBorda:
         thread_primeira.start()
         assert primeira_em_andamento.wait(timeout=1) is True
 
-        semaforo_livre_durante_a_primeira = extrator._semaforo.acquire(timeout=0.2)
+        semaforo_livre_durante_a_primeira = extrator._conexoes._semaforo.acquire(
+            timeout=0.2
+        )
         assert semaforo_livre_durante_a_primeira is False
 
         pode_liberar_primeira.set()
         thread_primeira.join(timeout=1)
 
-        semaforo_livre_apos_a_primeira = extrator._semaforo.acquire(timeout=1)
+        semaforo_livre_apos_a_primeira = extrator._conexoes._semaforo.acquire(
+            timeout=1
+        )
         assert semaforo_livre_apos_a_primeira is True
-        extrator._semaforo.release()
+        extrator._conexoes._semaforo.release()

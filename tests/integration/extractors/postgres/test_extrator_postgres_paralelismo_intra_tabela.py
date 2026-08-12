@@ -235,3 +235,45 @@ def test_leitura_paralela_preserva_consistencia_sob_escrita_concorrente(
             cursor.execute("SELECT MAX(versao) FROM public.tabela_grande")
             (versao_final,) = cursor.fetchone()
     assert versao_final > 1, "escrita concorrente não rodou — teste não provou nada"
+
+
+def test_max_conexoes_por_tabela_igual_a_max_conexoes_nao_trava(
+    dsn_tabela_grande: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """max_conexoes_por_tabela == max_conexoes não causa self-deadlock (issue #135).
+
+    Antes da correção, `_total_blocos` sondava via
+    `self._conexoes.conexao()` (acquire normal do semáforo) de dentro de
+    `_ler_tabela_em_paralelo` — chamado depois que `reservar()` já tinha
+    esgotado o semáforo inteiro nesse cenário (configuração explicitamente
+    permitida pelo construtor: "consumir o orçamento inteiro numa tabela é
+    uma escolha válida"). A extração travava pra sempre, esperando um
+    permit que só a própria thread, já bloqueada, poderia devolver. Roda a
+    extração numa thread separada com timeout — se o deadlock reaparecer,
+    o teste falha por timeout em vez de travar a suíte inteira.
+    """
+    monkeypatch.setattr(paralelismo, "_LIMIAR_LINHAS_PARALELISMO_INTRA_TABELA", 0)
+    monkeypatch.setattr(paralelismo, "_LIMIAR_BYTES_PARALELISMO_INTRA_TABELA", 0)
+    configuracao = ConfiguracaoDeExtracao(estrategia=TabelaInteira())
+    extrator = ExtratorPostgres(
+        dsn=dsn_tabela_grande,
+        configuracao=configuracao,
+        max_conexoes=4,
+        max_conexoes_por_tabela=4,
+    )
+    resultados: list[object] = []
+
+    def _extrair() -> None:
+        resultados.append(extrator.extrair_tabela("public", "tabela_grande"))
+
+    thread = threading.Thread(target=_extrair, daemon=True)
+    thread.start()
+    thread.join(timeout=15)
+
+    assert thread.is_alive() is False, (
+        "extrair_tabela travou (self-deadlock) com max_conexoes_por_tabela "
+        "== max_conexoes"
+    )
+    (resultado,) = resultados
+    assert isinstance(resultado, Sucesso)
+    assert resultado.valor.total_linhas == _N_LINHAS

@@ -2,26 +2,18 @@
 
 import logging
 import threading
-from collections import defaultdict
-from collections.abc import Generator
-from contextlib import contextmanager
 from typing import assert_never
 
 import connectorx as cx
 import polars as pl
-from psycopg2 import OperationalError, sql
-from psycopg2.extensions import connection as conexao_postgres
-from psycopg2.pool import ThreadedConnectionPool
+from psycopg2 import sql
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.model.common.requisicao_de_amostragem import (
     AmostragemIntegral,
     AmostragemProbabilistica,
-    RequisicaoDeAmostragem,
     RequisicaoPorFaixa,
 )
-from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
-from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
@@ -31,14 +23,8 @@ from ddf.infrastructure.adapters.extractors.comum.construir_colunas_fk import (
 from ddf.infrastructure.adapters.extractors.comum.construir_metadados_de_amostra import (  # noqa: E501
     construir_metadados_de_amostra,
 )
-from ddf.infrastructure.adapters.extractors.comum.construir_restricoes_fk_compostas import (  # noqa: E501
-    construir_restricoes_fk_compostas,
-)
 from ddf.infrastructure.adapters.extractors.comum.leitura_paralela_intra_tabela import (  # noqa: E501
-    MINIMO_CONEXOES_PARALELISMO,
     deve_paralelizar_leitura,
-    liberar_conexoes,
-    reservar_conexoes,
 )
 from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
     LARGURA_MEDIA_PADRAO_BYTES,
@@ -47,12 +33,18 @@ from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
     ler_amostra_em_lotes,
     ler_amostra_fetchall,
 )
-from ddf.infrastructure.adapters.extractors.comum.seed_efetivo import seed_efetivo
+from ddf.infrastructure.adapters.extractors.postgres._conexoes import (
+    TokenDeReserva,
+    _GerenciadorDeConexoesPostgres,
+)
 from ddf.infrastructure.adapters.extractors.postgres._construcao import (
     _construir_coluna,
     _LinhaColuna,
     _MetadadosDoSchema,
+    montar_consulta_amostra,
+    montar_metadados_do_schema,
     particoes_de_blocos,
+    query_particao_ctid,
 )
 from ddf.infrastructure.adapters.extractors.postgres._queries import (
     _CHAVES_ESTRANGEIRAS_SCHEMA_SQL,
@@ -123,7 +115,6 @@ class ExtratorPostgres:
                 "max_conexoes_por_tabela deve ser positivo e não exceder "
                 f"max_conexoes ({max_conexoes_por_tabela} vs. {max_conexoes})."
             )
-        self._dsn = dsn
         # connectorx abre suas próprias conexões, fora do ThreadedConnectionPool
         # — connect_timeout só chega até elas se estiver embutido na DSN.
         # `dsn` já vem em formato URI (montada pelo wizard, `postgresql://...`,
@@ -131,106 +122,16 @@ class ExtratorPostgres:
         separador = "&" if "?" in dsn else "?"
         self._dsn_connectorx = f"{dsn}{separador}connect_timeout={connect_timeout}"
         self._configuracao = configuracao
-        self._max_conexoes = max_conexoes
-        self._connect_timeout = connect_timeout
         self._max_conexoes_por_tabela = max_conexoes_por_tabela
-        self._pool: ThreadedConnectionPool | None = None
-        self._semaforo = threading.Semaphore(max_conexoes)
-        self._lock_pool = threading.Lock()
+        self._conexoes = _GerenciadorDeConexoesPostgres(
+            dsn, max_conexoes, connect_timeout
+        )
         self._cache_schemas: dict[str, _MetadadosDoSchema] = {}
         self._lock_cache_schemas = threading.Lock()
-        self._lock_reserva_paralelismo = threading.Lock()
-
-    def _obter_pool(self) -> Resultado[ThreadedConnectionPool]:
-        """Cria o pool sob demanda, pra falha de conexão virar Falha, não exceção."""
-        if self._pool is None:
-            with self._lock_pool:
-                if self._pool is None:
-                    try:
-                        self._pool = ThreadedConnectionPool(
-                            minconn=1,
-                            maxconn=self._max_conexoes,
-                            dsn=self._dsn,
-                            connect_timeout=self._connect_timeout,
-                        )
-                    except OperationalError as erro:
-                        return Falha(f"Não foi possível conectar: {erro}")
-        return Sucesso(self._pool)
-
-    @contextmanager
-    def _conexao(
-        self, autocommit: bool = True
-    ) -> Generator[Resultado[conexao_postgres], None, None]:
-        """Empresta uma conexão do pool, sob o semáforo, com release garantido.
-
-        `yield`a um `Falha` cedo, sem entrar no bloco `try`/`finally` de
-        conexão, quando o próprio pool não pode ser obtido ou o
-        `getconn()` falha — nesses casos não há conexão nem posse do
-        semáforo a devolver. Quando a conexão é obtida com sucesso, o
-        `finally` garante `putconn` + liberação do semáforo mesmo se o
-        corpo do `with` levantar uma exceção não tratada.
-
-        Args:
-            autocommit: `False` sustenta uma transação aberta na conexão
-                emprestada — obrigatório para cursor nomeado (streaming).
-                Quem pede `autocommit=False` é responsável por chamar
-                `conexao.commit()` no caminho de sucesso, antes do `with`
-                terminar; no caminho de erro, o `rollback()` automático do
-                `ThreadedConnectionPool.putconn` cobre a limpeza — sem
-                vazamento de estado entre quem pegar a conexão emprestada
-                depois, só a duração da transação fica maior enquanto
-                durar o streaming.
-        """
-        resultado_pool = self._obter_pool()
-        if isinstance(resultado_pool, Falha):
-            yield resultado_pool
-            return
-        pool = resultado_pool.valor
-        self._semaforo.acquire()
-        try:
-            conexao = pool.getconn()
-        except OperationalError as erro:
-            self._semaforo.release()
-            yield Falha(f"Não foi possível conectar: {erro}")
-            return
-        try:
-            conexao.autocommit = autocommit
-            yield Sucesso(conexao)
-        finally:
-            pool.putconn(conexao)
-            self._semaforo.release()
-
-    @contextmanager
-    def _conexao_ja_reservada(
-        self, autocommit: bool = True
-    ) -> Generator[Resultado[conexao_postgres], None, None]:
-        """Empresta uma conexão do pool sem tocar no semáforo.
-
-        Uso restrito à leitura paralela intra-tabela: o orçamento de
-        conexões já foi reservado antes (via `reservar_conexoes`), fora
-        deste método — adquirir o semáforo de novo aqui dessincronizaria a
-        contagem do quanto está realmente em uso. Mesmo formato de
-        `_conexao`, só sem o `acquire`/`release`.
-        """
-        resultado_pool = self._obter_pool()
-        if isinstance(resultado_pool, Falha):
-            yield resultado_pool
-            return
-        pool = resultado_pool.valor
-        try:
-            conexao = pool.getconn()
-        except OperationalError as erro:
-            yield Falha(f"Não foi possível conectar: {erro}")
-            return
-        try:
-            conexao.autocommit = autocommit
-            yield Sucesso(conexao)
-        finally:
-            pool.putconn(conexao)
 
     def listar_escopos(self) -> Resultado[list[str]]:
         """Lista os escopos (schemas) disponíveis, ordenados por nome."""
-        with self._conexao() as resultado_conexao:
+        with self._conexoes.conexao() as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
             conexao = resultado_conexao.valor
@@ -244,7 +145,7 @@ class ExtratorPostgres:
 
     def listar_tabelas(self, schema: str) -> Resultado[list[tuple[str, str]]]:
         """Lista (schema, nome_tabela) do schema informado, ordenado por nome_tabela."""
-        with self._conexao() as resultado_conexao:
+        with self._conexoes.conexao() as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
             conexao = resultado_conexao.valor
@@ -275,98 +176,37 @@ class ExtratorPostgres:
             if metadados is not None:
                 return Sucesso(metadados)
 
-            with self._conexao() as resultado_conexao:
+            with self._conexoes.conexao() as resultado_conexao:
                 if isinstance(resultado_conexao, Falha):
                     return resultado_conexao
                 conexao = resultado_conexao.valor
                 with conexao.cursor() as cursor:
                     cursor.execute(_COLUNAS_SCHEMA_SQL, (schema,))
-                    colunas_por_tabela: dict[str, list[_LinhaColuna]] = defaultdict(
-                        list
-                    )
-                    for linha_bruta in cursor.fetchall():
-                        nome_tabela, *resto_colunas = linha_bruta
-                        colunas_por_tabela[nome_tabela].append(
-                            _LinhaColuna(*resto_colunas)
-                        )
-
+                    linhas_colunas = cursor.fetchall()
                     cursor.execute(_CHAVES_PRIMARIAS_SCHEMA_SQL, (schema,))
-                    pks_por_tabela: dict[str, set[str]] = defaultdict(set)
-                    for nome_tabela, nome_coluna_pk in cursor.fetchall():
-                        pks_por_tabela[nome_tabela].add(nome_coluna_pk)
-
+                    linhas_pks = cursor.fetchall()
                     cursor.execute(_CHAVES_ESTRANGEIRAS_SCHEMA_SQL, (schema,))
-                    fks_por_tabela: dict[str, list[tuple[str, str, str, str, str]]] = (
-                        defaultdict(list)
-                    )
-                    for linha_fk in cursor.fetchall():
-                        nome_tabela, *resto_fk = linha_fk
-                        fks_por_tabela[nome_tabela].append(tuple(resto_fk))
-
-                    restricoes_fk_compostas_por_tabela: dict[
-                        str, list[RestricaoDeFkComposta]
-                    ] = {
-                        nome_tabela: construir_restricoes_fk_compostas(linhas)
-                        for nome_tabela, linhas in fks_por_tabela.items()
-                    }
-
+                    linhas_fks = cursor.fetchall()
                     cursor.execute(_RESTRICOES_UNICAS_SCHEMA_SQL, (schema,))
-                    grupos_unicos: dict[str, dict[int, list[str]]] = defaultdict(
-                        lambda: defaultdict(list)
-                    )
-                    for nome_tabela, indexrelid, nome_coluna in cursor.fetchall():
-                        grupos_unicos[nome_tabela][indexrelid].append(nome_coluna)
-
-                    unicas_por_tabela: dict[str, set[str]] = defaultdict(set)
-                    restricoes_unicas_por_tabela: dict[str, list[RestricaoUnica]] = (
-                        defaultdict(list)
-                    )
-                    for nome_tabela, indices in grupos_unicos.items():
-                        for colunas_do_indice in indices.values():
-                            if len(colunas_do_indice) == 1:
-                                unicas_por_tabela[nome_tabela].add(colunas_do_indice[0])
-                            else:
-                                restricoes_unicas_por_tabela[nome_tabela].append(
-                                    RestricaoUnica(colunas=tuple(colunas_do_indice))
-                                )
-
+                    linhas_unicas = cursor.fetchall()
                     cursor.execute(_TOTAL_LINHAS_SCHEMA_SQL, (schema,))
-                    total_linhas_por_tabela: dict[str, int] = {}
-                    for nome_tabela, linhas_estimadas in cursor.fetchall():
-                        total_linhas_por_tabela[nome_tabela] = max(
-                            0, round(linhas_estimadas)
-                        )
-
+                    linhas_total_linhas = cursor.fetchall()
                     cursor.execute(_LARGURA_MEDIA_LINHA_SCHEMA_SQL, (schema,))
-                    largura_media_por_tabela: dict[str, int] = {}
-                    for nome_tabela, soma_avg_width in cursor.fetchall():
-                        largura_media_por_tabela[nome_tabela] = (
-                            int(soma_avg_width)
-                            if soma_avg_width
-                            else LARGURA_MEDIA_PADRAO_BYTES
-                        )
-
+                    linhas_largura_media = cursor.fetchall()
                     cursor.execute(_COLUNAS_COMPRIMIVEIS_SCHEMA_SQL, (schema,))
-                    tabelas_com_coluna_comprimivel = frozenset(
-                        nome_tabela for (nome_tabela,) in cursor.fetchall()
-                    )
-
+                    linhas_comprimiveis = cursor.fetchall()
                     cursor.execute(_TABELAS_PARTICIONADAS_SCHEMA_SQL, (schema,))
-                    tabelas_particionadas = frozenset(
-                        nome_tabela for (nome_tabela,) in cursor.fetchall()
-                    )
+                    linhas_particionadas = cursor.fetchall()
 
-            metadados = _MetadadosDoSchema(
-                colunas_por_tabela=dict(colunas_por_tabela),
-                pks_por_tabela=dict(pks_por_tabela),
-                fks_por_tabela=dict(fks_por_tabela),
-                unicas_por_tabela=dict(unicas_por_tabela),
-                restricoes_unicas_por_tabela=dict(restricoes_unicas_por_tabela),
-                restricoes_fk_compostas_por_tabela=restricoes_fk_compostas_por_tabela,
-                total_linhas_por_tabela=total_linhas_por_tabela,
-                largura_media_por_tabela=largura_media_por_tabela,
-                tabelas_com_coluna_comprimivel=tabelas_com_coluna_comprimivel,
-                tabelas_particionadas=tabelas_particionadas,
+            metadados = montar_metadados_do_schema(
+                linhas_colunas,
+                linhas_pks,
+                linhas_fks,
+                linhas_unicas,
+                linhas_total_linhas,
+                linhas_largura_media,
+                linhas_comprimiveis,
+                linhas_particionadas,
             )
             self._cache_schemas[schema] = metadados
             return Sucesso(metadados)
@@ -391,7 +231,7 @@ class ExtratorPostgres:
             100.0,
             max(0.01, (_LINHAS_AMOSTRA_LARGURA_REAL / total_linhas) * 100),
         )
-        with self._conexao() as resultado_conexao:
+        with self._conexoes.conexao() as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
             conexao = resultado_conexao.valor
@@ -429,7 +269,7 @@ class ExtratorPostgres:
         como elegível — não faz parte do round-trip de metadados por
         schema, que roda uma vez só e cobre todas as tabelas de uma vez.
         """
-        with self._conexao() as resultado_conexao:
+        with self._conexoes.conexao() as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
             conexao = resultado_conexao.valor
@@ -439,38 +279,12 @@ class ExtratorPostgres:
         total_blocos = int(linha[0]) if linha and linha[0] is not None else 0
         return Sucesso(total_blocos)
 
-    def _query_particao_ctid(
-        self,
-        conexao: conexao_postgres,
-        schema: str,
-        tabela: str,
-        inicio: int,
-        fim: int | None,
-    ) -> str:
-        """Monta o texto SQL de uma faixa de `ctid`, com quoting seguro.
-
-        `connectorx` recebe uma lista de strings SQL prontas (modo de
-        particionamento manual), não um cursor — por isso a query é
-        renderizada aqui via `sql.Composed.as_string`, em vez de executada
-        diretamente como nos outros métodos deste Adapter.
-        """
-        condicao = sql.SQL("ctid >= {}::tid").format(sql.Literal(f"({inicio},0)"))
-        if fim is not None:
-            condicao = sql.SQL("{} AND ctid < {}::tid").format(
-                condicao, sql.Literal(f"({fim},0)")
-            )
-        consulta = sql.SQL("SELECT * FROM {}.{} WHERE {}").format(
-            sql.Identifier(schema), sql.Identifier(tabela), condicao
-        )
-        return consulta.as_string(conexao)
-
     def _ler_tabela_em_paralelo(
         self,
         schema: str,
         tabela: str,
-        n: int,
-        total_linhas: int,
-        largura_media_bytes: int,
+        token: TokenDeReserva,
+        total_blocos: int,
     ) -> Resultado[pl.DataFrame]:
         """Lê a tabela inteira via `connectorx`, uma faixa de `ctid` por conexão.
 
@@ -489,18 +303,17 @@ class ExtratorPostgres:
         `pre_execution_query` (`SET TRANSACTION SNAPSHOT`). Preserva a
         mesma consistência entre faixas que o desenho anterior garantia.
 
-        `n` é o total de permits reservados do semáforo — a conexão líder
-        consome 1 deles (via `_conexao_ja_reservada`, que empresta do pool
-        sem tocar o semáforo de novo, assumindo que esse permit já está
-        contado aqui). Os `n - 1` restantes vão pro `connectorx`, senão o
-        uso real de conexões (`n` faixas + 1 líder) excederia o orçamento
-        que `reservar_conexoes` efetivamente reservou.
+        `token.n` é o total de permits reservados do semáforo (via
+        `self._conexoes.reservar`) — a conexão líder consome 1 deles (via
+        `self._conexoes.conexao_ja_reservada(token, ...)`, que empresta do
+        pool sem tocar o semáforo de novo, assumindo que esse permit já
+        está contado aqui). Os `token.n - 1` restantes vão pro `connectorx`,
+        senão o uso real de conexões (`token.n` faixas + 1 líder) excederia
+        o orçamento que a reserva efetivamente concedeu. `total_blocos` já
+        vem sondado por `extrair_tabela` **antes** da reserva — ver
+        docstring de lá sobre o self-deadlock que isso evita (issue #135).
         """
-        n_faixas = n - 1
-        resultado_blocos = self._total_blocos(schema, tabela)
-        if isinstance(resultado_blocos, Falha):
-            return resultado_blocos
-        total_blocos = resultado_blocos.valor
+        n_faixas = token.n - 1
         faixas = particoes_de_blocos(total_blocos, n_faixas)
         _logger.info(
             "'%s.%s': dividindo em %d faixas de blocos (%d blocos no "
@@ -517,7 +330,9 @@ class ExtratorPostgres:
             total_blocos // n_faixas if n_faixas else total_blocos,
         )
 
-        with self._conexao_ja_reservada(autocommit=False) as resultado_lider:
+        with self._conexoes.conexao_ja_reservada(
+            token, autocommit=False
+        ) as resultado_lider:
             if isinstance(resultado_lider, Falha):
                 return resultado_lider
             conexao_lider = resultado_lider.valor
@@ -532,9 +347,7 @@ class ExtratorPostgres:
                     snapshot_id = str(linha_snapshot[0])
 
                 queries = [
-                    self._query_particao_ctid(
-                        conexao_lider, schema, tabela, inicio, fim
-                    )
+                    query_particao_ctid(conexao_lider, schema, tabela, inicio, fim)
                     for inicio, fim in faixas
                 ]
                 try:
@@ -625,28 +438,43 @@ class ExtratorPostgres:
             and isinstance(requisicao, AmostragemIntegral)
             and deve_paralelizar_leitura(total_linhas, largura_media_bytes)
         )
-        n_reservado = 0
+        # Sonda total_blocos ANTES de reservar, de propósito: _total_blocos usa
+        # self._conexoes.conexao() (acquire normal do semáforo) — chamada de
+        # dentro da janela já reservada por self._conexoes.reservar() causaria
+        # self-deadlock quando max_conexoes_por_tabela == max_conexoes (a
+        # reserva esgota o semáforo inteiro, e a sonda ficaria esperando um
+        # permit que só a própria thread, já travada, poderia devolver) —
+        # mesmo padrão já usado no MariaDB pra _dominio_de_pk. Falha na sonda
+        # cai pro caminho sequencial, silenciosamente — mesmo tratamento que
+        # o MariaDB já dá pra _dominio_de_pk falho, não é uma falha "de
+        # leitura paralela em si" que mereça Aviso pro usuário.
+        total_blocos: int | None = None
         if elegivel_paralelo:
-            n_reservado = reservar_conexoes(
-                self._semaforo,
-                self._lock_reserva_paralelismo,
-                self._max_conexoes_por_tabela,
-            )
-        if n_reservado >= MINIMO_CONEXOES_PARALELISMO:
+            resultado_blocos = self._total_blocos(schema, tabela)
+            if isinstance(resultado_blocos, Sucesso):
+                total_blocos = resultado_blocos.valor
+            else:
+                elegivel_paralelo = False
+
+        token_reserva: TokenDeReserva | None = None
+        if elegivel_paralelo:
+            token_reserva = self._conexoes.reservar(self._max_conexoes_por_tabela)
+        if token_reserva is not None:
+            assert total_blocos is not None
             _logger.info(
                 "'%s.%s': paralelismo intra-tabela ativado (~%d linhas, "
                 "%d conexões).",
                 schema,
                 tabela,
                 total_linhas,
-                n_reservado,
+                token_reserva.n,
             )
             try:
                 resultado_leitura = self._ler_tabela_em_paralelo(
-                    schema, tabela, n_reservado, total_linhas, largura_media_bytes
+                    schema, tabela, token_reserva, total_blocos
                 )
             finally:
-                liberar_conexoes(self._semaforo, n_reservado)
+                self._conexoes.liberar(token_reserva)
             if isinstance(resultado_leitura, Falha):
                 # connectorx pode crashar em casos conhecidos (ex.: NUMERIC
                 # sem precisão/escala fixa) — cair pro caminho sequencial
@@ -706,47 +534,13 @@ class ExtratorPostgres:
                 total_linhas,
                 largura_media_bytes,
             )
-        with self._conexao(autocommit=not usa_streaming) as resultado_conexao:
+        with self._conexoes.conexao(autocommit=not usa_streaming) as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
                 return resultado_conexao
             conexao = resultado_conexao.valor
-            requisicao_efetiva: RequisicaoDeAmostragem
-            match requisicao:
-                case AmostragemProbabilistica(percentual=percentual, seed=seed):
-                    seed_usado = seed_efetivo(seed)
-                    requisicao_efetiva = AmostragemProbabilistica(
-                        percentual=percentual, seed=seed_usado
-                    )
-                    consulta_amostra = sql.SQL(
-                        "SELECT * FROM {}.{} TABLESAMPLE BERNOULLI ({}) "
-                        "REPEATABLE ({})"
-                    ).format(
-                        sql.Identifier(schema),
-                        sql.Identifier(tabela),
-                        sql.Literal(percentual),
-                        sql.Literal(seed_usado),
-                    )
-                case AmostragemIntegral():
-                    requisicao_efetiva = requisicao
-                    consulta_amostra = sql.SQL("SELECT * FROM {}.{}").format(
-                        sql.Identifier(schema), sql.Identifier(tabela)
-                    )
-                case RequisicaoPorFaixa(percentual=percentual, seed=seed):
-                    seed_usado = seed_efetivo(seed)
-                    requisicao_efetiva = RequisicaoPorFaixa(
-                        percentual=percentual, seed=seed_usado
-                    )
-                    consulta_amostra = sql.SQL(
-                        "SELECT * FROM {}.{} TABLESAMPLE SYSTEM ({}) "
-                        "REPEATABLE ({})"
-                    ).format(
-                        sql.Identifier(schema),
-                        sql.Identifier(tabela),
-                        sql.Literal(percentual),
-                        sql.Literal(seed_usado),
-                    )
-                case _ as nunca:
-                    assert_never(nunca)
+            consulta_amostra, requisicao_efetiva = montar_consulta_amostra(
+                schema, tabela, requisicao
+            )
 
             if usa_streaming:
                 tamanho_lote = calcular_tamanho_lote(largura_media_bytes)

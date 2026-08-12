@@ -1,11 +1,28 @@
 """Construção de ColunaExtraida a partir de metadados de catálogo do Postgres."""
 
-from typing import NamedTuple
+from collections import defaultdict
+from typing import Any, NamedTuple, assert_never
+
+from psycopg2 import sql
+from psycopg2.extensions import connection as conexao_postgres
 
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
+from ddf.domain.model.common.requisicao_de_amostragem import (
+    AmostragemIntegral,
+    AmostragemProbabilistica,
+    RequisicaoDeAmostragem,
+    RequisicaoPorFaixa,
+)
 from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.domain.model.common.restricao_unica import RestricaoUnica
 from ddf.domain.model.extraction import ColunaExtraida
+from ddf.infrastructure.adapters.extractors.comum.construir_restricoes_fk_compostas import (  # noqa: E501
+    construir_restricoes_fk_compostas,
+)
+from ddf.infrastructure.adapters.extractors.comum.ler_amostra_em_lotes import (
+    LARGURA_MEDIA_PADRAO_BYTES,
+)
+from ddf.infrastructure.adapters.extractors.comum.seed_efetivo import seed_efetivo
 from ddf.infrastructure.adapters.extractors.postgres.mapeamento_de_tipos import (
     mapear_tipo_postgres,
 )
@@ -117,3 +134,166 @@ def particoes_de_blocos(total_blocos: int, n: int) -> list[tuple[int, int | None
             faixas.append((inicio, fim))
             inicio = fim
     return faixas
+
+
+def montar_metadados_do_schema(
+    linhas_colunas: list[tuple[Any, ...]],
+    linhas_pks: list[tuple[Any, ...]],
+    linhas_fks: list[tuple[Any, ...]],
+    linhas_unicas: list[tuple[Any, ...]],
+    linhas_total_linhas: list[tuple[Any, ...]],
+    linhas_largura_media: list[tuple[Any, ...]],
+    linhas_comprimiveis: list[tuple[Any, ...]],
+    linhas_particionadas: list[tuple[Any, ...]],
+) -> _MetadadosDoSchema:
+    """Agrupa as 8 linhas cruas de `cursor.fetchall()` em `_MetadadosDoSchema`.
+
+    Cada parâmetro `linhas_*` é a saída bruta de uma das 8 queries de
+    `_obter_metadados_schema`, na ordem em que são executadas — esta função
+    só agrupa por tabela e monta os `dict`/`frozenset` finais, sem tocar
+    conexão/cursor. `linhas_unicas` guarda `(nome_tabela, indexrelid,
+    nome_coluna)`: um índice único pode cobrir mais de uma coluna, por isso
+    o agrupamento intermediário por `indexrelid` antes de decidir se vira
+    `unicas_por_tabela` (1 coluna) ou `restricoes_unicas_por_tabela` (2+).
+    """
+    colunas_por_tabela: dict[str, list[_LinhaColuna]] = defaultdict(list)
+    for linha_bruta in linhas_colunas:
+        nome_tabela, *resto_colunas = linha_bruta
+        colunas_por_tabela[nome_tabela].append(_LinhaColuna(*resto_colunas))
+
+    pks_por_tabela: dict[str, set[str]] = defaultdict(set)
+    for nome_tabela, nome_coluna_pk in linhas_pks:
+        pks_por_tabela[nome_tabela].add(nome_coluna_pk)
+
+    fks_por_tabela: dict[str, list[tuple[str, str, str, str, str]]] = defaultdict(list)
+    for linha_fk in linhas_fks:
+        nome_tabela, *resto_fk = linha_fk
+        fks_por_tabela[nome_tabela].append(tuple(resto_fk))
+
+    restricoes_fk_compostas_por_tabela: dict[str, list[RestricaoDeFkComposta]] = {
+        nome_tabela: construir_restricoes_fk_compostas(linhas)
+        for nome_tabela, linhas in fks_por_tabela.items()
+    }
+
+    grupos_unicos: dict[str, dict[int, list[str]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for nome_tabela, indexrelid, nome_coluna in linhas_unicas:
+        grupos_unicos[nome_tabela][indexrelid].append(nome_coluna)
+
+    unicas_por_tabela: dict[str, set[str]] = defaultdict(set)
+    restricoes_unicas_por_tabela: dict[str, list[RestricaoUnica]] = defaultdict(list)
+    for nome_tabela, indices in grupos_unicos.items():
+        for colunas_do_indice in indices.values():
+            if len(colunas_do_indice) == 1:
+                unicas_por_tabela[nome_tabela].add(colunas_do_indice[0])
+            else:
+                restricoes_unicas_por_tabela[nome_tabela].append(
+                    RestricaoUnica(colunas=tuple(colunas_do_indice))
+                )
+
+    total_linhas_por_tabela: dict[str, int] = {}
+    for nome_tabela, linhas_estimadas in linhas_total_linhas:
+        total_linhas_por_tabela[nome_tabela] = max(0, round(linhas_estimadas))
+
+    largura_media_por_tabela: dict[str, int] = {}
+    for nome_tabela, soma_avg_width in linhas_largura_media:
+        largura_media_por_tabela[nome_tabela] = (
+            int(soma_avg_width) if soma_avg_width else LARGURA_MEDIA_PADRAO_BYTES
+        )
+
+    tabelas_com_coluna_comprimivel = frozenset(
+        nome_tabela for (nome_tabela,) in linhas_comprimiveis
+    )
+    tabelas_particionadas = frozenset(
+        nome_tabela for (nome_tabela,) in linhas_particionadas
+    )
+
+    return _MetadadosDoSchema(
+        colunas_por_tabela=dict(colunas_por_tabela),
+        pks_por_tabela=dict(pks_por_tabela),
+        fks_por_tabela=dict(fks_por_tabela),
+        unicas_por_tabela=dict(unicas_por_tabela),
+        restricoes_unicas_por_tabela=dict(restricoes_unicas_por_tabela),
+        restricoes_fk_compostas_por_tabela=restricoes_fk_compostas_por_tabela,
+        total_linhas_por_tabela=total_linhas_por_tabela,
+        largura_media_por_tabela=largura_media_por_tabela,
+        tabelas_com_coluna_comprimivel=tabelas_com_coluna_comprimivel,
+        tabelas_particionadas=tabelas_particionadas,
+    )
+
+
+def montar_consulta_amostra(
+    schema: str, tabela: str, requisicao: RequisicaoDeAmostragem
+) -> tuple[sql.Composed, RequisicaoDeAmostragem]:
+    """Monta a query `SELECT` de amostra pro dialeto Postgres, por estratégia.
+
+    `requisicao_efetiva` (2º item da tupla) é a mesma requisição recebida,
+    exceto pra `AmostragemProbabilistica`/`RequisicaoPorFaixa` sem `seed`
+    explícito: `seed_efetivo` sorteia um e ele precisa ser devolvido pra
+    `extrair_tabela` registrar o seed realmente usado nos metadados da
+    amostra (reprodutibilidade), não só na query executada.
+    """
+    requisicao_efetiva: RequisicaoDeAmostragem
+    consulta: sql.Composed
+    match requisicao:
+        case AmostragemProbabilistica(percentual=percentual, seed=seed):
+            seed_usado = seed_efetivo(seed)
+            requisicao_efetiva = AmostragemProbabilistica(
+                percentual=percentual, seed=seed_usado
+            )
+            consulta = sql.SQL(
+                "SELECT * FROM {}.{} TABLESAMPLE BERNOULLI ({}) REPEATABLE ({})"
+            ).format(
+                sql.Identifier(schema),
+                sql.Identifier(tabela),
+                sql.Literal(percentual),
+                sql.Literal(seed_usado),
+            )
+        case AmostragemIntegral():
+            requisicao_efetiva = requisicao
+            consulta = sql.SQL("SELECT * FROM {}.{}").format(
+                sql.Identifier(schema), sql.Identifier(tabela)
+            )
+        case RequisicaoPorFaixa(percentual=percentual, seed=seed):
+            seed_usado = seed_efetivo(seed)
+            requisicao_efetiva = RequisicaoPorFaixa(
+                percentual=percentual, seed=seed_usado
+            )
+            consulta = sql.SQL(
+                "SELECT * FROM {}.{} TABLESAMPLE SYSTEM ({}) REPEATABLE ({})"
+            ).format(
+                sql.Identifier(schema),
+                sql.Identifier(tabela),
+                sql.Literal(percentual),
+                sql.Literal(seed_usado),
+            )
+        case _ as nunca:
+            assert_never(nunca)
+    return consulta, requisicao_efetiva
+
+
+def query_particao_ctid(
+    conexao: conexao_postgres,
+    schema: str,
+    tabela: str,
+    inicio: int,
+    fim: int | None,
+) -> str:
+    """Monta o texto SQL de uma faixa de `ctid`, com quoting seguro.
+
+    `connectorx` recebe uma lista de strings SQL prontas (modo de
+    particionamento manual), não um cursor — por isso a query é renderizada
+    aqui via `sql.Composed.as_string`, em vez de executada diretamente.
+    `conexao` não é state do Extrator: é só o contexto de quoting que
+    `as_string` exige (encoding/tipo de escape do driver).
+    """
+    condicao = sql.SQL("ctid >= {}::tid").format(sql.Literal(f"({inicio},0)"))
+    if fim is not None:
+        condicao = sql.SQL("{} AND ctid < {}::tid").format(
+            condicao, sql.Literal(f"({fim},0)")
+        )
+    consulta = sql.SQL("SELECT * FROM {}.{} WHERE {}").format(
+        sql.Identifier(schema), sql.Identifier(tabela), condicao
+    )
+    return consulta.as_string(conexao)
