@@ -162,6 +162,30 @@ class TestFeliz:
         assert isinstance(metrica_confianca, MetricasDeConfianca)
         assert metrica_confianca.nivel == NivelDeConfianca.ALTA
 
+    def test_amostra_grande_relativa_a_tabela_pequena_tem_confianca_alta(
+        self,
+        tipo_integer: TipoDeDado,
+        construir_contexto: Callable[[list[TabelaCurada]], ContextoDeAnalise],
+    ) -> None:
+        """n=1.000, N=1.000.000 tem margem de erro ~3,1pp -> ALTA."""
+        tabela = _tabela_curada_com_amostra(
+            "clientes",
+            colunas=[ColunaCurada(nome="id", tipo_dado=tipo_integer)],
+            tamanho_amostra=1_000,
+            total_linhas=1_000_000,
+        )
+        contexto = construir_contexto([tabela])
+        contexto.analisado.tabelas[0].colunas[0].metricas.append(
+            _metrica(percentual_nulo=0.0)
+        )
+
+        resultado = AnalisadorDeMetricasDeTabela()(contexto)
+
+        assert isinstance(resultado, Sucesso)
+        metrica_confianca = resultado.valor.analisado.tabelas[0].metricas[1]
+        assert isinstance(metrica_confianca, MetricasDeConfianca)
+        assert metrica_confianca.nivel == NivelDeConfianca.ALTA
+
 
 class TestErro:
     """Erro esperado."""
