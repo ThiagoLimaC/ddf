@@ -260,9 +260,9 @@ def montar_consulta_amostra(
 
     `requisicao_efetiva` (2º item da tupla) é a mesma requisição recebida,
     exceto pra `AmostragemProbabilistica`/`RequisicaoPorFaixa` sem `seed`
-    explícito: `seed_efetivo` sorteia um e ele precisa ser devolvido pra
-    `extrair_tabela` registrar o seed realmente usado nos metadados da
-    amostra (reprodutibilidade), não só na query executada.
+    explícito: `seed_efetivo` preenche com o default e ele precisa ser
+    devolvido pra `extrair_tabela` registrar o seed realmente usado nos
+    metadados da amostra (reprodutibilidade), não só na query executada.
     """
     requisicao_efetiva: RequisicaoDeAmostragem
     consulta: sql.Composed

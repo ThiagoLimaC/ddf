@@ -6,14 +6,16 @@ from typing import Any
 
 import pytest
 
-from ddf.domain.model.curation import BancoCurado
+from ddf.domain.model.curation import BancoCurado, TabelaCurada
 from ddf.domain.model.extraction import TabelaExtraida
+from ddf.domain.ports.extrator import Extrator
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.cli.etapas import curadoria
 from ddf.infrastructure.adapters.overrides.sobrescrita_de_tabela import (
     SobrescritaDeTabela,
 )
+from ddf.pipeline.estagio import Estagio
 
 
 class OrquestradorFake:
@@ -24,13 +26,21 @@ class OrquestradorFake:
         self._resultado = resultado
 
     def extrair(
-        self, escopos: object, extrator: object, progresso: object = None
+        self,
+        pares: list[tuple[str, str]],
+        extrator: Extrator,
+        /,
+        progresso: Callable[[str], None] | None = None,
     ) -> Resultado[list[TabelaExtraida]]:
         """Não é exercitado por estes testes."""
         raise NotImplementedError
 
     def aplicar_sobrescritas(
-        self, tabelas: object, sobrescrita: object, progresso: object = None
+        self,
+        tabelas: list[TabelaExtraida],
+        sobrescrita: Estagio[TabelaExtraida, TabelaCurada],
+        /,
+        progresso: Callable[[str], None] | None = None,
     ) -> Resultado[BancoCurado]:
         """Devolve o Resultado configurado, ignorando os argumentos."""
         return self._resultado
@@ -56,7 +66,7 @@ class TestFeliz:
             "ddf.infrastructure.adapters.cli.prompts.pausar", pausas.append
         )
 
-        sobrescrita = curadoria.curar(orquestrador, tmp_path, [tabela])  # type: ignore[arg-type]
+        sobrescrita = curadoria.curar(orquestrador, tmp_path, [tabela])
 
         assert isinstance(sobrescrita, SobrescritaDeTabela)
         assert len(pausas) == 1

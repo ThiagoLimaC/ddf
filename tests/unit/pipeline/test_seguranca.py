@@ -2,7 +2,7 @@
 
 import pytest
 
-from ddf.domain.shared.resultado import Falha, Sucesso
+from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.pipeline.seguranca import executar_com_seguranca
 
 
@@ -40,7 +40,7 @@ class TestBorda:
 
     def test_falha_explicita_da_funcao_passa_direto_sem_reinterpretar(self) -> None:
         """Falha já esperada (domínio) não vira 'Falha inesperada'."""
-        resultado = executar_com_seguranca(
+        resultado: Resultado[int] = executar_com_seguranca(
             "ExtratorPostgres", lambda: Falha("Não foi possível conectar: recusado")
         )
 

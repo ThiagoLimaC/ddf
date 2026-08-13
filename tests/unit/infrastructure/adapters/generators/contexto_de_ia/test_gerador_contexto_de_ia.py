@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from ddf.domain.model.analysis import (
     BancoAnalisado,
@@ -24,8 +25,9 @@ from ddf.infrastructure.adapters.generators.contexto_de_ia.gerador_contexto_de_i
 )
 
 
-def _ler_json(caminho: Path) -> dict:  # type: ignore[type-arg]
-    return json.loads(caminho.read_text(encoding="utf-8"))
+def _ler_json(caminho: Path) -> dict[str, Any]:
+    conteudo: dict[str, Any] = json.loads(caminho.read_text(encoding="utf-8"))
+    return conteudo
 
 
 class TestFeliz:
@@ -124,24 +126,6 @@ class TestFeliz:
         datetime.fromisoformat(
             indice["generated_at"]
         )  # levanta ValueError se malformado
-
-    def test_falha_ao_nao_conseguir_escrever_em_disco(
-        self,
-        construir_coluna: Callable[..., ColunaAnalisada],
-        construir_tabela: Callable[..., TabelaAnalisada],
-        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
-        tmp_path: Path,
-    ) -> None:
-        """Obstáculo no filesystem no lugar do diretório 'tabelas/' força Falha."""
-        tabela = construir_tabela(colunas=[construir_coluna()])
-        banco = construir_banco([tabela])
-        # Cria um arquivo no lugar do diretório "tabelas/" esperado, forçando OSError.
-        (tmp_path / "tabelas").write_text("obstaculo", encoding="utf-8")
-
-        resultado = GeradorContextoDeIA()(banco, tmp_path)
-
-        assert isinstance(resultado, Falha)
-        assert "tabelas" in resultado.erro
 
     def test_fk_fora_do_lote_aparece_so_como_referencia_de_saida(
         self,
@@ -641,6 +625,28 @@ class TestFeliz:
         ) == (destino_b / "tabelas" / "vendas" / "pedidos.json").read_text(
             encoding="utf-8"
         )
+
+
+class TestErro:
+    """Erro esperado."""
+
+    def test_falha_ao_nao_conseguir_escrever_em_disco(
+        self,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+        tmp_path: Path,
+    ) -> None:
+        """Obstáculo no filesystem no lugar do diretório 'tabelas/' força Falha."""
+        tabela = construir_tabela(colunas=[construir_coluna()])
+        banco = construir_banco([tabela])
+        # Cria um arquivo no lugar do diretório "tabelas/" esperado, forçando OSError.
+        (tmp_path / "tabelas").write_text("obstaculo", encoding="utf-8")
+
+        resultado = GeradorContextoDeIA()(banco, tmp_path)
+
+        assert isinstance(resultado, Falha)
+        assert "tabelas" in resultado.erro
 
 
 class TestBorda:

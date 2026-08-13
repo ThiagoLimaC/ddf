@@ -341,26 +341,6 @@ class TestFeliz:
             }
         ]
 
-    def test_falha_ao_nao_conseguir_escrever_em_disco(
-        self,
-        tmp_path: Path,
-        construir_coluna: Callable[..., ColunaAnalisada],
-        construir_tabela: Callable[..., TabelaAnalisada],
-        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
-    ) -> None:
-        """Destino sem permissão de criar o dbt_project.yml retorna Falha com o path."""
-        obstaculo = tmp_path / "dbt_project.yml"
-        obstaculo.mkdir()
-        (obstaculo / "arquivo_dentro_do_diretorio").write_text("bloqueia o write_text")
-
-        tabela = construir_tabela(colunas=[construir_coluna()])
-        banco = construir_banco([tabela])
-
-        resultado = GeradorDbt()(banco, tmp_path)
-
-        assert isinstance(resultado, Falha)
-        assert str(obstaculo) in resultado.erro
-
     def test_coluna_sem_metrica_e_sem_fato_estrutural_nao_sugere_teste(
         self,
         tmp_path: Path,
@@ -1534,15 +1514,9 @@ class TestFeliz:
 
         assert isinstance(resultado, Sucesso)
         sql = (
-            tmp_path
-            / "models"
-            / "staging"
-            / "vendas"
-            / "stg_vendas__pedidos.sql"
+            tmp_path / "models" / "staging" / "vendas" / "stg_vendas__pedidos.sql"
         ).read_text()
-        assert (
-            "{{ cast_type(adapter.quote('id_externo'), 'BIGINT') }}" in sql
-        )
+        assert "{{ cast_type(adapter.quote('id_externo'), 'BIGINT') }}" in sql
         assert "CAST(id_externo AS BIGINT)" not in sql
 
     def test_sql_de_coluna_timestamp_com_precisao_passa_precisao_ao_macro(
@@ -1570,11 +1544,7 @@ class TestFeliz:
 
         assert isinstance(resultado, Sucesso)
         sql = (
-            tmp_path
-            / "models"
-            / "staging"
-            / "vendas"
-            / "stg_vendas__pedidos.sql"
+            tmp_path / "models" / "staging" / "vendas" / "stg_vendas__pedidos.sql"
         ).read_text()
         assert (
             "{{ cast_type(adapter.quote('criado_em'), "
@@ -1697,6 +1667,26 @@ class TestFeliz:
 class TestErro:
     """Erro esperado."""
 
+    def test_falha_ao_nao_conseguir_escrever_em_disco(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Destino sem permissão de criar o dbt_project.yml retorna Falha com o path."""
+        obstaculo = tmp_path / "dbt_project.yml"
+        obstaculo.mkdir()
+        (obstaculo / "arquivo_dentro_do_diretorio").write_text("bloqueia o write_text")
+
+        tabela = construir_tabela(colunas=[construir_coluna()])
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Falha)
+        assert str(obstaculo) in resultado.erro
+
     def test_nome_de_tabela_com_espaco_falha_antes_de_escrever(
         self,
         tmp_path: Path,
@@ -1724,9 +1714,7 @@ class TestErro:
         construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
     ) -> None:
         """Escopo com hífen no nome vira model inválido — Falha, não normalização."""
-        tabela = construir_tabela(
-            colunas=[construir_coluna()], nome_escopo="sales-eu"
-        )
+        tabela = construir_tabela(colunas=[construir_coluna()], nome_escopo="sales-eu")
         banco = construir_banco([tabela])
 
         resultado = GeradorDbt()(banco, tmp_path)
@@ -1911,9 +1899,7 @@ class TestBorda:
         sql = (
             tmp_path / "models" / "staging" / "escopo" / "stg_escopo__tabela.sql"
         ).read_text()
-        assert (
-            "{{ adapter.quote('pontos') }} as {{ adapter.quote('pontos') }}"
-        ) in sql
+        assert ("{{ adapter.quote('pontos') }} as {{ adapter.quote('pontos') }}") in sql
         assert "CAST" not in sql
 
     def test_teste_soft_nulo_omitido_com_amostra_abaixo_do_piso(

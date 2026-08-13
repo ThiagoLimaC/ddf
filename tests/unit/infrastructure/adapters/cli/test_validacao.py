@@ -196,4 +196,8 @@ class TestBorda:
         )
 
         assert isinstance(resultado, Sucesso)
-        assert {a.nome for a in resultado.valor} == {"Primeiro", "Segundo"}
+        nomes: set[str] = set()
+        for analisador in resultado.valor:
+            assert isinstance(analisador, AnalisadorFake)
+            nomes.add(analisador.nome)
+        assert nomes == {"Primeiro", "Segundo"}

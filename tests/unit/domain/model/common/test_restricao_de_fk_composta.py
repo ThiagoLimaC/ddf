@@ -82,7 +82,7 @@ class TestBorda:
         )
 
         with pytest.raises(ValidationError):
-            restricao.colunas_locais = ("a", "c")  # type: ignore[misc]
+            restricao.colunas_locais = ("a", "c")
 
     def test_restricao_de_fk_composta_permite_colunas_referenciadas_duplicadas(
         self,

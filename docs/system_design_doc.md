@@ -26,7 +26,7 @@ em Curation. As Anti-Corruption Layers entre contextos são:
 - **Analisador** — ACL entre Curation e Analysis: traduz `BancoCurado` →
   `BancoAnalisado`, calculando métricas como Value Objects.
 
-### Onde o hexagonal é aplicado (as quatro Ports)
+### Onde o hexagonal é aplicado (as cinco Ports)
 
 - **Extrator** — `Porta` porque existe mais de uma fonte de dados real
   (Postgres, MariaDB, arquivo, API) — todas produzindo o mesmo `TabelaExtraida`
@@ -37,6 +37,31 @@ em Curation. As Anti-Corruption Layers entre contextos são:
   (Markdown, dbt, contexto de IA), todos consumindo o mesmo `BancoAnalisado`.
 - **OrquestradorDeTabelas** — `Porta` porque existe mais de uma estratégia de
   execução (`OrquestradorParalelo`, futuramente `OrquestradorDistribuido`).
+- **EstrategiaDeAmostragem** — `Porta` porque existe mais de uma política de
+  amostragem real (`PercentualDeLinhas`, `TabelaInteira`,
+  `AmostragemPorFaixa`), plugável via `ConfiguracaoDeExtracao` sem que
+  nenhum `Extrator` concreto precise mudar.
+
+### Política de extensão por Port
+
+`Extrator` e `Gerador` são reexportados em `domain/ports/__init__.py`,
+consumidos por plugins de terceiro via `importlib.metadata.entry_points`
+(`ddf.extratores`/`ddf.geradores`), e seguem versionamento semântico
+completo — ver `docs/engineer_guidelines.md`.
+
+`Analisador` fica deliberadamente fora dessa política: não é reexportado nem
+é ponto de extensão de terceiro, é a ACL entre Curation e Analysis, e todo
+Analisador registrado roda incondicionalmente em toda execução, sem seleção
+do usuário.
+
+`EstrategiaDeAmostragem` e `OrquestradorDeTabelas` são Ports no sentido
+arquitetural (variação real de implementação, `@runtime_checkable`), mas
+**não têm hoje o mesmo compromisso de estabilidade externo** — nenhuma das
+duas é reexportada em `domain/ports/__init__.py`, nenhuma tem entry point
+próprio, e nenhuma é oferecida como ponto de extensão de plugin de terceiro
+nesta versão. Mudanças em suas assinaturas são refactor interno normal, sem
+necessidade de bump de versão pública — reavaliar esta seção se/quando
+qualquer uma das duas ganhar um entry point.
 
 ### Onde DDD/hexagonal é deliberadamente *não* aplicado
 
@@ -188,6 +213,24 @@ inteiro (não só na tabela lida) enquanto durar — mitigado pelo gating por
 limiar (só tabelas grandes pagam esse custo), não eliminado; sem teste de
 carga concorrente de escrita (infraestrutura fora do escopo pragmático da
 issue).
+
+**Limiares confirmados por benchmark de fronteira:** `_LIMIAR_LINHAS_STREAMING`
+(100.000) e `_LIMIAR_BYTES_STREAMING` (100.000.000, ~100MB) seguiam "candidato,
+não calibrado" até então — os benchmarks anteriores provavam ganho numa
+tabela bem acima do limiar (1M linhas), nunca mediram a fronteira em si.
+Benchmark novo
+(`tests/integration/extractors/{postgres,mariadb}/test_calibracao_limiares_streaming.py`)
+mede tempo/RSS dos dois lados de cada fronteira, em dois perfis de largura
+de linha, contra Postgres 16 e MariaDB 11 reais:
+
+| Perfil | Fronteira | Resultado |
+|---|---|---|
+| Estreito (~40 bytes/linha) | linhas: 70k (abaixo) vs. 130k (acima) | Ganho de RSS ao ligar streaming é pequeno perto da fronteira (~0% abaixo, ~5-6% acima nos dois motores) — efeito diluído pela base fixa do processo Python, mesma limitação já registrada nos benchmarks anteriores. Nenhum sinal de que o limiar de linhas esteja no lugar errado. |
+| Largo (TEXT/MEDIUMTEXT) | bytes: ~80MB (abaixo) vs. ~120MB (acima) | Ganho de RSS já grande **abaixo** do limiar atual (Postgres: -49% a 80MB, -56% a 120MB; MariaDB: -42% a 80MB, -48% a 120MB) — o limiar de 100MB é conservador, não errado: mantém o custo de streaming (transação aberta, risco de `VACUUM` represado) fora de tabelas onde o ganho, mesmo grande, ainda não foi comprovado necessário. |
+
+Valores mantidos em 100.000 linhas / 100MB — a evidência não aponta erro de
+calibração, só confirma a margem de segurança já intencional no limiar de
+bytes.
 
 ### 3. MetadadosDeAmostra
 

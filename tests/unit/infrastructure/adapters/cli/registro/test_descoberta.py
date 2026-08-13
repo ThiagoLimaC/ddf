@@ -1,6 +1,6 @@
 """Testes de descobrir_extratores/descobrir_geradores."""
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from importlib.metadata import EntryPoint
 
 from tests.unit.infrastructure.adapters.cli.registro.fixture_extrator_plugin import (
@@ -27,7 +27,7 @@ _MODULO_FIXTURE_GERADOR = (
 )
 
 
-def _pontos(*entradas: EntryPoint) -> object:
+def _pontos(*entradas: EntryPoint) -> Callable[..., Iterable[EntryPoint]]:
     """Fábrica de `entry_points_fn` fake que devolve `entradas`, ignorando `group`."""
 
     def entry_points_fn(*, group: str) -> Iterable[EntryPoint]:
