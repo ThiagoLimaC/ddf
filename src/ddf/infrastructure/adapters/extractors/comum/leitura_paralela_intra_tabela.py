@@ -13,13 +13,12 @@ reaproveitando só as funções puras daqui.
 
 import threading
 
-_LIMIAR_LINHAS_PARALELISMO_INTRA_TABELA = 500_000
+_LIMIAR_LINHAS_PARALELISMO_INTRA_TABELA = 100_000
 _LIMIAR_BYTES_PARALELISMO_INTRA_TABELA = 500_000_000
-"""Candidatos iniciais, não calibrados — mesmo tratamento dos limiares de
-streaming em `deve_usar_streaming`. Mais altos que os de streaming de
-propósito: paralelismo intra-tabela paga o custo de várias conexões e
-transações simultâneas, só compensa em tabelas bem maiores que o piso onde
-o streaming já compensa sozinho."""
+"""Calibrados por benchmark contra Postgres 16 e MariaDB 11 reais, medindo
+tempo de parede dos dois lados de cada fronteira — ver
+`docs/low_level_design.md` (seção de paralelismo intra-tabela) para a
+tabela de evidências completa."""
 
 MINIMO_CONEXOES_PARALELISMO = 2
 """Mínimo de conexões (1 líder/coordenadora + 1 worker) pra o paralelismo
