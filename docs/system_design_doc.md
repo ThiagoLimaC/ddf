@@ -179,10 +179,13 @@ catálogo reflete o tamanho após compressão, não o tamanho real recebido
 pelo driver. A detecção de coluna comprimível lê `pg_attribute.attstorage`
 direto do catálogo (não uma lista fixa de nomes de tipo), cobrindo
 arrays/domains/extensões sem precisar listar cada um. Ativação do
-streaming é logada (nível INFO); o wizard configura um handler pro
-logger `"ddf"` no início da execução (`cli/wizard.py`), então a mensagem
-aparece no terminal por padrão, sem configuração adicional do operador.
-Limitação aceita: cursor nomeado do Postgres sustenta uma
+streaming vira `Aviso` anexado ao `Resultado` de `extrair_tabela` (issue
+#142) — sobe agregado até o wizard e é exibido por `avisos.py`, o mesmo
+canal já usado para o viés de cluster de `AmostragemPorFaixa`, em vez de
+`logger.info` (a abordagem original da #114): um log solto competia pelo
+redraw `\r` da barra de progresso paralela (`progresso_paralelo`), causa
+raiz da regressão visual da #116. Limitação aceita: cursor nomeado do
+Postgres sustenta uma
 transação aberta pela duração da leitura, o que represa `VACUUM` no banco
 inteiro (não só na tabela lida) enquanto durar — mitigado pelo gating por
 limiar (só tabelas grandes pagam esse custo), não eliminado; sem teste de
