@@ -192,13 +192,20 @@ final.
   cross-schema (casa pela identidade da própria filha, não pelo schema do
   pai). Não é limitação real.
 
-- **Limitação de sub-particionamento multi-nível reformulada:** não é só
-  "não soma recursivamente" — um nó intermediário (`relkind='p'`) sofre o
-  mesmo bug de "nunca autovacuumado automaticamente"; se a agregação de 1
-  nível usar o valor bruto de um filho que é, ele mesmo, uma partição
-  intermediária não analisada, o total da raiz herda um valor
-  desatualizado **silenciosamente**, sem sinalizar erro. Aceito como fora
-  de escopo v1, mas documentado com essa causa exata.
+- **Limitação de sub-particionamento multi-nível — corrigida na banca
+  pós-implementação, ver seção própria abaixo.** Deixou de ser uma
+  limitação aceita.
+
+- **Limitação de agregação de `total_linhas` cross-schema — distinta da
+  limitação de listagem acima, continua real.** A exclusão de partições da
+  **listagem** (`_LISTAR_TABELAS_SQL`) já funciona corretamente mesmo com a
+  filha em outro schema (achado do parágrafo anterior). A **agregação** de
+  `total_linhas` (`_FILHOS_DE_PARTICAO_SCHEMA_SQL` + `montar_metadados_do_
+  schema`) é escopada por schema da filha (mesma limitação do cache de
+  `_obter_metadados_schema`, que é por schema) — se a mãe está num schema e
+  a filha física em outro, a filha some corretamente da listagem, mas seu
+  `total_linhas` não é somado de volta na mãe. Caso raro (partição
+  cross-schema de fato), aceito como fora de escopo v1.
 
 ## Escopo desta issue
 
@@ -263,3 +270,54 @@ final.
       explicativo no README, tudo conferido visualmente. Particionamento já
       coberto pelo teste de integração real (`test_extrator_postgres_
       particionamento.py`)
+
+## Banca de revisão pós-implementação (diff real, não o plano)
+
+Depois da issue implementada e commitada, o usuário convocou a banca real
+do projeto (arquiteto-de-software + engenheiro-de-dados + po-revisor) para
+revisar o diff de verdade (`ab2767e..HEAD`), modo auto, somente leitura.
+Os três aprovaram — PO e arquiteto sem ressalva bloqueante, engenheiro de
+dados "aprovado com ressalvas" com um achado novo, validado empiricamente:
+
+- **[Corrigido] Bug de ordenação em particionamento multi-nível.**
+  `montar_metadados_do_schema` agregava `total_linhas` num único passe
+  sobre `filhos_por_tabela_mae.items()` — em particionamento de 2+ níveis
+  (padrão comum: partição por ano → sub-partição por mês/trimestre),
+  `pg_inherits` devolve as linhas na ordem pai-antes-do-filho, o pior caso
+  possível pra um passe único bottom-up. Validado empiricamente pelo
+  engenheiro de dados contra Postgres 16 real: a tabela-mãe **raiz** (a
+  única que o usuário de fato consulta) herdava o valor bruto (~0) da
+  sub-partição intermediária — reproduzindo exatamente o sintoma original
+  que a issue #141 existe pra corrigir, não uma imprecisão menor como a
+  descrição anterior desta seção sugeria.
+  - **Correção:** trocado o passe único por iteração até ponto fixo (repete
+    a agregação até nenhum valor mudar, converge bottom-up independente da
+    ordem de `pg_inherits`) — `extractors/postgres/_construcao.py`, função
+    `montar_metadados_do_schema`. Local, sem mudança de assinatura nem de
+    `_MetadadosDoSchema`, sem impacto de arquitetura (confirmado pelo
+    arquiteto).
+  - Testes novos: unit em `test_construcao.py` (fixture de 3 níveis, ordem
+    pai-antes-do-filho deliberada, o pior caso) + integração real em
+    `test_extrator_postgres_particionamento.py` (schema
+    `particionamento_multinivel`, 2 níveis reais: `eventos` →
+    `eventos_2023` → `eventos_2023_q1`/`q2`).
+- **[Documentado, sem mudança de código] Limitação de agregação
+  cross-schema** — distinguida da limitação de listagem (removida) na
+  seção de achados acima.
+- **[Nice-to-have, não implementado]** trilha de recalibração dos
+  thresholds `ALTA≤5pp/MEDIA≤15pp`: ficam documentados aqui mesmo (ver
+  seção "Decisões desta rodada" acima) como o lugar de referência — não
+  há constante redundante apontando de volta, considerado overhead
+  desnecessário para o ganho.
+
+## Escopo — pós-banca
+
+- [x] `extractors/postgres/_construcao.py` — agregação de `total_linhas`
+      por ponto fixo, corrige particionamento multi-nível
+- [x] Unit: fixture de 3 níveis em ordem pior-caso (`test_construcao.py`)
+- [x] Integração: schema `particionamento_multinivel` real via
+      testcontainers (`test_extrator_postgres_particionamento.py`, 2 testes
+      novos: listagem exclui todos os níveis, `total_linhas` da raiz
+      correto)
+- [x] `mypy --strict`/`ruff` limpos + suíte completa (unit + integração)
+      verde após a correção
