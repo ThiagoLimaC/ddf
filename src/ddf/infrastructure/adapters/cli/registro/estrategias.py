@@ -70,7 +70,7 @@ def _construir_percentual_de_linhas() -> EstrategiaDeAmostragem:
     pior caso por acidente.
     """
     percentual = prompts.numero(
-        "Percentual de amostragem (0-100]:", float, default="10"
+        "Percentual de amostragem (0-100):", float, default="10"
     )
     seed = prompts.numero_opcional(
         "Seed para reprodutibilidade (opcional, deixe em branco para usar "

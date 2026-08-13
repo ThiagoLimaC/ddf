@@ -16,7 +16,7 @@ _Numero = TypeVar("_Numero", int, float)
 # controlável via COR_*.
 _QUADROS_AMPULHETA = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
-COR_DESTAQUE = "#00d7ff"
+COR_DESTAQUE = "#18a0db"
 COR_SUCESSO = "#58cd58"
 
 # Erro é sempre fatal para o passo atual; aviso é informativo, não
