@@ -1,6 +1,6 @@
 """Helper agnóstico de fonte pra sempre ter um seed concreto de amostragem."""
 
-_SEED_PADRAO = 142
+_SEED_PADRAO = 1
 
 # Constante global do ddf, não específica de uma extração — todo Extrator
 # que não recebe seed explícito do usuário cai na mesma fatia física da
