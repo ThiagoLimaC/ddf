@@ -538,13 +538,15 @@ class ExtratorMariaDB:
 
         usa_streaming = deve_usar_streaming(total_linhas, largura_media_bytes)
         if usa_streaming:
-            _logger.info(
-                "'%s.%s': streaming ativado (~%d linhas, ~%d bytes/linha) — "
-                "SSCursor lê em lotes em vez de fetchall().",
-                escopo,
-                tabela,
-                total_linhas,
-                largura_media_bytes,
+            avisos.append(
+                Aviso(
+                    mensagem=(
+                        f"'{escopo}.{tabela}': streaming ativado (~{total_linhas} "
+                        f"linhas, ~{largura_media_bytes} bytes/linha) — SSCursor "
+                        "lê em lotes em vez de fetchall()."
+                    ),
+                    origem="ExtratorMariaDB",
+                )
             )
         with self._conexoes.conexao() as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
