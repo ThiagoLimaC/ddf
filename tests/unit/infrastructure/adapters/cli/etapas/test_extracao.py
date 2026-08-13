@@ -9,7 +9,7 @@ import pytest
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.model.curation import BancoCurado, TabelaCurada
 from ddf.domain.model.extraction import TabelaExtraida
-from ddf.domain.ports.extrator import ExtratorRegistrado
+from ddf.domain.ports.extrator import Extrator, ExtratorRegistrado
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.cli.etapas import extracao
@@ -372,9 +372,7 @@ class TestBorda:
 
         monkeypatch.setattr("builtins.print", _print_rastreado)
 
-        extracao.extrair(  # type: ignore[arg-type]
-            orquestrador, extrator_fake, [("public", "clientes")]
-        )
+        extracao.extrair(orquestrador, extrator_fake, [("public", "clientes")])
 
         indice_aviso = next(i for i, e in enumerate(eventos) if "amostra pequena" in e)
         indice_sucesso = next(

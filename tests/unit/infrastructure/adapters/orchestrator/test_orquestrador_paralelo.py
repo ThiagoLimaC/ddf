@@ -364,11 +364,15 @@ class TestBorda:
         """3 tabelas, 2 com Aviso de paralelismo do MariaDB, viram "2 de 3"."""
 
         class _ExtratorMariaDBFake:
-            def listar_escopos(self) -> Resultado[list[str]]: ...
+            def listar_escopos(self) -> Resultado[list[str]]:
+                """Não é exercitado por este teste."""
+                raise NotImplementedError
 
             def listar_tabelas(
                 self, escopo: str, /
-            ) -> Resultado[list[tuple[str, str]]]: ...
+            ) -> Resultado[list[tuple[str, str]]]:
+                """Não é exercitado por este teste."""
+                raise NotImplementedError
 
             def extrair_tabela(
                 self, escopo: str, tabela: str, /
