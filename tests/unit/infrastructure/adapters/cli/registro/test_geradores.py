@@ -18,9 +18,11 @@ class GeradorFake:
 
     requer: list[TipoDeMetrica] = []
 
-    def __call__(self, entrada: BancoAnalisado, destino: Path) -> Resultado[None]:
+    def __call__(
+        self, entrada: BancoAnalisado, destino: Path, /
+    ) -> Resultado[None]:
         """Não é exercitado por registrar_gerador — não precisa de corpo real."""
-        ...
+        raise NotImplementedError
 
 
 class TestFeliz:

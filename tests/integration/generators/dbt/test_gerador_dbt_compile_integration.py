@@ -116,7 +116,7 @@ def _tabela_numeric_sem_precisao() -> TabelaAnalisada:
         colunas=[coluna],
         total_linhas=1,
         metadados_amostra=MetadadosDeAmostra(
-            estrategia="percentual_de_linhas", tamanho_amostra=1, total_linhas=1
+            estrategia="percentual_de_linhas", tamanho_amostra=1
         ),
     )
 
@@ -140,7 +140,7 @@ def _tabela_time_com_timezone() -> TabelaAnalisada:
         colunas=[coluna],
         total_linhas=1,
         metadados_amostra=MetadadosDeAmostra(
-            estrategia="percentual_de_linhas", tamanho_amostra=1, total_linhas=1
+            estrategia="percentual_de_linhas", tamanho_amostra=1
         ),
     )
 

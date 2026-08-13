@@ -70,13 +70,15 @@ class ExtratorFake:
 
     def listar_escopos(self) -> Resultado[list[str]]:
         """Não é exercitado pelos testes de OrquestradorParalelo — sem corpo real."""
-        ...
+        raise NotImplementedError
 
-    def listar_tabelas(self, escopo: str) -> Resultado[list[tuple[str, str]]]:
+    def listar_tabelas(self, escopo: str, /) -> Resultado[list[tuple[str, str]]]:
         """Devolve o Resultado pré-configurado para o escopo informado."""
         return self._tabelas_por_escopo[escopo]
 
-    def extrair_tabela(self, escopo: str, tabela: str) -> Resultado[TabelaExtraida]:
+    def extrair_tabela(
+        self, escopo: str, tabela: str, /
+    ) -> Resultado[TabelaExtraida]:
         """Devolve a Falha/exceção pré-configurada, ou Sucesso com tabela mínima."""
         excecao = self._excecoes_de_extracao.get((escopo, tabela))
         if excecao is not None:

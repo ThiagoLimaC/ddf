@@ -66,10 +66,16 @@ convention = "google"
 
 [tool.mypy]
 strict = true
-files = ["src"]
+files = ["src", "tests"]
+mypy_path = "src"
+explicit_package_bases = true
 
 [[tool.mypy.overrides]]
 module = "dbutils.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "testcontainers.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

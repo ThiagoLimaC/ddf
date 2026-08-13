@@ -158,29 +158,6 @@ class TestFeliz:
             timestamp = linha.removeprefix("*Gerado em: ").removesuffix("*")
             datetime.fromisoformat(timestamp)  # levanta ValueError se malformado
 
-    def test_falha_ao_nao_conseguir_escrever_em_disco(
-        self,
-        tmp_path: Path,
-        construir_coluna: Callable[..., ColunaAnalisada],
-        construir_tabela: Callable[..., TabelaAnalisada],
-        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
-    ) -> None:
-        """Destino onde não é possível criar diretório retorna Falha com o path."""
-        obstaculo = tmp_path / "vendas"
-        obstaculo.write_text("isso deveria ser um diretório, não um arquivo")
-
-        tabela = construir_tabela(
-            colunas=[construir_coluna()],
-            nome_tabela="clientes",
-            nome_escopo="vendas",
-        )
-        banco = construir_banco([tabela])
-
-        resultado = GeradorMarkdown()(banco, tmp_path)
-
-        assert isinstance(resultado, Falha)
-        assert str(obstaculo / "clientes.md") in resultado.erro
-
     def test_aviso_para_tabela_sem_papel_de_negocio(
         self,
         tmp_path: Path,
@@ -845,6 +822,33 @@ class TestFeliz:
         assert "## Valores frequentes por coluna" in conteudo
         secao = conteudo.split("## Valores frequentes por coluna")[1]
         assert "Nenhuma coluna desta tabela tem valores frequentes elegíveis" in secao
+
+
+class TestErro:
+    """Erro esperado."""
+
+    def test_falha_ao_nao_conseguir_escrever_em_disco(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Destino onde não é possível criar diretório retorna Falha com o path."""
+        obstaculo = tmp_path / "vendas"
+        obstaculo.write_text("isso deveria ser um diretório, não um arquivo")
+
+        tabela = construir_tabela(
+            colunas=[construir_coluna()],
+            nome_tabela="clientes",
+            nome_escopo="vendas",
+        )
+        banco = construir_banco([tabela])
+
+        resultado = GeradorMarkdown()(banco, tmp_path)
+
+        assert isinstance(resultado, Falha)
+        assert str(obstaculo / "clientes.md") in resultado.erro
 
 
 class TestBorda:
