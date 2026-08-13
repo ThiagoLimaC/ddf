@@ -59,8 +59,10 @@ def _construir_percentual_de_linhas() -> EstrategiaDeAmostragem:
     """Pergunta percentual e seed opcional, monta o PercentualDeLinhas.
 
     Percentual fora de (0, 100] levanta ValidationError (Pydantic, mensagem
-    em inglês) dentro de AmostragemProbabilistica — capturado aqui pra sair
-    com mensagem em português, mesmo padrão de `ou_sair` (avisos.py).
+    em inglês) dentro de AmostragemProbabilistica — capturado aqui pra
+    reperguntar em português, via `perguntar_repetir` (mesmo padrão de
+    `escolher_multiplos`: uma resposta bem formada que ainda fere uma regra
+    de negócio pede confirmação antes de sair, não sai direto).
 
     Avisa uma vez, aqui na escolha da estratégia, que ela sempre varre a
     tabela inteira (custo estrutural, igual nos dois Extratores) — não por
@@ -69,21 +71,22 @@ def _construir_percentual_de_linhas() -> EstrategiaDeAmostragem:
     (não bloqueia com `confirmar`): o default de 10% já protege contra o
     pior caso por acidente.
     """
-    percentual = prompts.numero(
-        "Percentual de amostragem (0-100):", float, default="10"
-    )
-    seed = prompts.numero_opcional(
-        "Seed para reprodutibilidade (opcional, deixe em branco para usar "
-        "o padrão fixo do ddf):",
-        int,
-    )
-    try:
-        estrategia = PercentualDeLinhas(percentual=percentual, seed=seed)
-    except ValidationError:
-        prompts.imprimir_destacado(
-            f"Erro: percentual deve estar em (0, 100] ({percentual}).", prompts.COR_ERRO
+    while True:
+        percentual = prompts.numero(
+            "Percentual de amostragem (0-100):", float, default="10"
         )
-        sys.exit(1)
+        seed = prompts.numero_opcional(
+            "Seed para reprodutibilidade (opcional, deixe em branco para usar "
+            "o padrão fixo do ddf):",
+            int,
+        )
+        try:
+            estrategia = PercentualDeLinhas(percentual=percentual, seed=seed)
+            break
+        except ValidationError:
+            prompts.perguntar_repetir(
+                f"percentual deve estar em (0, 100] ({percentual})."
+            )
     print()
     prompts.imprimir_destacado(
         "▲ Amostragem por percentual varre a tabela inteira, independente "
@@ -126,22 +129,26 @@ def _construir_amostragem_por_faixa() -> EstrategiaDeAmostragem:
     pergunta a estratégia, então cita só o efeito (viés de cluster), não o
     mecanismo específico por motor (TABLESAMPLE SYSTEM no Postgres, faixas
     de PK no MariaDB).
+
+    Percentual fora de (0, 100] repergunta via `perguntar_repetir`, mesmo
+    tratamento de `_construir_percentual_de_linhas`.
     """
-    percentual = prompts.numero(
-        "Percentual de amostragem (0-100]:", float, default="10"
-    )
-    seed = prompts.numero_opcional(
-        "Seed para reprodutibilidade (opcional, deixe em branco para usar "
-        "o padrão fixo do ddf):",
-        int,
-    )
-    try:
-        estrategia = AmostragemPorFaixa(percentual=percentual, seed=seed)
-    except ValidationError:
-        prompts.imprimir_destacado(
-            f"Erro: percentual deve estar em (0, 100] ({percentual}).", prompts.COR_ERRO
+    while True:
+        percentual = prompts.numero(
+            "Percentual de amostragem (0-100]:", float, default="10"
         )
-        sys.exit(1)
+        seed = prompts.numero_opcional(
+            "Seed para reprodutibilidade (opcional, deixe em branco para usar "
+            "o padrão fixo do ddf):",
+            int,
+        )
+        try:
+            estrategia = AmostragemPorFaixa(percentual=percentual, seed=seed)
+            break
+        except ValidationError:
+            prompts.perguntar_repetir(
+                f"percentual deve estar em (0, 100] ({percentual})."
+            )
     print()
     prompts.imprimir_destacado(
         "▲ Amostragem por faixa amostra por faixa/bloco, não por linha — "

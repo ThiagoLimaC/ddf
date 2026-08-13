@@ -368,17 +368,32 @@ class TestBorda:
 
         assert prompts.numero_opcional("Seed (opcional):", int) is None
 
-    def test_escolher_multiplos_sem_nenhuma_marcada_tambem_sai(
+    def test_escolher_multiplos_sem_nenhuma_marcada_recusa_repetir_e_sai(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Lista vazia (nada marcado, sem cancelar) também sai — não é None."""
+        """Nada marcado (sem cancelar) pergunta se quer repetir; recusando, sai."""
         _substituir(monkeypatch, "checkbox", [])
+        _substituir(monkeypatch, "confirm", False)
 
         with pytest.raises(SystemExit) as excinfo:
             prompts.escolher_multiplos("Escolha:", ["Markdown"])
 
         assert excinfo.value.code == 0
+
+    def test_escolher_multiplos_sem_nenhuma_marcada_repete_ate_marcar_algo(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Nada marcado + confirmar repetir=Sim: repergunta até algo ser marcado."""
+        respostas_checkbox = iter([[], ["Markdown"]])
+        monkeypatch.setattr(
+            "questionary.checkbox",
+            lambda *args, **kwargs: _RespostaFake(next(respostas_checkbox)),
+        )
+        _substituir(monkeypatch, "confirm", True)
+
+        assert prompts.escolher_multiplos("Escolha:", ["Markdown"]) == ["Markdown"]
 
     def test_escolher_multiplos_permite_vazio_devolve_lista_vazia(
         self,

@@ -249,6 +249,23 @@ def confirmar(mensagem: str, default: bool = True) -> bool:
     return resposta
 
 
+def perguntar_repetir(mensagem_erro: str) -> None:
+    """Mostra `mensagem_erro` e pergunta se quer tentar de novo; senão, sai limpo.
+
+    Usado nos pontos do wizard onde uma resposta tecnicamente bem formada
+    ainda falha uma regra de negócio (ex.: percentual fora de 0-100,
+    nenhum escopo selecionado) — sem isso, cada chamador repetiria o
+    mesmo par `imprimir_destacado(erro)` + decidir sair ou não, e o padrão
+    anterior (`sys.exit` direto no erro) saía sem dar chance de correção.
+
+    Args:
+        mensagem_erro: descrição do que deu errado, sem o prefixo "Erro:".
+    """
+    imprimir_destacado(f"Erro: {mensagem_erro}", COR_ERRO)
+    if not confirmar("Tentar novamente?", default=True):
+        sys.exit(0)
+
+
 def escolher_multiplos(
     mensagem: str, escolhas: list[str], permite_vazio: bool = False
 ) -> list[str]:
@@ -263,29 +280,31 @@ def escolher_multiplos(
         mensagem: pergunta exibida ao usuário.
         escolhas: opções disponíveis para seleção.
         permite_vazio: `False` (padrão) trata "nenhum item marcado" como
-            cancelamento, saindo limpo — mesmo comportamento de sempre.
-            `True` devolve a lista vazia para o chamador decidir o que
-            fazer (ex.: reperguntar), em vez de sair do processo.
+            uma resposta a repetir via `perguntar_repetir` (não um
+            cancelamento — o usuário só não marcou nada, ainda pode
+            querer escolher). `True` devolve a lista vazia direto para o
+            chamador decidir o que fazer.
     """
-    print()
-    selecionados = cast(
-        "list[str] | None",
-        questionary.checkbox(
-            mensagem,
-            style=_ESTILO,
-            choices=escolhas,
-            use_search_filter=True,
-            use_jk_keys=False,
-            # Mesma técnica de `selecionar()`: "\n" no fim da instrução, não
-            # um print à parte — ver o comentário lá para o porquê.
-            instruction="(digite para filtrar, espaço marca, enter confirma)\n",
-        ).ask(),
-    )
-    if selecionados is None:
-        sys.exit(0)
-    if not selecionados and not permite_vazio:
-        sys.exit(0)
-    return selecionados
+    while True:
+        print()
+        selecionados = cast(
+            "list[str] | None",
+            questionary.checkbox(
+                mensagem,
+                style=_ESTILO,
+                choices=escolhas,
+                use_search_filter=True,
+                use_jk_keys=False,
+                # Mesma técnica de `selecionar()`: "\n" no fim da instrução,
+                # não um print à parte — ver o comentário lá para o porquê.
+                instruction="(digite para filtrar, espaço marca, enter confirma)\n",
+            ).ask(),
+        )
+        if selecionados is None:
+            sys.exit(0)
+        if selecionados or permite_vazio:
+            return selecionados
+        perguntar_repetir("Nenhum item selecionado.")
 
 
 @contextmanager

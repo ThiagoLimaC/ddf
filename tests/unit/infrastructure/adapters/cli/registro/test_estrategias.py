@@ -88,25 +88,48 @@ class TestFeliz:
         assert estrategia.requisicao.percentual == 5.0
         assert estrategia.requisicao.seed == 42
 
+    def test_amostragem_por_faixa_com_percentual_fora_de_faixa_repete_ate_valido(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Percentual > 100 (ValidationError) repergunta até um percentual válido."""
+        respostas = iter(["150", "", "5", "42"])
+        monkeypatch.setattr(
+            "questionary.text",
+            lambda *args, **kwargs: _RespostaFake(next(respostas)),
+        )
+        monkeypatch.setattr(
+            "questionary.confirm", lambda *args, **kwargs: _RespostaFake(True)
+        )
+
+        estrategia = _construir_amostragem_por_faixa()
+
+        assert isinstance(estrategia, AmostragemPorFaixa)
+        assert estrategia.requisicao.percentual == 5.0
+        assert estrategia.requisicao.seed == 42
+
 
 class TestErro:
     """Erro esperado."""
 
-    def test_amostragem_por_faixa_com_percentual_fora_de_faixa_sai_com_erro(
+    def test_amostragem_por_faixa_com_percentual_fora_de_faixa_recusa_repetir_sai(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Percentual > 100 (ValidationError) sai com código 1."""
+        """Percentual > 100 (ValidationError) pergunta se quer repetir; recusa, sai."""
         respostas = iter(["150", ""])
         monkeypatch.setattr(
             "questionary.text",
             lambda *args, **kwargs: _RespostaFake(next(respostas)),
         )
+        monkeypatch.setattr(
+            "questionary.confirm", lambda *args, **kwargs: _RespostaFake(False)
+        )
 
         with pytest.raises(SystemExit) as excecao:
             _construir_amostragem_por_faixa()
 
-        assert excecao.value.code == 1
+        assert excecao.value.code == 0
 
     def test_registrar_estrategia_com_nome_duplicado_falha(
         self,
