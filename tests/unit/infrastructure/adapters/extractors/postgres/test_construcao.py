@@ -99,6 +99,41 @@ class TestFeliz:
             "pedidos": ["pedidos_2024", "pedidos_2025"]
         }
 
+    def test_montar_metadados_agrega_total_linhas_em_particionamento_multinivel(
+        self,
+    ) -> None:
+        """Raiz de particionamento de 2 níveis recebe a soma correta, não ~0.
+
+        `linhas_filhos_de_particao` chega na ordem pai-antes-do-filho (o
+        que `pg_inherits` sempre devolve na prática) — o pior caso para um
+        único passe bottom-up: a raiz seria processada antes da
+        sub-partição intermediária já ter sido agregada, herdando o valor
+        bruto (~0) dela em vez da soma real das folhas.
+        """
+        metadados = montar_metadados_do_schema(
+            linhas_colunas=[],
+            linhas_pks=[],
+            linhas_fks=[],
+            linhas_unicas=[],
+            linhas_total_linhas=[
+                ("eventos", 0.0),
+                ("eventos_2023", 0.0),
+                ("eventos_2023_q1", 600.0),
+                ("eventos_2023_q2", 400.0),
+            ],
+            linhas_largura_media=[],
+            linhas_comprimiveis=[],
+            linhas_particionadas=[("eventos",), ("eventos_2023",)],
+            linhas_filhos_de_particao=[
+                ("eventos", "eventos_2023"),
+                ("eventos_2023", "eventos_2023_q1"),
+                ("eventos_2023", "eventos_2023_q2"),
+            ],
+        )
+
+        assert metadados.total_linhas_por_tabela["eventos_2023"] == 1000
+        assert metadados.total_linhas_por_tabela["eventos"] == 1000
+
     def test_montar_consulta_amostra_amostragem_integral_seleciona_tabela_inteira(
         self,
     ) -> None:

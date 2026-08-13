@@ -132,6 +132,7 @@ def test_listar_escopos_retorna_escopos_semeados(
             "geografia",
             "largura_real",
             "particionamento",
+            "particionamento_multinivel",
             "pessoa",
             "polimorfismo",
             "public",
