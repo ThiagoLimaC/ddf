@@ -164,6 +164,7 @@ def extrair(
     with prompts.progresso_paralelo("Tabelas extraídas", total=len(pares)) as progresso:
         resultado = orquestrador.extrair(pares, extrator, progresso=progresso)
     print()
+    print()
     tabelas = ou_sair(resultado)
     prompts.imprimir_destacado(
         f"✓ {len(tabelas)} tabela(s) extraída(s).", prompts.COR_SUCESSO
