@@ -127,24 +127,6 @@ class TestFeliz:
             indice["generated_at"]
         )  # levanta ValueError se malformado
 
-    def test_falha_ao_nao_conseguir_escrever_em_disco(
-        self,
-        construir_coluna: Callable[..., ColunaAnalisada],
-        construir_tabela: Callable[..., TabelaAnalisada],
-        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
-        tmp_path: Path,
-    ) -> None:
-        """Obstáculo no filesystem no lugar do diretório 'tabelas/' força Falha."""
-        tabela = construir_tabela(colunas=[construir_coluna()])
-        banco = construir_banco([tabela])
-        # Cria um arquivo no lugar do diretório "tabelas/" esperado, forçando OSError.
-        (tmp_path / "tabelas").write_text("obstaculo", encoding="utf-8")
-
-        resultado = GeradorContextoDeIA()(banco, tmp_path)
-
-        assert isinstance(resultado, Falha)
-        assert "tabelas" in resultado.erro
-
     def test_fk_fora_do_lote_aparece_so_como_referencia_de_saida(
         self,
         construir_coluna: Callable[..., ColunaAnalisada],
@@ -643,6 +625,28 @@ class TestFeliz:
         ) == (destino_b / "tabelas" / "vendas" / "pedidos.json").read_text(
             encoding="utf-8"
         )
+
+
+class TestErro:
+    """Erro esperado."""
+
+    def test_falha_ao_nao_conseguir_escrever_em_disco(
+        self,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+        tmp_path: Path,
+    ) -> None:
+        """Obstáculo no filesystem no lugar do diretório 'tabelas/' força Falha."""
+        tabela = construir_tabela(colunas=[construir_coluna()])
+        banco = construir_banco([tabela])
+        # Cria um arquivo no lugar do diretório "tabelas/" esperado, forçando OSError.
+        (tmp_path / "tabelas").write_text("obstaculo", encoding="utf-8")
+
+        resultado = GeradorContextoDeIA()(banco, tmp_path)
+
+        assert isinstance(resultado, Falha)
+        assert "tabelas" in resultado.erro
 
 
 class TestBorda:
