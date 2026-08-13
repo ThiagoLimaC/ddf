@@ -302,6 +302,91 @@ _SETUP_SQL = """
         SELECT repeat('y', 50000) FROM generate_series(1, 20);
 
     ANALYZE largura_real.tabela_com_external;
+
+    -- Tabela particionada declarativamente (issue #141): mãe + 2 partições
+    -- reais por RANGE. reltuples da mãe fica -1 (nunca analisada por
+    -- autovacuum, que só cobre relkind='r') mesmo com as filhas com dado
+    -- real e analisadas — prova que a agregação via pg_inherits é
+    -- necessária, não só um efeito de esquecer ANALYZE na mãe.
+    CREATE SCHEMA particionamento;
+
+    CREATE TABLE particionamento.pedidos (
+        id SERIAL,
+        ano INTEGER NOT NULL,
+        valor NUMERIC(10, 2) NOT NULL
+    ) PARTITION BY RANGE (ano);
+
+    CREATE TABLE particionamento.pedidos_2024
+        PARTITION OF particionamento.pedidos
+        FOR VALUES FROM (2024) TO (2025);
+
+    CREATE TABLE particionamento.pedidos_2025
+        PARTITION OF particionamento.pedidos
+        FOR VALUES FROM (2025) TO (2026);
+
+    INSERT INTO particionamento.pedidos (ano, valor)
+        SELECT 2024, 10.00 FROM generate_series(1, 30);
+    INSERT INTO particionamento.pedidos (ano, valor)
+        SELECT 2025, 20.00 FROM generate_series(1, 20);
+
+    ANALYZE particionamento.pedidos_2024;
+    ANALYZE particionamento.pedidos_2025;
+
+    -- Herança clássica (não particionamento declarativo) convivendo no
+    -- mesmo schema: prova que o filtro relkind='p' no pai (em
+    -- _LISTAR_TABELAS_SQL/_FILHOS_DE_PARTICAO_SCHEMA_SQL) não confunde
+    -- INHERITS comum com partição — veiculo é tabela real e independente,
+    -- não deve ser excluída da listagem nem entrar na agregação de
+    -- particionamento.pedidos.
+    CREATE TABLE particionamento.veiculo (
+        id SERIAL PRIMARY KEY,
+        placa VARCHAR(10) NOT NULL
+    );
+
+    CREATE TABLE particionamento.carro (
+        km_rodado INTEGER NOT NULL
+    ) INHERITS (particionamento.veiculo);
+
+    INSERT INTO particionamento.veiculo (placa) VALUES ('AAA0000');
+    INSERT INTO particionamento.carro (placa, km_rodado) VALUES ('BBB0000', 1000);
+
+    ANALYZE particionamento.veiculo;
+    ANALYZE particionamento.carro;
+
+    -- Particionamento de 2 níveis (issue #141, achado da banca pós-
+    -- implementação): eventos -> eventos_2023 (ela mesma particionada) ->
+    -- eventos_2023_q1/q2 (folhas físicas). pg_inherits devolve as linhas
+    -- na ordem pai-antes-do-filho — prova que a agregação de total_linhas
+    -- da raiz não pode depender de um único passe bottom-up nessa ordem.
+    CREATE SCHEMA particionamento_multinivel;
+
+    CREATE TABLE particionamento_multinivel.eventos (
+        id SERIAL,
+        ano INTEGER NOT NULL,
+        trimestre INTEGER NOT NULL,
+        tipo VARCHAR(20) NOT NULL
+    ) PARTITION BY RANGE (ano);
+
+    CREATE TABLE particionamento_multinivel.eventos_2023
+        PARTITION OF particionamento_multinivel.eventos
+        FOR VALUES FROM (2023) TO (2024)
+        PARTITION BY RANGE (trimestre);
+
+    CREATE TABLE particionamento_multinivel.eventos_2023_q1
+        PARTITION OF particionamento_multinivel.eventos_2023
+        FOR VALUES FROM (1) TO (2);
+
+    CREATE TABLE particionamento_multinivel.eventos_2023_q2
+        PARTITION OF particionamento_multinivel.eventos_2023
+        FOR VALUES FROM (2) TO (3);
+
+    INSERT INTO particionamento_multinivel.eventos (ano, trimestre, tipo)
+        SELECT 2023, 1, 'compra' FROM generate_series(1, 15);
+    INSERT INTO particionamento_multinivel.eventos (ano, trimestre, tipo)
+        SELECT 2023, 2, 'devolucao' FROM generate_series(1, 10);
+
+    ANALYZE particionamento_multinivel.eventos_2023_q1;
+    ANALYZE particionamento_multinivel.eventos_2023_q2;
 """
 
 

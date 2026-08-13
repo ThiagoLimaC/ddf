@@ -114,33 +114,210 @@ lógica:
 - Amostra da mãe continua vindo de uma leitura normal contra o nome da
   tabela-mãe (o Postgres já roteia sozinho pras partições certas)
 
+## Rodada de planejamento detalhado (pré-implementação)
+
+O desenho abaixo foi detalhado e revisado por uma banca em paralelo
+(arquiteto-de-software, engenheiro-de-dados, po-revisor) antes de codar —
+aprovação com ressalvas dos três, achados complementares (sem divergência
+real). Duas tensões entre o escopo original acima e os achados da banca
+foram levadas ao usuário e resolvidas; o escopo abaixo já reflete a decisão
+final.
+
+### Decisões desta rodada (além das duas já travadas acima)
+
+- **Critério de confiança não reaproveita o piso binário de 100 linhas**
+  sugerido originalmente acima — o engenheiro de dados validou que um corte
+  só por `tamanho_amostra` (ignorando `total_linhas`, usando a proporção
+  observada) colapsa para `SE=0` numa coluna PK/UNIQUE
+  (`percentual_unico=100%` zera a variância `p(1-p)` para qualquer `n`),
+  classificando como confiável exatamente o cenário que a issue quer
+  sinalizar como não confiável. Fórmula final: erro-padrão **conservador**
+  (`p=0,5` fixo, não a proporção observada) com correção de população
+  finita, 95% de margem:
+
+  ```
+  SE = sqrt(0.25 / n × (N - n) / (N - 1))
+  margem_de_erro_pp = 1.96 × SE × 100
+  ```
+
+  com `n = tamanho_amostra`, `N = total_linhas`. `n = N` (`AmostragemIntegral`/
+  `TabelaInteira`) zera a fpc → `SE=0` → sempre `ALTA`, sem `if` dedicado por
+  estratégia. Amostra vazia → `BAIXA` direto (mesmo guard de
+  `_metricas_vazias()`). Thresholds (ponto de partida, ajustáveis se os
+  exemplos numéricos contra dado real pedirem recalibração):
+  `ALTA ≤5pp / MEDIA (5,15]pp / BAIXA >15pp`.
+
+- **Confiança é métrica de TABELA (`MetricaDeTabela`), não de coluna** —
+  achado do usuário durante a revisão: como a fórmula usa `p=0,5` fixo, o
+  nível depende só de `n`/`N`, idênticos para toda coluna da mesma tabela
+  (a amostra é lida uma vez, por tabela). Calcular/exibir por coluna
+  replicaria o mesmo valor N vezes. `MetricasDeConfianca(MetricaDeTabela)`
+  com um único campo `nivel: NivelDeConfianca`, calculada em
+  `AnalisadorDeMetricasDeTabela` (não em `AnalisadorDeMetricasDeColuna`,
+  nem Analisador novo — `produz = [MetricasBaseTabela, MetricasDeConfianca]`,
+  primeiro caso de um Analisador com 2 tipos no projeto). `tamanho_amostra`/
+  `percentual_amostrado` não viram campo — já existem em
+  `TabelaAnalisada.total_linhas`/`TabelaAnalisada.metadados_amostra.
+  tamanho_amostra` (evita duplicar dado que pode divergir silenciosamente).
+  Isso também resolve de graça a lacuna "confiança não cobre `completude`" —
+  já nasce como métrica de tabela, lado a lado.
+
+- **`GeradorDbt` só anota, nunca muda severidade de teste** — o registry-plan
+  original (item 1 do escopo, texto "usado como critério adicional... para
+  decidir severidade/supressão de sugestão") cogitava usar confiança para
+  rebaixar/suprimir testes. O PO (arquiteto concordando) apontou que isso
+  fere o NFR3 do PRD (mesma métrica sempre gera a mesma sugestão) e a
+  idempotência entre reexecuções — decisão do usuário: nota em
+  `schema.yml`/README, sem tocar `severity` de `unique`/`not_null`/
+  `accepted_values`/etc.
+
+- **`_LISTAR_TABELAS_SQL` precisa do filtro `relkind='p'` no pai**, não só
+  `pg_inherits` puro — achado bloqueante do engenheiro de dados, validado
+  contra Postgres 16 real: sem esse filtro, a exclusão também apaga tabelas
+  de **herança clássica** (`CREATE TABLE filha () INHERITS (pai)`, ainda
+  usada em bancos legados pré-PG10), que são tabelas reais e independentes,
+  não fragmentos de uma partição — bug pior que o original (some com
+  tabelas reais, em vez de duplicá-las).
+
+- **Causa raiz do `total_linhas=0` da mãe corrigida:** não é "tabela
+  particionada nunca tem storage" (falso desde PG14, `ANALYZE` manual na mãe
+  já propaga `reltuples` agregado) — é que **autovacuum nunca roda `ANALYZE`
+  automaticamente em `relkind='p'`**, só nas filhas físicas. A agregação a
+  partir das filhas (que autovacuum sempre mantém atualizadas) continua
+  sendo a correção certa, só a causa documentada muda.
+
+- **Limitação "partição em schema diferente da mãe" removida** — testada
+  empiricamente pelo engenheiro de dados (`loja_arquivo.pedidos_2023`
+  particionando `loja.pedidos`), a query já exclui corretamente essa filha
+  cross-schema (casa pela identidade da própria filha, não pelo schema do
+  pai). Não é limitação real.
+
+- **Limitação de sub-particionamento multi-nível — corrigida na banca
+  pós-implementação, ver seção própria abaixo.** Deixou de ser uma
+  limitação aceita.
+
+- **Limitação de agregação de `total_linhas` cross-schema — distinta da
+  limitação de listagem acima, continua real.** A exclusão de partições da
+  **listagem** (`_LISTAR_TABELAS_SQL`) já funciona corretamente mesmo com a
+  filha em outro schema (achado do parágrafo anterior). A **agregação** de
+  `total_linhas` (`_FILHOS_DE_PARTICAO_SCHEMA_SQL` + `montar_metadados_do_
+  schema`) é escopada por schema da filha (mesma limitação do cache de
+  `_obter_metadados_schema`, que é por schema) — se a mãe está num schema e
+  a filha física em outro, a filha some corretamente da listagem, mas seu
+  `total_linhas` não é somado de volta na mãe. Caso raro (partição
+  cross-schema de fato), aceito como fora de escopo v1.
+
 ## Escopo desta issue
 
-- [ ] Novo tipo de métrica/campo de confiança em `domain/model/analysis.py`
-      (`MetricasBaseColuna` ou tipo próprio) — critério de "baixa confiança"
-      alinhado ao piso de amostra já usado no projeto
-- [ ] `AnalisadorDeMetricasDeColuna` — popula o sinal de confiança
-- [ ] `GeradorMarkdown`/`GeradorDbt`/`GeradorContextoDeIA` — consomem o sinal
-      (nota visível no Markdown, campo explícito no JSON, uso no dbt)
-- [ ] `extractors/postgres/_queries.py` — `_LISTAR_TABELAS_SQL` exclui
-      partições filhas (via `pg_inherits`); `_TOTAL_LINHAS_SCHEMA_SQL` agrega
-      `total_linhas` das partições reais na tabela-mãe
-- [ ] `mypy --strict`/`ruff` limpos
+- [x] `NivelDeConfianca` (Enum) + `MetricasDeConfianca(MetricaDeTabela)` em
+      `domain/model/analysis.py` — só `nivel`, calculado via fórmula de
+      margem de erro com correção de população finita (ver acima)
+- [x] `AnalisadorDeMetricasDeTabela` — `produz` ganha `MetricasDeConfianca`,
+      calculada a partir de `tamanho_amostra`/`total_linhas` já disponíveis
+- [x] `GeradorMarkdown`/`GeradorDbt`/`GeradorContextoDeIA` — consomem o sinal
+      no nível tabela (nota "Confiança estatística" no Markdown, `meta.
+      confianca_estatistica` em `schema.yml` + parágrafo no README do dbt
+      sem mudar severidade de teste, campo `confianca` dentro de
+      `metricas_tabela` no JSON, junto de `completude`/`amostra_vazia`).
+      Helper `_metrica_de_confianca` extraído para `generators/comum/
+      _metricas.py`, compartilhado pelos 3 (reuso real, mesma lógica de
+      filtro repetida)
+- [x] `extractors/postgres/_queries.py` — `_LISTAR_TABELAS_SQL` exclui
+      partições filhas via `pg_inherits` + `relkind='p'` no pai; nova query
+      `_FILHOS_DE_PARTICAO_SCHEMA_SQL`
+- [x] `extractors/postgres/_construcao.py` — `montar_metadados_do_schema`
+      agrega `total_linhas_por_tabela[mae] = sum(filhas)`
+- [x] `mypy --strict`/`ruff` limpos — suíte completa (`src/` + `tests/`)
 
 ## Testes
 
-- [ ] Unit: coluna com amostra muito pequena vs. muito grande — sinal de
-      confiança presente e correto nos 3 Geradores
-- [ ] Integração (testcontainers, Postgres real): tabela particionada com 2+
+- [x] Unit: `AnalisadorDeMetricasDeTabela` — amostra pequena/grande/vazia/
+      `TabelaInteira`, fronteira dos thresholds, tabela com coluna PK (prova
+      de que o nível não depende de proporção observada), invariância a
+      `percentual_nulo` diferente por coluna (8 testes novos)
+- [x] Unit: cada Gerador consumindo `MetricasDeConfianca` — Markdown (2),
+      dbt (2, incluindo prova de que `severity` de teste soft não muda com
+      `nivel=BAIXA`), ContextoDeIA (2) — feliz + métrica ausente não quebra
+- [x] Unit: `montar_metadados_do_schema` com fixture mãe + 2 filhas — soma
+      correta (`test_construcao.py`, feliz + borda de filha sem
+      `total_linhas` conhecido)
+- [x] Integração (testcontainers, Postgres real): tabela particionada com 2+
       partições reais — listagem mostra só a mãe, `total_linhas` bate com a
-      soma real das partições, amostra vem da tabela-mãe normalmente
-- [ ] Regressão: suíte de Extractors/Geradores segue verde (ajustar fixtures
-      que hoje simulam tabela particionada como entrada separada, se houver)
+      soma real das partições, amostra vem da tabela-mãe normalmente; caso
+      de herança clássica (`INHERITS`) convivendo no mesmo schema continua
+      listada — decisão desta rodada: mudado de "Unit" (rascunho original)
+      pra Integração, já que exige catálogo real (`pg_inherits`), não é
+      testável sem Postgres. `test_extrator_postgres_particionamento.py`
+      (3 testes) + schema `particionamento` novo em `conftest.py`
+      compartilhado
+- [x] Regressão: suíte de Extractors/Geradores segue verde — 654 unit +
+      37 integração (Postgres) verdes; fixtures de
+      `test_extrator_postgres.py` (mocks de `fetchall.side_effect`/
+      `call_count`) e `test_listar_escopos_retorna_escopos_semeados`
+      ajustados pro novo round-trip de 9 queries e pro schema novo
 
 ## Verificação final
 
-- [ ] `mypy --strict src` + `ruff check .` limpos
-- [ ] `pytest tests/unit` + `pytest tests/integration` (Postgres real com
-      tabela particionada de verdade) verdes
-- [ ] Geração manual de artefato (Markdown/dbt/JSON) contra fixture com
-      amostra pequena e fixture com tabela particionada, inspeção visual
+- [x] `mypy --strict src` + `ruff check .` limpos
+- [x] `pytest tests/unit` (667 testes) + `pytest tests/integration` (77
+      testes, Postgres real com tabela particionada de verdade e MariaDB)
+      verdes
+- [x] Geração manual de artefato (Markdown/dbt/JSON) contra fixture com
+      amostra pequena (n=4/N=1000, confiança baixa) e fixture lida por
+      completo (n=N=5000, confiança alta) — nota "Confiança estatística"
+      no Markdown, `meta.confianca_estatistica` em `schema.yml` (severity
+      dos testes soft intacta), campo `confianca` no JSON, parágrafo
+      explicativo no README, tudo conferido visualmente. Particionamento já
+      coberto pelo teste de integração real (`test_extrator_postgres_
+      particionamento.py`)
+
+## Banca de revisão pós-implementação (diff real, não o plano)
+
+Depois da issue implementada e commitada, o usuário convocou a banca real
+do projeto (arquiteto-de-software + engenheiro-de-dados + po-revisor) para
+revisar o diff de verdade (`ab2767e..HEAD`), modo auto, somente leitura.
+Os três aprovaram — PO e arquiteto sem ressalva bloqueante, engenheiro de
+dados "aprovado com ressalvas" com um achado novo, validado empiricamente:
+
+- **[Corrigido] Bug de ordenação em particionamento multi-nível.**
+  `montar_metadados_do_schema` agregava `total_linhas` num único passe
+  sobre `filhos_por_tabela_mae.items()` — em particionamento de 2+ níveis
+  (padrão comum: partição por ano → sub-partição por mês/trimestre),
+  `pg_inherits` devolve as linhas na ordem pai-antes-do-filho, o pior caso
+  possível pra um passe único bottom-up. Validado empiricamente pelo
+  engenheiro de dados contra Postgres 16 real: a tabela-mãe **raiz** (a
+  única que o usuário de fato consulta) herdava o valor bruto (~0) da
+  sub-partição intermediária — reproduzindo exatamente o sintoma original
+  que a issue #141 existe pra corrigir, não uma imprecisão menor como a
+  descrição anterior desta seção sugeria.
+  - **Correção:** trocado o passe único por iteração até ponto fixo (repete
+    a agregação até nenhum valor mudar, converge bottom-up independente da
+    ordem de `pg_inherits`) — `extractors/postgres/_construcao.py`, função
+    `montar_metadados_do_schema`. Local, sem mudança de assinatura nem de
+    `_MetadadosDoSchema`, sem impacto de arquitetura (confirmado pelo
+    arquiteto).
+  - Testes novos: unit em `test_construcao.py` (fixture de 3 níveis, ordem
+    pai-antes-do-filho deliberada, o pior caso) + integração real em
+    `test_extrator_postgres_particionamento.py` (schema
+    `particionamento_multinivel`, 2 níveis reais: `eventos` →
+    `eventos_2023` → `eventos_2023_q1`/`q2`).
+- **[Documentado, sem mudança de código] Limitação de agregação
+  cross-schema** — distinguida da limitação de listagem (removida) na
+  seção de achados acima.
+- **[Nice-to-have, não implementado]** trilha de recalibração dos
+  thresholds `ALTA≤5pp/MEDIA≤15pp`: ficam documentados aqui mesmo (ver
+  seção "Decisões desta rodada" acima) como o lugar de referência — não
+  há constante redundante apontando de volta, considerado overhead
+  desnecessário para o ganho.
+
+## Escopo — pós-banca
+
+- [x] `extractors/postgres/_construcao.py` — agregação de `total_linhas`
+      por ponto fixo, corrige particionamento multi-nível
+- [x] Unit: fixture de 3 níveis em ordem pior-caso (`test_construcao.py`)
+- [x] Integração: schema `particionamento_multinivel` real via
+      testcontainers (`test_extrator_postgres_particionamento.py`, 2 testes
+      novos: listagem exclui todos os níveis, `total_linhas` da raiz
+      correto)
+- [x] `mypy --strict`/`ruff` limpos + suíte completa (unit + integração)
+      verde após a correção

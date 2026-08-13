@@ -13,6 +13,7 @@ from ddf.infrastructure.adapters.generators.comum._metricas import (
     _cobertura_dos_valores_frequentes,
     _elegivel_para_enumeracao,
     _metrica_de_coluna,
+    _metrica_de_confianca,
 )
 
 
@@ -125,7 +126,11 @@ def _montar_tabela_json(tabela: TabelaAnalisada) -> dict[str, Any]:
         agente consumidor não tem como distinguir "100% de completude
         confirmada pela amostra" de "nenhuma linha inspecionada"
         já que o valor numérico de `completude` é o mesmo nos dois
-        casos. `esquema_de_consulta` fica ausente se nenhuma coluna sugerir
+        casos. `confianca` (`"alta"`/`"media"`/`"baixa"`) também vive dentro
+        de `metricas_tabela`, quando `MetricasDeConfianca` já foi calculada
+        — generaliza `amostra_vazia` (caso particular de `confianca ==
+        "baixa"` com `tamanho_amostra == 0`), sem substituí-la.
+        `esquema_de_consulta` fica ausente se nenhuma coluna sugerir
         filtro de enum. `restricoes_unicas` fica ausente se a tabela não
         tem UNIQUE composto; quando presente, é lista de listas de nomes de
         coluna (não lista de dicts nomeados) — `RestricaoUnica` só carrega
@@ -161,6 +166,9 @@ def _montar_tabela_json(tabela: TabelaAnalisada) -> dict[str, Any]:
             "completude": metrica_tabela.completude,
             "amostra_vazia": tamanho_amostra == 0,
         }
+        metrica_confianca = _metrica_de_confianca(tabela)
+        if metrica_confianca is not None:
+            conteudo["metricas_tabela"]["confianca"] = metrica_confianca.nivel.value
 
     if tabela.restricoes_unicas:
         conteudo["restricoes_unicas"] = [

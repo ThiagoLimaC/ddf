@@ -8,7 +8,12 @@ suficiente da amostra não-nula pra confiar na enumeração?".
 pelos dois, pra não divergirem silenciosamente entre si.
 """
 
-from ddf.domain.model.analysis import ColunaAnalisada, MetricasBaseColuna
+from ddf.domain.model.analysis import (
+    ColunaAnalisada,
+    MetricasBaseColuna,
+    MetricasDeConfianca,
+    TabelaAnalisada,
+)
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado
 
 _COBERTURA_MINIMA_ACCEPTED_VALUES = 0.9
@@ -61,6 +66,19 @@ def _metrica_de_coluna(coluna: ColunaAnalisada) -> MetricasBaseColuna | None:
         A MetricasBaseColuna encontrada, ou None se ausente.
     """
     metricas = [m for m in coluna.metricas if isinstance(m, MetricasBaseColuna)]
+    return metricas[0] if metricas else None
+
+
+def _metrica_de_confianca(tabela: TabelaAnalisada) -> MetricasDeConfianca | None:
+    """Filtra a MetricasDeConfianca da tabela, se ela já tiver sido calculada.
+
+    Args:
+        tabela: tabela analisada.
+
+    Returns:
+        A MetricasDeConfianca encontrada, ou None se ausente.
+    """
+    metricas = [m for m in tabela.metricas if isinstance(m, MetricasDeConfianca)]
     return metricas[0] if metricas else None
 
 

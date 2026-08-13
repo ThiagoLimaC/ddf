@@ -5,10 +5,14 @@ from typing import Any
 from ddf.domain.model.analysis import (
     ColunaAnalisada,
     MetricasBaseTabela,
+    NivelDeConfianca,
     TabelaAnalisada,
 )
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
-from ddf.infrastructure.adapters.generators.comum._metricas import _metrica_de_coluna
+from ddf.infrastructure.adapters.generators.comum._metricas import (
+    _metrica_de_coluna,
+    _metrica_de_confianca,
+)
 
 _NAO_DISPONIVEL = "N/D"
 _NAO_APLICAVEL = "—"
@@ -230,6 +234,30 @@ def _formatar_completude(tabela: TabelaAnalisada) -> str:
     if not metricas_tabela:
         return _NAO_DISPONIVEL
     return f"{metricas_tabela[0].completude:.2f}%"
+
+
+_ROTULOS_CONFIANCA = {
+    NivelDeConfianca.ALTA: "alta",
+    NivelDeConfianca.MEDIA: "média",
+    NivelDeConfianca.BAIXA: "baixa — trate as métricas amostrais desta "
+    "tabela com cautela",
+}
+
+
+def _formatar_confianca(tabela: TabelaAnalisada) -> str:
+    """Filtro Jinja: formata o nível de confiança estatística da tabela.
+
+    Args:
+        tabela: tabela analisada a documentar.
+
+    Returns:
+        Rótulo do nível de confiança, ou "N/D" se a métrica ainda não
+        tiver sido calculada.
+    """
+    metrica_confianca = _metrica_de_confianca(tabela)
+    if metrica_confianca is None:
+        return _NAO_DISPONIVEL
+    return _ROTULOS_CONFIANCA[metrica_confianca.nivel]
 
 
 def _formatar_extremo(valor: str | None, aplicavel: bool) -> str:

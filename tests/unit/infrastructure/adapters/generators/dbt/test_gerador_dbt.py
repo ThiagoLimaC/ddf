@@ -13,6 +13,8 @@ from ddf.domain.model.analysis import (
     BancoAnalisado,
     ColunaAnalisada,
     MetricasBaseColuna,
+    MetricasDeConfianca,
+    NivelDeConfianca,
     TabelaAnalisada,
 )
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
@@ -1756,6 +1758,61 @@ class TestBorda:
             tmp_path / "models" / "staging" / "escopo" / "stg_escopo__tabela.sql"
         ).read_text()
         assert "adapter.quote('d\\'agua')" in sql
+
+    def test_meta_confianca_estatistica_aparece_no_model_sem_alterar_severidade(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """MetricasDeConfianca vira meta.confianca_estatistica, só anotação.
+
+        Confiança BAIXA não rebaixa nem suprime o teste soft `unique`
+        amostral já sugerido — ele continua com `severity: warn`, a mesma
+        severidade que teria sem a métrica de confiança presente. Rebaixar
+        severidade com base em confiança mudaria comportamento de testes já
+        decididos nas issues #89/#90/#95 e feriria o NFR3 do PRD (mesma
+        métrica sempre gera a mesma sugestão) — decisão do usuário.
+        """
+        metrica_unica_amostral = MetricasBaseColuna(
+            percentual_nulo=0.0, percentual_unico=100.0, valores_frequentes=[]
+        )
+        coluna = construir_coluna(
+            nome="email",
+            tipo_dado=TipoDeDado(categoria=CategoriaDeDado.VARCHAR, tamanho_maximo=255),
+            metricas=[metrica_unica_amostral],
+        )
+        tabela = construir_tabela(
+            colunas=[coluna],
+            metricas=[MetricasDeConfianca(nivel=NivelDeConfianca.BAIXA)],
+        )
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        model = _schema_yml(tmp_path)["models"][0]
+        assert model["meta"] == {"confianca_estatistica": "baixa"}
+        coluna_email = model["columns"][0]
+        assert {"unique": {"config": {"severity": "warn"}}} in coluna_email["tests"]
+
+    def test_confianca_ausente_nao_gera_chave_meta(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+    ) -> None:
+        """Tabela sem MetricasDeConfianca calculada não recebe meta, não quebra."""
+        tabela = construir_tabela(colunas=[construir_coluna()])
+        banco = construir_banco([tabela])
+
+        resultado = GeradorDbt()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        model = _schema_yml(tmp_path)["models"][0]
+        assert "meta" not in model
 
     def test_packages_yml_orfao_e_removido_quando_restricao_some(
         self,

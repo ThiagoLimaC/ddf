@@ -17,7 +17,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ddf.domain.model.analysis import BancoAnalisado, MetricasBaseColuna, TipoDeMetrica
+from ddf.domain.model.analysis import (
+    BancoAnalisado,
+    MetricasBaseColuna,
+    MetricasDeConfianca,
+    TipoDeMetrica,
+)
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.generators.comum._escrita import escrever_arquivo
@@ -74,7 +79,7 @@ _PACKAGES_YML: dict[str, Any] = {
 class GeradorDbt:
     """Gera um projeto dbt standalone (staging layer) a partir do BancoAnalisado."""
 
-    requer: list[TipoDeMetrica] = [MetricasBaseColuna]
+    requer: list[TipoDeMetrica] = [MetricasBaseColuna, MetricasDeConfianca]
 
     def __call__(self, entrada: BancoAnalisado, destino: Path) -> Resultado[None]:
         """Escreve dbt_project.yml, README.md e, por escopo, sources/models/schema.

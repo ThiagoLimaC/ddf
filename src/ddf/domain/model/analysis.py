@@ -1,5 +1,7 @@
 """Analysis Context — métricas calculadas sobre a estrutura curada."""
 
+from enum import Enum
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing_extensions import Self
 
@@ -44,6 +46,29 @@ class MetricasBaseTabela(MetricaDeTabela):
 
     origem: str = "AnalisadorDeMetricasDeTabela"
     completude: float = Field(ge=0, le=100)
+
+
+class NivelDeConfianca(str, Enum):
+    """Confiança estatística das métricas amostrais de uma tabela."""
+
+    ALTA = "alta"
+    MEDIA = "media"
+    BAIXA = "baixa"
+
+
+class MetricasDeConfianca(MetricaDeTabela):
+    """Sinal de confiança estatística produzido por AnalisadorDeMetricasDeTabela.
+
+    Métrica de tabela, não de coluna: depende só de `tamanho_amostra`/
+    `total_linhas`, idênticos para todas as colunas da mesma tabela (a
+    amostra é lida uma vez, para a tabela inteira). `tamanho_amostra`/
+    `percentual_amostrado` não são campos aqui — já existem em
+    `TabelaAnalisada.total_linhas`/`TabelaAnalisada.metadados_amostra.
+    tamanho_amostra`.
+    """
+
+    origem: str = "AnalisadorDeMetricasDeTabela"
+    nivel: NivelDeConfianca
 
 
 TipoDeMetrica = type[MetricaDeColuna] | type[MetricaDeTabela]

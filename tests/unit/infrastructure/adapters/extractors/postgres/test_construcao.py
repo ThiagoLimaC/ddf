@@ -58,6 +58,7 @@ class TestFeliz:
             linhas_largura_media=[("pedidos", 120)],
             linhas_comprimiveis=[],
             linhas_particionadas=[],
+            linhas_filhos_de_particao=[],
         )
 
         assert metadados.pks_por_tabela == {"pedidos": {"id"}}
@@ -67,6 +68,71 @@ class TestFeliz:
             "id",
             "cliente_id",
         ]
+
+    def test_montar_metadados_agrega_total_linhas_da_mae_a_partir_das_filhas(
+        self,
+    ) -> None:
+        """total_linhas da mãe é sobrescrito pela soma real das partições."""
+        metadados = montar_metadados_do_schema(
+            linhas_colunas=[],
+            linhas_pks=[],
+            linhas_fks=[],
+            linhas_unicas=[],
+            linhas_total_linhas=[
+                ("pedidos", 0.0),
+                ("pedidos_2024", 1000.0),
+                ("pedidos_2025", 500.0),
+            ],
+            linhas_largura_media=[],
+            linhas_comprimiveis=[],
+            linhas_particionadas=[("pedidos",)],
+            linhas_filhos_de_particao=[
+                ("pedidos", "pedidos_2024"),
+                ("pedidos", "pedidos_2025"),
+            ],
+        )
+
+        assert metadados.total_linhas_por_tabela["pedidos"] == 1500
+        assert metadados.total_linhas_por_tabela["pedidos_2024"] == 1000
+        assert metadados.total_linhas_por_tabela["pedidos_2025"] == 500
+        assert metadados.filhos_por_tabela_mae == {
+            "pedidos": ["pedidos_2024", "pedidos_2025"]
+        }
+
+    def test_montar_metadados_agrega_total_linhas_em_particionamento_multinivel(
+        self,
+    ) -> None:
+        """Raiz de particionamento de 2 níveis recebe a soma correta, não ~0.
+
+        `linhas_filhos_de_particao` chega na ordem pai-antes-do-filho (o
+        que `pg_inherits` sempre devolve na prática) — o pior caso para um
+        único passe bottom-up: a raiz seria processada antes da
+        sub-partição intermediária já ter sido agregada, herdando o valor
+        bruto (~0) dela em vez da soma real das folhas.
+        """
+        metadados = montar_metadados_do_schema(
+            linhas_colunas=[],
+            linhas_pks=[],
+            linhas_fks=[],
+            linhas_unicas=[],
+            linhas_total_linhas=[
+                ("eventos", 0.0),
+                ("eventos_2023", 0.0),
+                ("eventos_2023_q1", 600.0),
+                ("eventos_2023_q2", 400.0),
+            ],
+            linhas_largura_media=[],
+            linhas_comprimiveis=[],
+            linhas_particionadas=[("eventos",), ("eventos_2023",)],
+            linhas_filhos_de_particao=[
+                ("eventos", "eventos_2023"),
+                ("eventos_2023", "eventos_2023_q1"),
+                ("eventos_2023", "eventos_2023_q2"),
+            ],
+        )
+
+        assert metadados.total_linhas_por_tabela["eventos_2023"] == 1000
+        assert metadados.total_linhas_por_tabela["eventos"] == 1000
 
     def test_montar_consulta_amostra_amostragem_integral_seleciona_tabela_inteira(
         self,
@@ -138,6 +204,7 @@ class TestBorda:
             linhas_largura_media=[],
             linhas_comprimiveis=[],
             linhas_particionadas=[],
+            linhas_filhos_de_particao=[],
         )
 
         assert metadados.unicas_por_tabela.get("pedidos", set()) == set()
@@ -156,9 +223,31 @@ class TestBorda:
             linhas_largura_media=[],
             linhas_comprimiveis=[],
             linhas_particionadas=[],
+            linhas_filhos_de_particao=[],
         )
 
         assert metadados.total_linhas_por_tabela == {"pedidos": 0}
+
+    def test_montar_metadados_filha_de_particao_sem_total_linhas_conta_como_zero(
+        self,
+    ) -> None:
+        """Filha sem linha própria em linhas_total_linhas não quebra a soma."""
+        metadados = montar_metadados_do_schema(
+            linhas_colunas=[],
+            linhas_pks=[],
+            linhas_fks=[],
+            linhas_unicas=[],
+            linhas_total_linhas=[("pedidos", 0.0), ("pedidos_2024", 1000.0)],
+            linhas_largura_media=[],
+            linhas_comprimiveis=[],
+            linhas_particionadas=[("pedidos",)],
+            linhas_filhos_de_particao=[
+                ("pedidos", "pedidos_2024"),
+                ("pedidos", "pedidos_2025"),
+            ],
+        )
+
+        assert metadados.total_linhas_por_tabela["pedidos"] == 1000
 
     def test_montar_metadados_largura_media_zero_usa_padrao(self) -> None:
         """soma_avg_width == 0 (sem estatística real) cai pro padrão, não fica 0."""
@@ -171,6 +260,7 @@ class TestBorda:
             linhas_largura_media=[("pedidos", 0)],
             linhas_comprimiveis=[],
             linhas_particionadas=[],
+            linhas_filhos_de_particao=[],
         )
 
         assert metadados.largura_media_por_tabela["pedidos"] > 0

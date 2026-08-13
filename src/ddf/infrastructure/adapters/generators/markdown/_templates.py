@@ -7,6 +7,7 @@ from jinja2 import Environment, FileSystemLoader
 from ddf.infrastructure.adapters.generators.markdown._filtros import (
     _escapar_celula,
     _formatar_completude,
+    _formatar_confianca,
     _formatar_restricoes_fk_compostas,
     _formatar_restricoes_unicas,
     _formatar_tipo,
@@ -30,6 +31,7 @@ _ambiente.filters["formatar_restricoes_fk_compostas"] = (
     _formatar_restricoes_fk_compostas
 )
 _ambiente.filters["completude"] = _formatar_completude
+_ambiente.filters["confianca"] = _formatar_confianca
 _ambiente.filters["linha_qualidade"] = _linha_qualidade
 _ambiente.filters["secoes_valores_frequentes"] = _secoes_valores_frequentes
 _TEMPLATE_TABELA = _ambiente.get_template("tabela.md.jinja2")
