@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import click
+import colorama
 
 from ddf.infrastructure.adapters.cli import avisos, prompts
 from ddf.infrastructure.adapters.cli.etapas import analise, curadoria, extracao, geracao
@@ -49,18 +50,31 @@ _BOAS_VINDAS = (
 
 
 def _configurar_logging() -> None:
-    """Torna visível no terminal o log INFO+ de qualquer módulo do ddf.
+    r"""Redireciona o log DEBUG+ do ddf para o arquivo `./ddf.log`, nunca pro terminal.
 
     O nível padrão do logger raiz do Python é WARNING, e nada mais no
-    processo registra um handler — sem isso, todo `logger.info(...)` de
-    Adapters (ex.: streaming ativado numa tabela grande) é descartado
-    silenciosamente antes de chegar a qualquer lugar visível.
+    processo registra um handler — sem isso, todo `logger.info(...)`/
+    `logger.debug(...)` de Adapters (ex.: streaming ativado numa tabela
+    grande) é descartado silenciosamente. O terminal é território do
+    usuário final (`prompts.py`) — log de ferramenta é ruído de
+    desenvolvedor, então vai só para o arquivo, nunca para stdout/stderr.
+
+    Também ativa `logging.captureWarnings`: sem isso, um `warnings.warn()`
+    de dependência (ex.: pymysql avisando sobre um cursor mal drenado) vai
+    direto pro stderr cru, fora do formatter do ddf, e pode intercalar com
+    o redesenho `\r` da barra de progresso no meio de uma extração.
     """
+    handler = logging.FileHandler("ddf.log")
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+
     logger_ddf = logging.getLogger("ddf")
-    logger_ddf.setLevel(logging.INFO)
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    logger_ddf.setLevel(logging.DEBUG)
     logger_ddf.addHandler(handler)
+
+    logging.captureWarnings(True)
+    logging.getLogger("py.warnings").addHandler(handler)
 
 
 def _sair_se_vazio(itens: Sequence[object], mensagem: str) -> None:
@@ -79,11 +93,26 @@ def _sair_se_vazio(itens: Sequence[object], mensagem: str) -> None:
 
 @click.command()
 def executar() -> None:
-    """Executa o wizard interativo do ddf, da conexão aos artefatos gerados.
+    r"""Executa o wizard interativo do ddf, da conexão aos artefatos gerados.
 
     Descoberta de plugins roda uma única vez; as etapas 1-11 repetem a cada
     "Executar novamente?" confirmado, sem precisar reiniciar o processo.
+
+    `colorama.init()` é a 1ª chamada, antes de qualquer print: `prompts.py`
+    escreve sequência ANSI crua (`\x1b[K`, cor truecolor) direto via
+    `print()`, fora do renderizador do `questionary`/`prompt_toolkit` — sem
+    isso, `cmd.exe` legado no Windows (sem `ENABLE_VIRTUAL_TERMINAL_
+    PROCESSING`, que nenhuma outra dependência liga sozinha) mostraria essas
+    sequências como texto literal em vez de limpar/colorir a linha. No-op
+    fora do Windows.
+
+    `_configurar_logging()` vem logo depois: sem ela, `logger.info(...)` de
+    Adapters (streaming ativado) fica descartado silenciosamente, e
+    `warnings.warn()` de dependências (ex.: pymysql) vai cru pro stderr em
+    vez de ir só para `./ddf.log`, via `captureWarnings` do ddf.
     """
+    colorama.init()
+    _configurar_logging()
     prompts.imprimir_destacado(_BANNER, prompts.COR_DESTAQUE)
     prompts.imprimir_destacado(_BOAS_VINDAS, prompts.COR_SECUNDARIA, negrito=False)
     avisos.exibir_avisos(

@@ -16,7 +16,7 @@ _Numero = TypeVar("_Numero", int, float)
 # controlável via COR_*.
 _QUADROS_AMPULHETA = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
-COR_DESTAQUE = "#00d7ff"
+COR_DESTAQUE = "#18a0db"
 COR_SUCESSO = "#58cd58"
 
 # Erro é sempre fatal para o passo atual; aviso é informativo, não
@@ -115,9 +115,7 @@ def senha(mensagem: str) -> str:
         mensagem: pergunta exibida ao usuário.
     """
     print()
-    resposta = cast(
-        "str | None", questionary.password(mensagem, style=_ESTILO).ask()
-    )
+    resposta = cast("str | None", questionary.password(mensagem, style=_ESTILO).ask())
     if resposta is None:
         sys.exit(0)
     return resposta
@@ -251,6 +249,23 @@ def confirmar(mensagem: str, default: bool = True) -> bool:
     return resposta
 
 
+def perguntar_repetir(mensagem_erro: str) -> None:
+    """Mostra `mensagem_erro` e pergunta se quer tentar de novo; senão, sai limpo.
+
+    Usado nos pontos do wizard onde uma resposta tecnicamente bem formada
+    ainda falha uma regra de negócio (ex.: percentual fora de 0-100,
+    nenhum escopo selecionado) — sem isso, cada chamador repetiria o
+    mesmo par `imprimir_destacado(erro)` + decidir sair ou não, e o padrão
+    anterior (`sys.exit` direto no erro) saía sem dar chance de correção.
+
+    Args:
+        mensagem_erro: descrição do que deu errado, sem o prefixo "Erro:".
+    """
+    imprimir_destacado(f"Erro: {mensagem_erro}", COR_ERRO)
+    if not confirmar("Tentar novamente?", default=True):
+        sys.exit(0)
+
+
 def escolher_multiplos(
     mensagem: str, escolhas: list[str], permite_vazio: bool = False
 ) -> list[str]:
@@ -265,29 +280,31 @@ def escolher_multiplos(
         mensagem: pergunta exibida ao usuário.
         escolhas: opções disponíveis para seleção.
         permite_vazio: `False` (padrão) trata "nenhum item marcado" como
-            cancelamento, saindo limpo — mesmo comportamento de sempre.
-            `True` devolve a lista vazia para o chamador decidir o que
-            fazer (ex.: reperguntar), em vez de sair do processo.
+            uma resposta a repetir via `perguntar_repetir` (não um
+            cancelamento — o usuário só não marcou nada, ainda pode
+            querer escolher). `True` devolve a lista vazia direto para o
+            chamador decidir o que fazer.
     """
-    print()
-    selecionados = cast(
-        "list[str] | None",
-        questionary.checkbox(
-            mensagem,
-            style=_ESTILO,
-            choices=escolhas,
-            use_search_filter=True,
-            use_jk_keys=False,
-            # Mesma técnica de `selecionar()`: "\n" no fim da instrução, não
-            # um print à parte — ver o comentário lá para o porquê.
-            instruction="(digite para filtrar, espaço marca, enter confirma)\n",
-        ).ask(),
-    )
-    if selecionados is None:
-        sys.exit(0)
-    if not selecionados and not permite_vazio:
-        sys.exit(0)
-    return selecionados
+    while True:
+        print()
+        selecionados = cast(
+            "list[str] | None",
+            questionary.checkbox(
+                mensagem,
+                style=_ESTILO,
+                choices=escolhas,
+                use_search_filter=True,
+                use_jk_keys=False,
+                # Mesma técnica de `selecionar()`: "\n" no fim da instrução,
+                # não um print à parte — ver o comentário lá para o porquê.
+                instruction="(digite para filtrar, espaço marca, enter confirma)\n",
+            ).ask(),
+        )
+        if selecionados is None:
+            sys.exit(0)
+        if selecionados or permite_vazio:
+            return selecionados
+        perguntar_repetir("Nenhum item selecionado.")
 
 
 @contextmanager
@@ -344,25 +361,41 @@ def _cor_ansi_truecolor(cor_hex: str) -> str:
     return f"\x1b[38;2;{r};{g};{b}m"
 
 
+_INTERVALO_HEARTBEAT_SEGUNDOS = 0.3
+
+
+@contextmanager
 def progresso_paralelo(
     mensagem_base: str, total: int | None = None
-) -> Callable[[str], None]:
-    r"""Devolve o callback de progresso, chamado uma vez por item concluído.
+) -> Generator[Callable[[str], None], None, None]:
+    r"""Context manager que gera o callback de progresso, 1x por item concluído.
 
     Pensado para ser passado como `progresso=` a `OrquestradorDeTabelas.
-    extrair`/`aplicar_sobrescritas` — cada chamada já chega serializada pela
-    thread principal, sem necessidade de lock aqui.
+    extrair`/`aplicar_sobrescritas`, dentro do `with`:
 
-    Desenha 3 linhas fixas — "mensagem (N/total)", uma linha em branco e uma
-    barra de retângulos (`▮▮▮▯▯▯`) — sempre subindo até a 1ª linha antes de
-    limpar e reescrever as 3, o que funciona mesmo com largura variável
-    porque `\\x1b[K` limpa o resto da linha antes de escrever. A barra
-    recalcula a própria largura a cada redesenho, pra terminar sob o `)` de
-    "mensagem (N/total)" mesmo com a contagem crescendo em dígitos
-    (`"(1/122)"` → `"(121/122)"`).
+        with progresso_paralelo("Tabelas extraídas", total=len(pares)) as progresso:
+            resultado = orquestrador.extrair(pares, extrator, progresso=progresso)
+
+    Desenha 3 linhas fixas — "quadro mensagem (N/total)", uma linha em
+    branco e uma barra de retângulos (`▮▮▮▯▯▯`) — sempre subindo até a 1ª
+    linha antes de limpar e reescrever as 3, o que funciona mesmo com
+    largura variável porque `\\x1b[K` limpa o resto da linha antes de
+    escrever. A barra recalcula a própria largura a cada redesenho, pra
+    terminar sob o `)` de "mensagem (N/total)" mesmo com a contagem
+    crescendo em dígitos (`"(1/122)"` → `"(121/122)"`).
 
     Preenchido em `COR_DESTAQUE` (progresso em andamento, não `COR_SUCESSO`)
     e vazio em `COR_SECUNDARIA`.
+
+    Além de redesenhar a cada item concluído, uma thread de heartbeat (mesmo
+    padrão de `ampulheta`/`barra_indeterminada`) redesenha periodicamente
+    mesmo sem nenhum item concluir, animando o `quadro` de spinner — sem
+    isso, a barra fica estática quando só resta um item grande em voo (ex.:
+    streaming numa tabela outlier), o que parece travamento. O heartbeat só
+    anima o spinner, nunca avança a barra em si — progresso continua só
+    subindo em item de fato concluído. Como agora duas threads podem
+    redesenhar (heartbeat e cada chamada do callback), um lock serializa as
+    escritas na tela.
 
     Args:
         mensagem_base: texto fixo exibido antes da contagem.
@@ -373,24 +406,27 @@ def progresso_paralelo(
     concluidas = 0
     total_atual = total
     ja_desenhou = False
+    indice_quadro = 0
+    lock = threading.Lock()
+    parar = threading.Event()
 
     def _barra(largura: int) -> str:
-        preenchidos = (
-            round(largura * concluidas / total_atual) if total_atual else 0
-        )
+        preenchidos = round(largura * concluidas / total_atual) if total_atual else 0
         vazios = largura - preenchidos
         segmentos = [f"{_cor_ansi_truecolor(COR_DESTAQUE)}{_BLOCO_CHEIO}"] * preenchidos
         segmentos += [f"{_cor_ansi_truecolor(COR_SECUNDARIA)}{_BLOCO_VAZIO}"] * vazios
         return "".join(segmentos) + _ANSI_RESET
 
     def _desenhar() -> None:
-        nonlocal ja_desenhou
+        nonlocal ja_desenhou, indice_quadro
         contagem = (
             f"{concluidas}/{total_atual}"
             if total_atual is not None
             else str(concluidas)
         )
-        linha_contagem = f"{mensagem_base} ({contagem})"
+        quadro = _QUADROS_AMPULHETA[indice_quadro]
+        indice_quadro = (indice_quadro + 1) % len(_QUADROS_AMPULHETA)
+        linha_contagem = f"{quadro} {mensagem_base} ({contagem})"
         if ja_desenhou:
             print("\x1b[2A", end="")
         print(f"\r\x1b[K{linha_contagem}")
@@ -400,13 +436,24 @@ def progresso_paralelo(
 
     def _callback(identificador: str) -> None:
         nonlocal concluidas
-        concluidas += 1
-        _desenhar()
+        with lock:
+            concluidas += 1
+            _desenhar()
 
-    if total_atual is not None:
-        _desenhar()
+    def _heartbeat() -> None:
+        while True:
+            with lock:
+                _desenhar()
+            if parar.wait(_INTERVALO_HEARTBEAT_SEGUNDOS):
+                return
 
-    return _callback
+    thread = threading.Thread(target=_heartbeat, daemon=True)
+    thread.start()
+    try:
+        yield _callback
+    finally:
+        parar.set()
+        thread.join()
 
 
 _LARGURA_BARRA_INDETERMINADA = 12

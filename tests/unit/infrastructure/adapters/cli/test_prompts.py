@@ -148,9 +148,7 @@ class TestFeliz:
         """negrito=False produz estilo sem "bold" — texto de segundo plano."""
         chamadas = interceptar_print
 
-        prompts.imprimir_destacado(
-            "Bem-vindo.", prompts.COR_SECUNDARIA, negrito=False
-        )
+        prompts.imprimir_destacado("Bem-vindo.", prompts.COR_SECUNDARIA, negrito=False)
 
         assert chamadas == [
             {
@@ -219,10 +217,9 @@ class TestFeliz:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Com total conhecido, mostra 'concluídas/total' e a barra de blocos."""
-        callback = prompts.progresso_paralelo("Extraindo...", total=2)
-
-        callback("public.clientes")
-        callback("public.pedidos")
+        with prompts.progresso_paralelo("Extraindo...", total=2) as callback:
+            callback("public.clientes")
+            callback("public.pedidos")
 
         saida = capsys.readouterr().out
         assert "Extraindo... (0/2)" in saida
@@ -371,17 +368,32 @@ class TestBorda:
 
         assert prompts.numero_opcional("Seed (opcional):", int) is None
 
-    def test_escolher_multiplos_sem_nenhuma_marcada_tambem_sai(
+    def test_escolher_multiplos_sem_nenhuma_marcada_recusa_repetir_e_sai(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Lista vazia (nada marcado, sem cancelar) também sai — não é None."""
+        """Nada marcado (sem cancelar) pergunta se quer repetir; recusando, sai."""
         _substituir(monkeypatch, "checkbox", [])
+        _substituir(monkeypatch, "confirm", False)
 
         with pytest.raises(SystemExit) as excinfo:
             prompts.escolher_multiplos("Escolha:", ["Markdown"])
 
         assert excinfo.value.code == 0
+
+    def test_escolher_multiplos_sem_nenhuma_marcada_repete_ate_marcar_algo(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Nada marcado + confirmar repetir=Sim: repergunta até algo ser marcado."""
+        respostas_checkbox = iter([[], ["Markdown"]])
+        monkeypatch.setattr(
+            "questionary.checkbox",
+            lambda *args, **kwargs: _RespostaFake(next(respostas_checkbox)),
+        )
+        _substituir(monkeypatch, "confirm", True)
+
+        assert prompts.escolher_multiplos("Escolha:", ["Markdown"]) == ["Markdown"]
 
     def test_escolher_multiplos_permite_vazio_devolve_lista_vazia(
         self,
@@ -439,9 +451,8 @@ class TestBorda:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Sem total (None), mostra só a contagem corrida, sem fração."""
-        callback = prompts.progresso_paralelo("Gerando skeletons...")
-
-        callback("public.clientes")
+        with prompts.progresso_paralelo("Gerando skeletons...") as callback:
+            callback("public.clientes")
 
         saida = capsys.readouterr().out
         assert "Gerando skeletons... (1)" in saida
@@ -460,3 +471,21 @@ class TestBorda:
         """Mesma garantia de `ampulheta`: sair do bloco encerra a thread de animação."""
         with prompts.barra_indeterminada("Analisando..."):
             pass  # bloco vazio — só valida que entrar/sair funciona sem travar
+
+    def test_progresso_paralelo_encerra_a_thread_de_heartbeat_ao_sair(
+        self,
+    ) -> None:
+        """Mesma garantia de `ampulheta`: sair do bloco encerra a thread."""
+        with prompts.progresso_paralelo("Extraindo...", total=1):
+            pass  # bloco vazio — só valida que entrar/sair funciona sem travar
+
+    def test_progresso_paralelo_heartbeat_redesenha_sem_nenhum_item_concluido(
+        self,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A barra anima (spinner) mesmo sem nenhum callback ser chamado."""
+        with prompts.progresso_paralelo("Extraindo...", total=1):
+            time.sleep(prompts._INTERVALO_HEARTBEAT_SEGUNDOS * 2)
+
+        saida = capsys.readouterr().out
+        assert "Extraindo... (0/1)" in saida

@@ -48,8 +48,16 @@ def _gerar_skeletons(
     o efeito colateral em disco já é o que importa, resumido numa única
     linha informativa em vez de um Aviso por arquivo.
     """
-    with prompts.ampulheta("Gerando skeletons..."):
-        resultado = orquestrador.aplicar_sobrescritas(tabelas, sobrescrita)
+    with prompts.progresso_paralelo(
+        "Skeletons gerados", total=len(tabelas)
+    ) as progresso:
+        resultado = orquestrador.aplicar_sobrescritas(
+            tabelas, sobrescrita, progresso=progresso
+        )
+    # 2 print()s de propósito: a última linha de progresso_paralelo termina
+    # com end="" (dangling) — o 1º print() só fecha essa linha, o 2º é que
+    # produz a linha em branco visível antes do próximo conteúdo.
+    print()
     print()
     if isinstance(resultado, Falha):
         prompts.imprimir_destacado(f"Erro: {resultado.erro}", prompts.COR_ERRO)
@@ -73,8 +81,16 @@ def aplicar_sobrescritas(
 ) -> BancoCurado:
     """Etapa 8: reaplica a sobrescrita (já editada) em paralelo, gera o BancoCurado."""
     inicio = time.monotonic()
-    with prompts.ampulheta("Aplicando sobrescritas..."):
-        resultado = orquestrador.aplicar_sobrescritas(tabelas, sobrescrita)
+    with prompts.progresso_paralelo(
+        "Sobrescritas aplicadas", total=len(tabelas)
+    ) as progresso:
+        resultado = orquestrador.aplicar_sobrescritas(
+            tabelas, sobrescrita, progresso=progresso
+        )
+    # 2 print()s de propósito: a última linha de progresso_paralelo termina
+    # com end="" (dangling) — o 1º print() só fecha essa linha, o 2º é que
+    # produz a linha em branco visível antes do próximo conteúdo.
+    print()
     print()
     banco_curado = ou_sair(resultado)
     prompts.imprimir_destacado(

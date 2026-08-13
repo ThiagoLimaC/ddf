@@ -357,6 +357,67 @@ class TestBorda:
 
         assert sorted(chamadas) == ["vendas.clientes", "vendas.pedidos"]
 
+    def test_extrair_agrega_avisos_de_paralelismo_mariadb_em_n_de_m(
+        self,
+        fabrica_tabela_extraida: Callable[[str, str], TabelaExtraida],
+    ) -> None:
+        """3 tabelas, 2 com Aviso de paralelismo do MariaDB, viram "2 de 3"."""
+
+        class _ExtratorMariaDBFake:
+            def listar_escopos(self) -> Resultado[list[str]]:
+                """Não é exercitado por este teste."""
+                raise NotImplementedError
+
+            def listar_tabelas(
+                self, escopo: str, /
+            ) -> Resultado[list[tuple[str, str]]]:
+                """Não é exercitado por este teste."""
+                raise NotImplementedError
+
+            def extrair_tabela(
+                self, escopo: str, tabela: str, /
+            ) -> Resultado[TabelaExtraida]:
+                tabela_extraida = fabrica_tabela_extraida(escopo, tabela)
+                if tabela == "sequencial":
+                    return Sucesso(tabela_extraida)
+                return Sucesso(
+                    tabela_extraida,
+                    avisos=[
+                        Aviso(
+                            mensagem=(
+                                f"'{escopo}.{tabela}': paralelismo intra-tabela "
+                                "ativado sem garantia de consistência entre "
+                                "faixas neste MariaDB — motor sem equivalente "
+                                "ao SET TRANSACTION SNAPSHOT do Postgres."
+                            ),
+                            origem="ExtratorMariaDB",
+                        )
+                    ],
+                )
+
+        orquestrador = OrquestradorParalelo(max_trabalhadores=4)
+
+        resultado = orquestrador.extrair(
+            [
+                ("vendas", "paralela_1"),
+                ("vendas", "paralela_2"),
+                ("vendas", "sequencial"),
+            ],
+            _ExtratorMariaDBFake(),
+        )
+
+        assert isinstance(resultado, Sucesso)
+        avisos_paralelismo = [
+            aviso
+            for aviso in resultado.avisos
+            if "sem garantia de consistência entre faixas" in aviso.mensagem
+        ]
+        assert len(avisos_paralelismo) == 1
+        assert "2 de 3 tabela(s)" in avisos_paralelismo[0].mensagem
+        assert not any(
+            "'vendas.paralela_1'" in aviso.mensagem for aviso in resultado.avisos
+        )
+
     def test_extrair_fk_composta_sem_chave_candidata_emite_aviso(
         self,
         construir_extrator_fake: Callable[..., ExtratorFake],
