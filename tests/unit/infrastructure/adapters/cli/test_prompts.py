@@ -148,9 +148,7 @@ class TestFeliz:
         """negrito=False produz estilo sem "bold" — texto de segundo plano."""
         chamadas = interceptar_print
 
-        prompts.imprimir_destacado(
-            "Bem-vindo.", prompts.COR_SECUNDARIA, negrito=False
-        )
+        prompts.imprimir_destacado("Bem-vindo.", prompts.COR_SECUNDARIA, negrito=False)
 
         assert chamadas == [
             {
@@ -219,10 +217,9 @@ class TestFeliz:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Com total conhecido, mostra 'concluídas/total' e a barra de blocos."""
-        callback = prompts.progresso_paralelo("Extraindo...", total=2)
-
-        callback("public.clientes")
-        callback("public.pedidos")
+        with prompts.progresso_paralelo("Extraindo...", total=2) as callback:
+            callback("public.clientes")
+            callback("public.pedidos")
 
         saida = capsys.readouterr().out
         assert "Extraindo... (0/2)" in saida
@@ -439,9 +436,8 @@ class TestBorda:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Sem total (None), mostra só a contagem corrida, sem fração."""
-        callback = prompts.progresso_paralelo("Gerando skeletons...")
-
-        callback("public.clientes")
+        with prompts.progresso_paralelo("Gerando skeletons...") as callback:
+            callback("public.clientes")
 
         saida = capsys.readouterr().out
         assert "Gerando skeletons... (1)" in saida
@@ -460,3 +456,21 @@ class TestBorda:
         """Mesma garantia de `ampulheta`: sair do bloco encerra a thread de animação."""
         with prompts.barra_indeterminada("Analisando..."):
             pass  # bloco vazio — só valida que entrar/sair funciona sem travar
+
+    def test_progresso_paralelo_encerra_a_thread_de_heartbeat_ao_sair(
+        self,
+    ) -> None:
+        """Mesma garantia de `ampulheta`: sair do bloco encerra a thread."""
+        with prompts.progresso_paralelo("Extraindo...", total=1):
+            pass  # bloco vazio — só valida que entrar/sair funciona sem travar
+
+    def test_progresso_paralelo_heartbeat_redesenha_sem_nenhum_item_concluido(
+        self,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A barra anima (spinner) mesmo sem nenhum callback ser chamado."""
+        with prompts.progresso_paralelo("Extraindo...", total=1):
+            time.sleep(prompts._INTERVALO_HEARTBEAT_SEGUNDOS * 2)
+
+        saida = capsys.readouterr().out
+        assert "Extraindo... (0/1)" in saida

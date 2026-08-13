@@ -1,6 +1,5 @@
 """Testes de ExtratorMariaDB."""
 
-import logging
 import threading
 from unittest.mock import MagicMock
 
@@ -199,7 +198,6 @@ class TestFeliz:
         self,
         pool_classe_fake: MagicMock,
         configuracao: ConfiguracaoDeExtracao,
-        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """total_linhas > limiar ativa streaming: SSCursor lido via fetchmany."""
         conexao_fake = MagicMock()
@@ -219,16 +217,18 @@ class TestFeliz:
         extrator = ExtratorMariaDB(
             host="fake", user="root", password="senha", configuracao=configuracao
         )
-        with caplog.at_level(logging.INFO):
-            resultado = extrator.extrair_tabela("vendas", "grande")
+        resultado = extrator.extrair_tabela("vendas", "grande")
 
         assert isinstance(resultado, Sucesso)
         assert resultado.valor.metadados_amostra.tamanho_amostra == 2
         conexao_fake.cursor.assert_called_with(pymysql.cursors.SSCursor)
         # 6 queries de metadado (fetchall) + amostra via fetchmany, não fetchall.
         assert cursor_fake.fetchall.call_count == 6
-        assert "streaming ativado" in caplog.text
-        assert "vendas.grande" in caplog.text
+        mensagens_aviso = [aviso.mensagem for aviso in resultado.avisos]
+        assert any(
+            "streaming ativado" in mensagem and "vendas.grande" in mensagem
+            for mensagem in mensagens_aviso
+        )
 
     def test_segunda_extracao_no_mesmo_schema_reaproveita_cache_de_metadados(
         self, pool_classe_fake: MagicMock, configuracao: ConfiguracaoDeExtracao

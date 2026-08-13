@@ -27,7 +27,7 @@ class TestFeliz:
 
         Nível padrão do logger raiz é WARNING e nenhum handler é
         configurado por padrão — um `logger.info` de um Extrator (ex.:
-        streaming ativado) nunca apareceria em lugar nenhum.
+        paralelismo intra-tabela ativado) nunca apareceria em lugar nenhum.
         """
         logger_ddf = logging.getLogger("ddf")
         handlers_originais = list(logger_ddf.handlers)
