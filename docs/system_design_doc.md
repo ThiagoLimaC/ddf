@@ -255,6 +255,18 @@ declarar nos artefatos que as métricas são estimativas sobre amostra —
 que reprodutibilidade seja verificável a partir do próprio artefato, não só
 do código.
 
+**Seed default fixo (issue #142):** quando o usuário não informa `seed`
+explícito, `seed_efetivo` (`extractors/comum/seed_efetivo.py`) usa uma
+constante global do `ddf` — a mesma para toda extração de todo Extrator —
+em vez de gerar um valor aleatório por execução. O ganho é diff estável em
+Git entre execuções (mesma amostra, artefato não muda por ruído de
+amostragem), mas o trade-off precisa ficar explícito: seed fixo produz
+sempre a mesma fatia física da tabela, não "amostra aleatória reproduzível
+eventualmente". Se essa fatia for não-representativa da tabela, o viés
+nunca é percebido, porque a amostra nunca varia entre execuções para expor
+a diferença. Rotação ocasional dessa fatia é responsabilidade do usuário,
+via `seed` explícito.
+
 ### 4. OrquestradorDeTabelas
 
 `Porta` que coordena o processamento paralelo das tabelas em duas fases

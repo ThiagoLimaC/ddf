@@ -86,6 +86,11 @@ def _k_faixas_para(total_linhas: int) -> int:
 
 _logger = logging.getLogger(__name__)
 
+# Substring estável usada por OrquestradorParalelo.extrair pra reconhecer e
+# agregar (N de M tabela(s)) os Avisos de paralelismo emitidos por tabela
+# abaixo — não muda mesmo que o resto da frase mude.
+MARCADOR_AVISO_PARALELISMO_SEM_SNAPSHOT = "sem garantia de consistência entre faixas"
+
 
 class ExtratorMariaDB:
     """Extrai estrutura e amostra de tabelas de um servidor MariaDB.
@@ -152,8 +157,6 @@ class ExtratorMariaDB:
         )
         self._cache_schemas: dict[str, _MetadadosDoSchema] = {}
         self._lock_cache_schemas = threading.Lock()
-        self._aviso_paralelismo_emitido = False
-        self._lock_aviso_paralelismo = threading.Lock()
 
     def listar_escopos(self) -> Resultado[list[str]]:
         """Lista os escopos (databases) disponíveis, ordenados por nome."""
@@ -230,37 +233,6 @@ class ExtratorMariaDB:
             )
             self._cache_schemas[escopo] = metadados
             return Sucesso(metadados)
-
-    def _emitir_aviso_paralelismo_se_necessario(self, avisos: list[Aviso]) -> None:
-        """Emite o Aviso de risco de consistência uma única vez por execução.
-
-        MariaDB não tem equivalente ao `pg_export_snapshot`/`SET
-        TRANSACTION SNAPSHOT` do Postgres (`FLUSH TABLES WITH READ LOCK`
-        trava o servidor inteiro, rejeitado) — cada faixa paralela lê sob
-        sua própria transação, sem garantia de consistência entre elas.
-        Flag de instância protegida por lock evita repetir o mesmo texto
-        uma vez por tabela elegível (mesmo ruído que a #116 já corrigiu
-        pro viés de cluster de `AmostragemPorFaixa`) — não dá pra mover
-        pro wizard porque a ativação depende do tamanho real da tabela, só
-        conhecido em runtime.
-        """
-        with self._lock_aviso_paralelismo:
-            if self._aviso_paralelismo_emitido:
-                return
-            self._aviso_paralelismo_emitido = True
-        avisos.append(
-            Aviso(
-                mensagem=(
-                    "Paralelismo intra-tabela ativado neste MariaDB sem "
-                    "garantia de consistência entre faixas — o motor não "
-                    "tem equivalente ao SET TRANSACTION SNAPSHOT do "
-                    "Postgres. Escritas concorrentes durante a extração "
-                    "podem produzir uma amostra combinada de estados "
-                    "diferentes da tabela."
-                ),
-                origem="ExtratorMariaDB",
-            )
-        )
 
     def _dominio_de_pk(
         self, escopo: str, tabela: str, nome_pk: str
@@ -464,8 +436,7 @@ class ExtratorMariaDB:
             assert pk_elegivel is not None
             assert dominio_pk is not None
             _logger.info(
-                "'%s.%s': paralelismo intra-tabela ativado (~%d linhas, "
-                "%d conexões).",
+                "'%s.%s': paralelismo intra-tabela ativado (~%d linhas, %d conexões).",
                 escopo,
                 tabela,
                 total_linhas,
@@ -507,7 +478,24 @@ class ExtratorMariaDB:
                     )
                 )
             else:
-                self._emitir_aviso_paralelismo_se_necessario(avisos)
+                # MariaDB não tem equivalente ao `pg_export_snapshot`/`SET
+                # TRANSACTION SNAPSHOT` do Postgres (`FLUSH TABLES WITH READ
+                # LOCK` trava o servidor inteiro, rejeitado) — cada faixa
+                # paralela lê sob sua própria transação, sem garantia de
+                # consistência entre elas. Um Aviso por tabela elegível (não
+                # deduplicado) — OrquestradorParalelo.extrair agrega estes
+                # avisos num único "N de M tabela(s)" antes de exibir.
+                avisos.append(
+                    Aviso(
+                        mensagem=(
+                            f"'{escopo}.{tabela}': paralelismo intra-tabela "
+                            f"ativado {MARCADOR_AVISO_PARALELISMO_SEM_SNAPSHOT} "
+                            "neste MariaDB — motor sem equivalente ao SET "
+                            "TRANSACTION SNAPSHOT do Postgres."
+                        ),
+                        origem="ExtratorMariaDB",
+                    )
+                )
                 amostra_paralela = resultado_leitura.valor
                 colunas = _promover_booleanos_pela_amostra(
                     colunas, amostra_paralela, candidatos_booleanos
@@ -595,8 +583,14 @@ class ExtratorMariaDB:
                                     f"SELECT MAX({identificador_pk}) "
                                     f"FROM {identificador_tabela}"
                                 )
-                                linha_max = cursor.fetchone()
-                                max_pk = linha_max[0] if linha_max else None
+                                # fetchall() em vez de fetchone(): com
+                                # SSCursor, fetchone() não drena o EOF do
+                                # result set (mesmo com 1 linha só) — a
+                                # próxima cursor.execute() nesta mesma
+                                # conexão dispara "Previous unbuffered
+                                # result was left incomplete" do pymysql.
+                                linhas_max = cursor.fetchall()
+                                max_pk = linhas_max[0][0] if linhas_max else None
                                 n_pedido_por_faixa = max(
                                     1, round(total_linhas * percentual / 100)
                                 )

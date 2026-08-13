@@ -46,11 +46,17 @@ def _tipo_de_aviso(mensagem: str) -> str:
 def exibir_avisos(avisos: list[Aviso]) -> None:
     """Exibe avisos agrupados por origem e por "tipo" — nunca esconde um tipo diferente.
 
-    Mensagens do mesmo "tipo" (mesma forma, só o identificador muda — ex.:
-    skeleton criado para tabelas diferentes) mostram as primeiras
-    `_LIMITE_AVISOS_DETALHADOS` ocorrências na íntegra (identificador real
-    incluído), para o usuário ver exemplos concretos; a partir daí, colapsam
-    numa linha condensada com a contagem total do tipo.
+    `Aviso.agrupado=False` (ex.: uma agregação "N de M tabela(s)..." já
+    pronta, feita por quem emitiu) pula o agrupamento e vira uma linha solta
+    "▲ mensagem" — mesmo estilo já usado em `analise.py`/`geracao.py`, sem
+    cabeçalho de origem nem risco de ser recolhida junto de outro tipo.
+
+    Mensagens agrupáveis (`agrupado=True`, o default) do mesmo "tipo"
+    (mesma forma, só o identificador muda — ex.: skeleton criado para
+    tabelas diferentes) mostram as primeiras `_LIMITE_AVISOS_DETALHADOS`
+    ocorrências na íntegra (identificador real incluído), para o usuário
+    ver exemplos concretos; a partir daí, colapsam numa linha condensada
+    com a contagem total do tipo.
 
     Args:
         avisos: avisos acumulados na etapa, na ordem em que ocorreram.
@@ -59,9 +65,17 @@ def exibir_avisos(avisos: list[Aviso]) -> None:
         return
 
     print()
+    for aviso in avisos:
+        if not aviso.agrupado:
+            prompts.imprimir_destacado(f"▲ {aviso.mensagem}", prompts.COR_AVISO)
+
+    avisos_agrupaveis = [aviso for aviso in avisos if aviso.agrupado]
+    if not avisos_agrupaveis:
+        return
+
     grupos_por_origem: dict[str, dict[str, list[str]]] = {}
     ordem_origem: list[str] = []
-    for aviso in avisos:
+    for aviso in avisos_agrupaveis:
         if aviso.origem not in grupos_por_origem:
             ordem_origem.append(aviso.origem)
             grupos_por_origem[aviso.origem] = {}
@@ -71,9 +85,7 @@ def exibir_avisos(avisos: list[Aviso]) -> None:
     for origem in ordem_origem:
         grupos = grupos_por_origem[origem]
         total = sum(len(mensagens) for mensagens in grupos.values())
-        prompts.imprimir_destacado(
-            f"  [{origem}] {total} aviso(s):", prompts.COR_AVISO
-        )
+        prompts.imprimir_destacado(f"  [{origem}] {total} aviso(s):", prompts.COR_AVISO)
         for tipo, mensagens in grupos.items():
             for mensagem in mensagens[:_LIMITE_AVISOS_DETALHADOS]:
                 prompts.imprimir_destacado(

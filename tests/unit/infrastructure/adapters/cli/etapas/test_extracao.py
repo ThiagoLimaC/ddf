@@ -1,5 +1,6 @@
 """Testes das etapas 1-5 do wizard: conexão, escopos, amostragem e extração."""
 
+import builtins
 from collections.abc import Callable
 from typing import Any
 
@@ -9,6 +10,7 @@ from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtra
 from ddf.domain.model.curation import BancoCurado, TabelaCurada
 from ddf.domain.model.extraction import TabelaExtraida
 from ddf.domain.ports.extrator import Extrator, ExtratorRegistrado
+from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.cli.etapas import extracao
 from ddf.infrastructure.adapters.cli.registro.estrategias import EstrategiaRegistrada
@@ -162,9 +164,7 @@ class TestFeliz:
             respostas_escopos=[],
             respostas_tabelas={
                 "public": Sucesso(valor=[("public", "clientes")]),
-                "vendas": Sucesso(
-                    valor=[("vendas", "pedidos"), ("vendas", "itens")]
-                ),
+                "vendas": Sucesso(valor=[("vendas", "pedidos"), ("vendas", "itens")]),
             },
         )
 
@@ -300,9 +300,7 @@ class TestBorda:
             "ddf.infrastructure.adapters.cli.prompts.confirmar", lambda *a: True
         )
 
-        extrator, escopos = extracao._testar_conexao(
-            "Fake", ConfiguracaoDeExtracao()
-        )
+        extrator, escopos = extracao._testar_conexao("Fake", ConfiguracaoDeExtracao())
 
         assert extrator is extrator_certo
         assert escopos == ["public"]
@@ -343,6 +341,45 @@ class TestBorda:
         )
 
         assert "(1/1)" in capsys.readouterr().out
+
+    def test_extrair_emite_avisos_antes_do_sucesso_e_a_duracao_por_ultimo(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        fabrica_tabela_extraida: Callable[[str, str], TabelaExtraida],
+    ) -> None:
+        """Ordem: avisos → ✓ tabela(s) extraída(s) → duração, nunca fora disso."""
+        tabela = fabrica_tabela_extraida("public", "clientes")
+        resultado = Sucesso(
+            valor=[tabela],
+            avisos=[Aviso(mensagem="amostra pequena em 'public.clientes'", origem="X")],
+        )
+        orquestrador = OrquestradorFake(resultado)
+        extrator_fake = ExtratorFake(respostas_escopos=[])
+
+        eventos: list[str] = []
+        monkeypatch.setattr(
+            "questionary.print",
+            lambda texto, style=None, end="\n": eventos.append(str(texto)),
+        )
+        print_original = builtins.print
+
+        def _print_rastreado(
+            *args: object, sep: str = " ", end: str = "\n", flush: bool = False
+        ) -> None:
+            if args:
+                eventos.append(str(args[0]))
+            print_original(*args, sep=sep, end=end, flush=flush)
+
+        monkeypatch.setattr("builtins.print", _print_rastreado)
+
+        extracao.extrair(orquestrador, extrator_fake, [("public", "clientes")])
+
+        indice_aviso = next(i for i, e in enumerate(eventos) if "amostra pequena" in e)
+        indice_sucesso = next(
+            i for i, e in enumerate(eventos) if "tabela(s) extraída(s)" in e
+        )
+        indice_duracao = next(i for i, e in enumerate(eventos) if "duração:" in e)
+        assert indice_aviso < indice_sucesso < indice_duracao
 
     def test_escolher_tabelas_selecao_vazia_repergunta_ate_marcar_algo(
         self, monkeypatch: pytest.MonkeyPatch

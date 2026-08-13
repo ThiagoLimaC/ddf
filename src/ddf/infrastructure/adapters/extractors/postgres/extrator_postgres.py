@@ -466,8 +466,7 @@ class ExtratorPostgres:
         if token_reserva is not None:
             assert total_blocos is not None
             _logger.info(
-                "'%s.%s': paralelismo intra-tabela ativado (~%d linhas, "
-                "%d conexões).",
+                "'%s.%s': paralelismo intra-tabela ativado (~%d linhas, %d conexões).",
                 schema,
                 tabela,
                 total_linhas,

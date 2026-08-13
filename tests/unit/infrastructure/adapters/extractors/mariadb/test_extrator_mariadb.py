@@ -960,9 +960,9 @@ class TestBorda:
                 pks=["id"],
                 total_linhas=20,  # n_pedido pequeno (2), 3 linhas não é "gap denso"
             ),
+            [(999,)],  # MAX(id)
             [(1,), (2,), (3,)],  # amostra
         ]
-        cursor_fake.fetchone.return_value = (999,)
         cursor_fake.description = [("id",)]
         pool_classe_fake.return_value.connection.return_value = conexao_fake
 
@@ -1046,9 +1046,9 @@ class TestBorda:
                 pks=["id"],
                 total_linhas=1_000,
             ),
+            [(999,)],  # MAX(id)
             [(1,)],  # amostra — bem menos que os 100 linhas pedidas (10% de 1000)
         ]
-        cursor_fake.fetchone.return_value = (999,)
         cursor_fake.description = [("id",)]
         pool_classe_fake.return_value.connection.return_value = conexao_fake
 
