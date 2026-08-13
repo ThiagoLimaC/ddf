@@ -1,4 +1,4 @@
-"""Benchmark: calibra `_LIMIAR_LINHAS_STREAMING`/`_LIMIAR_BYTES_STREAMING` (issue #142).
+"""Benchmark: calibra `_LIMIAR_LINHAS_STREAMING`/`_LIMIAR_BYTES_STREAMING`.
 
 Mesma calibração de `test_calibracao_limiares_streaming.py` (Postgres),
 contra MariaDB — os limiares vivem no mesmo módulo motor-agnóstico

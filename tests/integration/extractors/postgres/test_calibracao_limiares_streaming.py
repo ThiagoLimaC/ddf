@@ -1,4 +1,4 @@
-"""Benchmark: calibra `_LIMIAR_LINHAS_STREAMING`/`_LIMIAR_BYTES_STREAMING` (issue #142).
+"""Benchmark: calibra `_LIMIAR_LINHAS_STREAMING`/`_LIMIAR_BYTES_STREAMING`.
 
 Os limiares em `extractors/comum/ler_amostra_em_lotes.py`
 (`_LIMIAR_LINHAS_STREAMING=100_000`, `_LIMIAR_BYTES_STREAMING=100_000_000`)
