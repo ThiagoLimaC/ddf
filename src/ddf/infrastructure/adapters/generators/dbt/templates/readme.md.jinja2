@@ -33,6 +33,13 @@ dbt test
 > faixa (10%/95%), o piso mínimo de amostra não reduz esse risco — a
 > proteção real é o `severity: warn` em si, por isso `dbt test` nunca
 > quebra o build por causa desses dois testes quando a amostra mentiu.
+>
+> Cada model carrega `meta.confianca_estatistica` (`alta`/`media`/`baixa`)
+> em `schema.yml` — margem de erro estimada a partir do tamanho da amostra
+> em relação ao total de linhas da tabela. É só uma anotação informativa,
+> não altera a `severity` de nenhum teste sugerido: trate `baixa` como um
+> sinal pra revisar os testes amostrais dessa tabela manualmente antes de
+> confiar neles, não como um erro do `dbt test`.
 {% if usa_dbt_utils %}
 > Este projeto depende do pacote `dbt_utils` (`packages.yml`) — rode
 > `dbt deps` antes de `dbt run`/`dbt test`.

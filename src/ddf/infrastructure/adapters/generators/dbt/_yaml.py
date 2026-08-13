@@ -6,6 +6,9 @@ import yaml
 
 from ddf.domain.model.analysis import ColunaAnalisada, TabelaAnalisada
 from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
+from ddf.infrastructure.adapters.generators.comum._metricas import (
+    _metrica_de_confianca,
+)
 from ddf.infrastructure.adapters.generators.dbt._sql import _nome_model
 from ddf.infrastructure.adapters.generators.dbt._templates import _TEMPLATE_README
 from ddf.infrastructure.adapters.generators.dbt._testes import (
@@ -117,7 +120,9 @@ def _model_schema_yaml(
 
     Returns:
         Dict com `name`, `description` opcional, `tests` opcional
-        (model-level, ver `_testes_de_modelo`) e a lista de `columns`.
+        (model-level, ver `_testes_de_modelo`), `meta.confianca_estatistica`
+        opcional (anotação informativa — nunca altera `severity` de nenhum
+        teste sugerido, ver `MetricasDeConfianca`) e a lista de `columns`.
     """
     nome_model = _nome_model(tabela.nome_escopo, tabela.nome_tabela)
     entrada: dict[str, Any] = {"name": nome_model}
@@ -126,6 +131,9 @@ def _model_schema_yaml(
     testes_de_modelo = _testes_de_modelo(tabela, presentes, contadores)
     if testes_de_modelo:
         entrada["tests"] = testes_de_modelo
+    metrica_confianca = _metrica_de_confianca(tabela)
+    if metrica_confianca is not None:
+        entrada["meta"] = {"confianca_estatistica": metrica_confianca.nivel.value}
     tamanho_amostra = tabela.metadados_amostra.tamanho_amostra
     entrada["columns"] = [
         _coluna_schema_yaml(

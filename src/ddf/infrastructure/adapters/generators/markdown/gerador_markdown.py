@@ -7,6 +7,7 @@ from ddf.domain.model.analysis import (
     BancoAnalisado,
     MetricasBaseColuna,
     MetricasBaseTabela,
+    MetricasDeConfianca,
     TipoDeMetrica,
 )
 from ddf.domain.shared.aviso import Aviso
@@ -25,7 +26,11 @@ from ddf.infrastructure.adapters.generators.markdown._templates import (
 class GeradorMarkdown:
     """Gera um `.md` por tabela e um `index.md` a partir do BancoAnalisado."""
 
-    requer: list[TipoDeMetrica] = [MetricasBaseColuna, MetricasBaseTabela]
+    requer: list[TipoDeMetrica] = [
+        MetricasBaseColuna,
+        MetricasBaseTabela,
+        MetricasDeConfianca,
+    ]
 
     def __call__(self, entrada: BancoAnalisado, destino: Path) -> Resultado[None]:
         """Escreve a documentação Markdown de cada tabela e o índice geral.
