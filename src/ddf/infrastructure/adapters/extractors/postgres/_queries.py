@@ -9,11 +9,28 @@ _LISTAR_ESCOPOS_SQL = """
     ORDER BY schema_name
 """
 
+# NOT EXISTS contra pg_inherits exclui partição-filha de particionamento
+# declarativo (relkind='p' no pai) — sem isso, uma tabela com 24 partições
+# apareceria como 25 tabelas independentes. O filtro p.relkind = 'p' é
+# obrigatório: sem ele, a mesma query também excluiria tabela de herança
+# clássica (CREATE TABLE filha () INHERITS (pai), ainda comum em bancos
+# legados pré-PG10) — que é tabela real e independente, não fragmento de
+# uma tabela lógica particionada. Validado empiricamente contra Postgres 16
+# real: com o filtro, herança clássica continua listada; sem ele, some.
 _LISTAR_TABELAS_SQL = """
-    SELECT table_schema, table_name
-    FROM information_schema.tables
-    WHERE table_schema = %s AND table_type = 'BASE TABLE'
-    ORDER BY table_name
+    SELECT t.table_schema, t.table_name
+    FROM information_schema.tables t
+    WHERE t.table_schema = %s AND t.table_type = 'BASE TABLE'
+      AND NOT EXISTS (
+          SELECT 1
+          FROM pg_catalog.pg_inherits i
+          JOIN pg_catalog.pg_class c ON c.oid = i.inhrelid
+          JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+          JOIN pg_catalog.pg_class p ON p.oid = i.inhparent
+          WHERE n.nspname = t.table_schema AND c.relname = t.table_name
+            AND p.relkind = 'p'
+      )
+    ORDER BY t.table_name
 """
 
 _COLUNAS_SCHEMA_SQL = """
@@ -172,6 +189,28 @@ _TABELAS_PARTICIONADAS_SCHEMA_SQL = """
     FROM pg_catalog.pg_class c
     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = %s AND c.relkind = 'p'
+"""
+
+# Pares (tabela-mãe, tabela-filha) de particionamento declarativo do schema
+# — usado só para agregar total_linhas real da mãe a partir das filhas
+# (_TOTAL_LINHAS_SCHEMA_SQL nunca reflete isso: autovacuum nunca roda
+# ANALYZE automaticamente em relkind='p', só nas filhas físicas, então
+# reltuples da mãe fica -1/desatualizado mesmo com as filhas corretas).
+# p.relkind = 'p' aqui tem o mesmo motivo do filtro em _LISTAR_TABELAS_SQL:
+# sem ele, herança clássica (INHERITS, não particionamento declarativo)
+# entraria na agregação como se fosse partição. Escopo por schema da
+# filha (n.nspname), não do pai — a agregação de total_linhas só soma
+# corretamente quando mãe e filha estão no mesmo schema (mesma limitação
+# do cache por schema de _obter_metadados_schema); partição em schema
+# diferente da mãe já é excluída da listagem (query acima), mas não tem a
+# soma de total_linhas propagada de volta pro schema da mãe.
+_FILHOS_DE_PARTICAO_SCHEMA_SQL = """
+    SELECT p.relname AS tabela_mae, c.relname AS tabela_filha
+    FROM pg_catalog.pg_inherits i
+    JOIN pg_catalog.pg_class c ON c.oid = i.inhrelid
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_catalog.pg_class p ON p.oid = i.inhparent
+    WHERE n.nspname = %s AND p.relkind = 'p'
 """
 
 # format('%I.%I', ...) monta o identificador schema.tabela com quoting

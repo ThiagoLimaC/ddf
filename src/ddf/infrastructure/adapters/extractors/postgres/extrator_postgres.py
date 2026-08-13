@@ -51,6 +51,7 @@ from ddf.infrastructure.adapters.extractors.postgres._queries import (
     _CHAVES_PRIMARIAS_SCHEMA_SQL,
     _COLUNAS_COMPRIMIVEIS_SCHEMA_SQL,
     _COLUNAS_SCHEMA_SQL,
+    _FILHOS_DE_PARTICAO_SCHEMA_SQL,
     _LARGURA_MEDIA_LINHA_SCHEMA_SQL,
     _LISTAR_ESCOPOS_SQL,
     _LISTAR_TABELAS_SQL,
@@ -197,6 +198,8 @@ class ExtratorPostgres:
                     linhas_comprimiveis = cursor.fetchall()
                     cursor.execute(_TABELAS_PARTICIONADAS_SCHEMA_SQL, (schema,))
                     linhas_particionadas = cursor.fetchall()
+                    cursor.execute(_FILHOS_DE_PARTICAO_SCHEMA_SQL, (schema,))
+                    linhas_filhos_de_particao = cursor.fetchall()
 
             metadados = montar_metadados_do_schema(
                 linhas_colunas,
@@ -207,6 +210,7 @@ class ExtratorPostgres:
                 linhas_largura_media,
                 linhas_comprimiveis,
                 linhas_particionadas,
+                linhas_filhos_de_particao,
             )
             self._cache_schemas[schema] = metadados
             return Sucesso(metadados)
