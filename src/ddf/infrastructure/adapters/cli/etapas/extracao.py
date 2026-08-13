@@ -34,9 +34,7 @@ def conectar() -> tuple[Extrator, ConfiguracaoDeExtracao, list[str]]:
     conectividade — a etapa 3 (escolher escopos) usa a mesma lista, sem uma
     2ª chamada de rede.
     """
-    nome_fonte = prompts.selecionar(
-        "Qual fonte?", list(EXTRATORES_REGISTRADOS.keys())
-    )
+    nome_fonte = prompts.selecionar("Qual fonte?", list(EXTRATORES_REGISTRADOS.keys()))
     configuracao = ConfiguracaoDeExtracao()
     extrator, escopos = _testar_conexao(nome_fonte, configuracao)
     return extrator, configuracao, escopos
@@ -162,9 +160,9 @@ def extrair(
     O total exibido na barra de progresso já é conhecido de antemão
     (`len(pares)`) — a listagem acontece antes, em `listar_pares`.
     """
-    progresso = prompts.progresso_paralelo("Tabelas extraídas", total=len(pares))
     inicio = time.monotonic()
-    resultado = orquestrador.extrair(pares, extrator, progresso=progresso)
+    with prompts.progresso_paralelo("Tabelas extraídas", total=len(pares)) as progresso:
+        resultado = orquestrador.extrair(pares, extrator, progresso=progresso)
     print()
     print()
     print(f"duração: {time.monotonic() - inicio:.0f}s")
