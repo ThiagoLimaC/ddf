@@ -466,8 +466,7 @@ class ExtratorPostgres:
         if token_reserva is not None:
             assert total_blocos is not None
             _logger.info(
-                "'%s.%s': paralelismo intra-tabela ativado (~%d linhas, "
-                "%d conexões).",
+                "'%s.%s': paralelismo intra-tabela ativado (~%d linhas, %d conexões).",
                 schema,
                 tabela,
                 total_linhas,
@@ -530,15 +529,13 @@ class ExtratorPostgres:
 
         usa_streaming = deve_usar_streaming(total_linhas, largura_media_bytes)
         if usa_streaming:
-            avisos.append(
-                Aviso(
-                    mensagem=(
-                        f"'{schema}.{tabela}': streaming ativado (~{total_linhas} "
-                        f"linhas, ~{largura_media_bytes} bytes/linha) — cursor "
-                        "nomeado mantém transação aberta pela duração da leitura."
-                    ),
-                    origem="ExtratorPostgres",
-                )
+            _logger.info(
+                "'%s.%s': streaming ativado (~%d linhas, ~%d bytes/linha) — "
+                "cursor nomeado mantém transação aberta pela duração da leitura.",
+                schema,
+                tabela,
+                total_linhas,
+                largura_media_bytes,
             )
         with self._conexoes.conexao(autocommit=not usa_streaming) as resultado_conexao:
             if isinstance(resultado_conexao, Falha):

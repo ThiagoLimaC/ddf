@@ -53,8 +53,8 @@ def _configurar_logging() -> None:
 
     O nível padrão do logger raiz do Python é WARNING, e nada mais no
     processo registra um handler — sem isso, todo `logger.info(...)` de
-    Adapters (ex.: paralelismo intra-tabela ativado numa tabela grande) é
-    descartado silenciosamente antes de chegar a qualquer lugar visível.
+    Adapters (ex.: streaming ativado numa tabela grande) é descartado
+    silenciosamente antes de chegar a qualquer lugar visível.
     """
     logger_ddf = logging.getLogger("ddf")
     logger_ddf.setLevel(logging.INFO)

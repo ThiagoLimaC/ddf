@@ -1,5 +1,6 @@
 """Testes de ExtratorPostgres."""
 
+import logging
 import threading
 from unittest.mock import MagicMock
 
@@ -256,6 +257,7 @@ class TestFeliz:
         self,
         pool_classe_fake: MagicMock,
         configuracao: ConfiguracaoDeExtracao,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """total_linhas > limiar ativa streaming: cursor nomeado, itersize, commit."""
         conexao_fake = MagicMock()
@@ -276,7 +278,8 @@ class TestFeliz:
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
         extrator = ExtratorPostgres(dsn="postgresql://fake", configuracao=configuracao)
-        resultado = extrator.extrair_tabela("public", "grande")
+        with caplog.at_level(logging.INFO):
+            resultado = extrator.extrair_tabela("public", "grande")
 
         assert isinstance(resultado, Sucesso)
         assert resultado.valor.metadados_amostra.tamanho_amostra == 2
@@ -285,11 +288,8 @@ class TestFeliz:
         conexao_fake.commit.assert_called_once()
         # 9 queries de metadado (fetchall) + amostra via fetchmany, não fetchall.
         assert cursor_fake.fetchall.call_count == 9
-        mensagens_aviso = [aviso.mensagem for aviso in resultado.avisos]
-        assert any(
-            "streaming ativado" in mensagem and "public.grande" in mensagem
-            for mensagem in mensagens_aviso
-        )
+        assert "streaming ativado" in caplog.text
+        assert "public.grande" in caplog.text
 
 
 class TestErro:

@@ -464,8 +464,7 @@ class ExtratorMariaDB:
             assert pk_elegivel is not None
             assert dominio_pk is not None
             _logger.info(
-                "'%s.%s': paralelismo intra-tabela ativado (~%d linhas, "
-                "%d conexões).",
+                "'%s.%s': paralelismo intra-tabela ativado (~%d linhas, %d conexões).",
                 escopo,
                 tabela,
                 total_linhas,
@@ -538,15 +537,13 @@ class ExtratorMariaDB:
 
         usa_streaming = deve_usar_streaming(total_linhas, largura_media_bytes)
         if usa_streaming:
-            avisos.append(
-                Aviso(
-                    mensagem=(
-                        f"'{escopo}.{tabela}': streaming ativado (~{total_linhas} "
-                        f"linhas, ~{largura_media_bytes} bytes/linha) — SSCursor "
-                        "lê em lotes em vez de fetchall()."
-                    ),
-                    origem="ExtratorMariaDB",
-                )
+            _logger.info(
+                "'%s.%s': streaming ativado (~%d linhas, ~%d bytes/linha) — "
+                "SSCursor lê em lotes em vez de fetchall().",
+                escopo,
+                tabela,
+                total_linhas,
+                largura_media_bytes,
             )
         with self._conexoes.conexao() as resultado_conexao:
             if isinstance(resultado_conexao, Falha):
