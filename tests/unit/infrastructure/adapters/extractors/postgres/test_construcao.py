@@ -176,8 +176,9 @@ class TestBorda:
         """Mais faixas pedidas do que blocos existentes — sem overlap nem gap."""
         faixas = particoes_de_blocos(total_blocos=3, n=10)
 
-        inicios_e_fins = [(inicio, fim) for inicio, fim in faixas[:-1]]
-        assert all(fim - inicio >= 1 for inicio, fim in inicios_e_fins)
+        for inicio, fim in faixas[:-1]:
+            assert fim is not None
+            assert fim - inicio >= 1
         # Disjunto: cada faixa começa exatamente onde a anterior termina.
         for (_, fim_anterior), (inicio_atual, _) in zip(faixas, faixas[1:]):
             assert fim_anterior == inicio_atual

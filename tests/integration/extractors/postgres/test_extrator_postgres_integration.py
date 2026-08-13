@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ddf.domain.model.analysis import iniciar_contexto
+from ddf.domain.model.analysis import MetricasBaseColuna, iniciar_contexto
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
 from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
@@ -478,6 +478,7 @@ def test_coluna_array_com_valores_vazios_e_nulos_nao_quebra_analisador(
     tabela_analisada = resultado_analise.valor.analisado.tabelas[0]
     coluna_tags = next(c for c in tabela_analisada.colunas if c.nome == "tags")
     metrica = coluna_tags.metricas[0]
+    assert isinstance(metrica, MetricasBaseColuna)
     assert metrica.percentual_nulo == pytest.approx(100 / 3)
 
 

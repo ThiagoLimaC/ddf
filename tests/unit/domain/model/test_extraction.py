@@ -215,9 +215,9 @@ class TestErro:
                 nome_escopo="public",
                 colunas=[ColunaExtraida(nome="id", tipo_dado=tipo_integer)],
                 total_linhas=10,
-                amostra=None,
+                amostra=None,  # type: ignore[arg-type]
                 metadados_amostra=metadados_de_amostra,
-            )  # type: ignore[call-arg]
+            )
 
     def test_tabela_extraida_restricao_unica_com_coluna_inexistente_e_invalida(
         self,

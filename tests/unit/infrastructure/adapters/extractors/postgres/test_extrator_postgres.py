@@ -2,6 +2,7 @@
 
 import logging
 import threading
+from collections.abc import Iterator
 from unittest.mock import MagicMock
 
 import pytest
@@ -813,7 +814,7 @@ class TestBorda:
         """
         primeira_thread_entrou = threading.Event()
         pode_prosseguir = threading.Event()
-        respostas = iter(
+        respostas: Iterator[list[tuple[object, ...]]] = iter(
             [
                 [("pedidos", "id", "int4", None, None, None, None, "NO")],  # colunas
                 [("pedidos", "id")],  # PK

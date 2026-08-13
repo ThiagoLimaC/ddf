@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from ddf.domain.model.analysis import (
     BancoAnalisado,
@@ -24,8 +25,9 @@ from ddf.infrastructure.adapters.generators.contexto_de_ia.gerador_contexto_de_i
 )
 
 
-def _ler_json(caminho: Path) -> dict:  # type: ignore[type-arg]
-    return json.loads(caminho.read_text(encoding="utf-8"))
+def _ler_json(caminho: Path) -> dict[str, Any]:
+    conteudo: dict[str, Any] = json.loads(caminho.read_text(encoding="utf-8"))
+    return conteudo
 
 
 class TestFeliz:

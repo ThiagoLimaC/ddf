@@ -74,7 +74,9 @@ class TestFeliz:
             metricas=[MetricasBaseTabela(completude=100.0)],
         )
 
-        assert tabela.metricas[0].completude == 100.0
+        metrica_tabela = tabela.metricas[0]
+        assert isinstance(metrica_tabela, MetricasBaseTabela)
+        assert metrica_tabela.completude == 100.0
 
     def test_cria_banco_analisado_com_multiplas_tabelas(
         self, tipo_integer: TipoDeDado, metadados_de_amostra: MetadadosDeAmostra
@@ -276,7 +278,7 @@ class TestErro:
         )
 
         with pytest.raises(ValidationError, match="frozen"):
-            metricas.percentual_nulo = 50.0  # type: ignore[misc]
+            metricas.percentual_nulo = 50.0
 
     def test_metricas_base_tabela_e_imutavel(
         self,
@@ -285,7 +287,7 @@ class TestErro:
         metricas = MetricasBaseTabela(completude=100.0)
 
         with pytest.raises(ValidationError, match="frozen"):
-            metricas.completude = 50.0  # type: ignore[misc]
+            metricas.completude = 50.0
 
     def test_coluna_analisada_fk_sem_referencia_levanta_validation_error(
         self,

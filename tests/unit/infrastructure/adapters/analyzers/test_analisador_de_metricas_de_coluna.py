@@ -9,6 +9,7 @@ import pytest
 from ddf.domain.model.analysis import (
     BancoAnalisado,
     ContextoDeAnalise,
+    MetricaDeColuna,
     MetricasBaseColuna,
 )
 from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
@@ -44,7 +45,7 @@ def _tabela_curada(
     )
 
 
-def _metrica_de(coluna_analisada_metricas: list[object]) -> MetricasBaseColuna:
+def _metrica_de(coluna_analisada_metricas: list[MetricaDeColuna]) -> MetricasBaseColuna:
     metrica = coluna_analisada_metricas[0]
     assert isinstance(metrica, MetricasBaseColuna)
     return metrica

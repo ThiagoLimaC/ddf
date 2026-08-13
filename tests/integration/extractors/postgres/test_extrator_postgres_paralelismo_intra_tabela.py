@@ -139,7 +139,7 @@ def test_falha_do_connectorx_cai_para_sequencial_em_vez_de_derrubar_a_tabela(
     monkeypatch.setattr(paralelismo, "_LIMIAR_LINHAS_PARALELISMO_INTRA_TABELA", 0)
     monkeypatch.setattr(paralelismo, "_LIMIAR_BYTES_PARALELISMO_INTRA_TABELA", 0)
     monkeypatch.setattr(
-        extrator_postgres_module.cx,
+        extrator_postgres_module.cx,  # type: ignore[attr-defined]
         "read_sql",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
     )
@@ -233,7 +233,9 @@ def test_leitura_paralela_preserva_consistencia_sob_escrita_concorrente(
         conexao_verificacao.autocommit = True
         with conexao_verificacao.cursor() as cursor:
             cursor.execute("SELECT MAX(versao) FROM public.tabela_grande")
-            (versao_final,) = cursor.fetchone()
+            linha = cursor.fetchone()
+            assert linha is not None
+            (versao_final,) = linha
     assert versao_final > 1, "escrita concorrente não rodou — teste não provou nada"
 
 
