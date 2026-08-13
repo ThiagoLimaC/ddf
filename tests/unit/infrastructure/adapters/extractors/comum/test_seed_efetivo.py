@@ -1,6 +1,9 @@
 """Testes de seed_efetivo."""
 
-from ddf.infrastructure.adapters.extractors.comum.seed_efetivo import seed_efetivo
+from ddf.infrastructure.adapters.extractors.comum.seed_efetivo import (
+    _SEED_PADRAO,
+    seed_efetivo,
+)
 
 
 class TestFeliz:
@@ -16,14 +19,17 @@ class TestFeliz:
 class TestBorda:
     """Bordas."""
 
-    def test_seed_ausente_gera_um_valor_inteiro(
+    def test_seed_ausente_usa_o_padrao_fixo_do_ddf(
         self,
     ) -> None:
-        """Sem seed do usuário, gera um inteiro não-negativo, nunca None."""
-        gerado = seed_efetivo(None)
+        """Sem seed do usuário, usa a constante fixa — nunca None, nunca aleatório."""
+        assert seed_efetivo(None) == _SEED_PADRAO
 
-        assert isinstance(gerado, int)
-        assert gerado >= 0
+    def test_seed_ausente_e_estavel_entre_chamadas(
+        self,
+    ) -> None:
+        """O valor default não varia entre chamadas — é o que dá diff estável."""
+        assert seed_efetivo(None) == seed_efetivo(None)
 
     def test_seed_zero_e_respeitado_sem_gerar_outro(
         self,
