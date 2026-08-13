@@ -302,6 +302,56 @@ _SETUP_SQL = """
         SELECT repeat('y', 50000) FROM generate_series(1, 20);
 
     ANALYZE largura_real.tabela_com_external;
+
+    -- Tabela particionada declarativamente (issue #141): mãe + 2 partições
+    -- reais por RANGE. reltuples da mãe fica -1 (nunca analisada por
+    -- autovacuum, que só cobre relkind='r') mesmo com as filhas com dado
+    -- real e analisadas — prova que a agregação via pg_inherits é
+    -- necessária, não só um efeito de esquecer ANALYZE na mãe.
+    CREATE SCHEMA particionamento;
+
+    CREATE TABLE particionamento.pedidos (
+        id SERIAL,
+        ano INTEGER NOT NULL,
+        valor NUMERIC(10, 2) NOT NULL
+    ) PARTITION BY RANGE (ano);
+
+    CREATE TABLE particionamento.pedidos_2024
+        PARTITION OF particionamento.pedidos
+        FOR VALUES FROM (2024) TO (2025);
+
+    CREATE TABLE particionamento.pedidos_2025
+        PARTITION OF particionamento.pedidos
+        FOR VALUES FROM (2025) TO (2026);
+
+    INSERT INTO particionamento.pedidos (ano, valor)
+        SELECT 2024, 10.00 FROM generate_series(1, 30);
+    INSERT INTO particionamento.pedidos (ano, valor)
+        SELECT 2025, 20.00 FROM generate_series(1, 20);
+
+    ANALYZE particionamento.pedidos_2024;
+    ANALYZE particionamento.pedidos_2025;
+
+    -- Herança clássica (não particionamento declarativo) convivendo no
+    -- mesmo schema: prova que o filtro relkind='p' no pai (em
+    -- _LISTAR_TABELAS_SQL/_FILHOS_DE_PARTICAO_SCHEMA_SQL) não confunde
+    -- INHERITS comum com partição — veiculo é tabela real e independente,
+    -- não deve ser excluída da listagem nem entrar na agregação de
+    -- particionamento.pedidos.
+    CREATE TABLE particionamento.veiculo (
+        id SERIAL PRIMARY KEY,
+        placa VARCHAR(10) NOT NULL
+    );
+
+    CREATE TABLE particionamento.carro (
+        km_rodado INTEGER NOT NULL
+    ) INHERITS (particionamento.veiculo);
+
+    INSERT INTO particionamento.veiculo (placa) VALUES ('AAA0000');
+    INSERT INTO particionamento.carro (placa, km_rodado) VALUES ('BBB0000', 1000);
+
+    ANALYZE particionamento.veiculo;
+    ANALYZE particionamento.carro;
 """
 
 

@@ -131,6 +131,7 @@ def test_listar_escopos_retorna_escopos_semeados(
             "colisao_fk",
             "geografia",
             "largura_real",
+            "particionamento",
             "pessoa",
             "polimorfismo",
             "public",
