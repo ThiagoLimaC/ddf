@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import click
+import colorama
 
 from ddf.infrastructure.adapters.cli import avisos, prompts
 from ddf.infrastructure.adapters.cli.etapas import analise, curadoria, extracao, geracao
@@ -79,11 +80,20 @@ def _sair_se_vazio(itens: Sequence[object], mensagem: str) -> None:
 
 @click.command()
 def executar() -> None:
-    """Executa o wizard interativo do ddf, da conexão aos artefatos gerados.
+    r"""Executa o wizard interativo do ddf, da conexão aos artefatos gerados.
 
     Descoberta de plugins roda uma única vez; as etapas 1-11 repetem a cada
     "Executar novamente?" confirmado, sem precisar reiniciar o processo.
+
+    `colorama.init()` é a 1ª chamada, antes de qualquer print: `prompts.py`
+    escreve sequência ANSI crua (`\x1b[K`, cor truecolor) direto via
+    `print()`, fora do renderizador do `questionary`/`prompt_toolkit` — sem
+    isso, `cmd.exe` legado no Windows (sem `ENABLE_VIRTUAL_TERMINAL_
+    PROCESSING`, que nenhuma outra dependência liga sozinha) mostraria essas
+    sequências como texto literal em vez de limpar/colorir a linha. No-op
+    fora do Windows.
     """
+    colorama.init()
     prompts.imprimir_destacado(_BANNER, prompts.COR_DESTAQUE)
     prompts.imprimir_destacado(_BOAS_VINDAS, prompts.COR_SECUNDARIA, negrito=False)
     avisos.exibir_avisos(
