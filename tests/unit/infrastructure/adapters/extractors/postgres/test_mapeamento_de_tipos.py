@@ -98,6 +98,18 @@ class TestFeliz:
         assert com_tz.categoria == CategoriaDeDado.TIME
         assert com_tz.com_timezone is True
 
+    def test_mapeia_precisao_fracionaria_para_timestamp_e_time(
+        self,
+    ) -> None:
+        """datetime_precision propaga pra TipoDeDado.precisao_fracionaria."""
+        timestamp = mapear_tipo_postgres(
+            "timestamptz", precisao_fracionaria=3
+        )
+        time = mapear_tipo_postgres("time", precisao_fracionaria=6)
+
+        assert timestamp.precisao_fracionaria == 3
+        assert time.precisao_fracionaria == 6
+
     def test_mapeia_date_para_date(
         self,
     ) -> None:

@@ -5,6 +5,7 @@ from typing import Any
 import yaml
 
 from ddf.domain.model.analysis import ColunaAnalisada, TabelaAnalisada
+from ddf.domain.model.common.restricao_de_fk_composta import RestricaoDeFkComposta
 from ddf.infrastructure.adapters.generators.dbt._sql import _nome_model
 from ddf.infrastructure.adapters.generators.dbt._templates import _TEMPLATE_README
 from ddf.infrastructure.adapters.generators.dbt._testes import (
@@ -18,7 +19,7 @@ def _coluna_schema_yaml(
     presentes: set[tuple[str, str]],
     contadores: ContadoresDeAviso,
     tamanho_amostra: int,
-    colunas_em_fk_composta: set[str],
+    restricoes_fk_compostas: list[RestricaoDeFkComposta],
 ) -> dict[str, Any]:
     """Monta a entrada de uma coluna em `schema.yml`.
 
@@ -27,8 +28,10 @@ def _coluna_schema_yaml(
         presentes: pares (nome_escopo, nome_tabela) do lote analisado.
         contadores: contadores de Aviso acumulados pelo Gerador.
         tamanho_amostra: total de linhas amostradas da tabela desta coluna.
-        colunas_em_fk_composta: nomes de coluna desta tabela que pertencem
-            a alguma `RestricaoDeFkComposta`.
+        restricoes_fk_compostas: `RestricaoDeFkComposta` da tabela desta
+            coluna — usado por `_sugestoes_de_teste` pra não suprimir uma
+            referência single-column própria só porque a coluna também
+            participa de uma FK composta (ver `_referencias_de_fk_composta`).
 
     Returns:
         Dict com `name`, `description` opcional (de `papel_de_negocio`) e
@@ -38,7 +41,7 @@ def _coluna_schema_yaml(
     if coluna.papel_de_negocio:
         entrada["description"] = coluna.papel_de_negocio
     testes = _sugestoes_de_teste(
-        coluna, presentes, contadores, tamanho_amostra, colunas_em_fk_composta
+        coluna, presentes, contadores, tamanho_amostra, restricoes_fk_compostas
     )
     if testes:
         entrada["tests"] = testes
@@ -124,12 +127,13 @@ def _model_schema_yaml(
     if testes_de_modelo:
         entrada["tests"] = testes_de_modelo
     tamanho_amostra = tabela.metadados_amostra.tamanho_amostra
-    colunas_em_fk_composta: set[str] = set()
-    for restricao in tabela.restricoes_fk_compostas:
-        colunas_em_fk_composta.update(restricao.colunas_locais)
     entrada["columns"] = [
         _coluna_schema_yaml(
-            coluna, presentes, contadores, tamanho_amostra, colunas_em_fk_composta
+            coluna,
+            presentes,
+            contadores,
+            tamanho_amostra,
+            tabela.restricoes_fk_compostas,
         )
         for coluna in tabela.colunas
     ]
@@ -189,6 +193,7 @@ def _renderizar_readme(
     gerado_em: str,
     usa_dbt_utils: bool,
     usa_matches_format: bool,
+    usa_bigint: bool,
 ) -> str:
     """Renderiza o README.md do projeto dbt gerado, na raiz do projeto.
 
@@ -203,6 +208,10 @@ def _renderizar_readme(
         usa_matches_format: se `macros/matches_format/` foi gerado nesta
             execução — a nota sobre engines suportadas (Postgres/MariaDB
             nesta v1) só aparece quando há consumidor real.
+        usa_bigint: se há coluna BIGINT no lote — aciona a nota sobre
+            `BIGINT UNSIGNED` virar negativo em silêncio quando o destino
+            é MariaDB (limitação conhecida, ver
+            `plan/registry-plan/fase-9-fechamento-da-v1/issue-140-*.md`).
 
     Returns:
         Markdown listando os escopos e tabelas cobertos, com o caminho real
@@ -231,6 +240,7 @@ def _renderizar_readme(
         gerado_em=gerado_em,
         usa_dbt_utils=usa_dbt_utils,
         usa_matches_format=usa_matches_format,
+        usa_bigint=usa_bigint,
     )
 
 

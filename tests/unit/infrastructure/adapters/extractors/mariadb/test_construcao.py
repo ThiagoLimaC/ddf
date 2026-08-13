@@ -28,6 +28,7 @@ def _linha_coluna(nome: str, data_type: str) -> _LinhaColuna:
         tamanho_maximo=None,
         precisao=None,
         escala=None,
+        precisao_fracionaria=None,
         is_nullable="NO",
     )
 
@@ -60,8 +61,18 @@ class TestFeliz:
         """PK, FK simples, JSON e total_linhas/largura ficam sob a tabela certa."""
         metadados = montar_metadados_do_schema(
             linhas_colunas=[
-                ("pedidos", "id", "int", "int", None, None, None, "NO"),
-                ("pedidos", "dados", "longtext", "longtext", None, None, None, "NO"),
+                ("pedidos", "id", "int", "int", None, None, None, None, "NO"),
+                (
+                    "pedidos",
+                    "dados",
+                    "longtext",
+                    "longtext",
+                    None,
+                    None,
+                    None,
+                    None,
+                    "NO",
+                ),
             ],
             linhas_pks=[("pedidos", "id")],
             linhas_fks=[

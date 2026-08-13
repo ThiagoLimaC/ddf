@@ -459,7 +459,7 @@ Exibe `Aviso`s em streaming por etapa concluída, agrupados por origem e por
     `AmostragemPorFaixa`. Escopo restrito a `AmostragemIntegral` nos dois
     motores nesta rodada — `PercentualDeLinhas`/`AmostragemPorFaixa` com
     percentual alto fica para uma iteração futura. Detalhes completos em
-    `plan/registry-plan/issue-126-paralelismo-intra-tabela.md`.
+    `plan/registry-plan/fase-3-extrator-concreto/issue-126-paralelismo-intra-tabela.md`.
 
     **Correções da banca de revisão pós-implementação** (arquiteto-de-
     software + engenheiro-de-dados + po-revisor, achados bloqueantes):

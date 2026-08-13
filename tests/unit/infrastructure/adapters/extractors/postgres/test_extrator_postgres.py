@@ -142,9 +142,9 @@ class TestFeliz:
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
             [
-                ("pedidos", "id", "int4", None, None, None, "NO"),
-                ("pedidos", "nome", "varchar", 100, None, None, "YES"),
-                ("pedidos", "cliente_id", "int4", None, None, None, "NO"),
+                ("pedidos", "id", "int4", None, None, None, None, "NO"),
+                ("pedidos", "nome", "varchar", 100, None, None, None, "YES"),
+                ("pedidos", "cliente_id", "int4", None, None, None, None, "NO"),
             ],  # colunas (schema inteiro)
             [("pedidos", "id")],  # PK (schema inteiro)
             [
@@ -221,8 +221,8 @@ class TestFeliz:
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
             [
-                ("pedidos", "id", "int4", None, None, None, "NO"),
-                ("clientes", "id", "int4", None, None, None, "NO"),
+                ("pedidos", "id", "int4", None, None, None, None, "NO"),
+                ("clientes", "id", "int4", None, None, None, None, "NO"),
             ],  # colunas — as 2 tabelas do schema, lidas de uma vez
             [("pedidos", "id"), ("clientes", "id")],  # PK
             [],  # FK
@@ -261,7 +261,7 @@ class TestFeliz:
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [("grande", "id", "int4", None, None, None, "NO")],  # colunas
+            [("grande", "id", "int4", None, None, None, None, "NO")],  # colunas
             [("grande", "id")],  # PK
             [],  # FK
             [],  # UNIQUE
@@ -307,7 +307,7 @@ class TestErro:
         cursor_context.__exit__.return_value = False  # não suprime a exceção
         cursor_fake = cursor_context.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [("grande", "id", "int4", None, None, None, "NO")],  # colunas
+            [("grande", "id", "int4", None, None, None, None, "NO")],  # colunas
             [("grande", "id")],  # PK
             [],  # FK
             [],  # UNIQUE
@@ -477,7 +477,7 @@ class TestBorda:
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [("tabela", "id", "int4", None, None, None, "NO")],  # colunas
+            [("tabela", "id", "int4", None, None, None, None, "NO")],  # colunas
             [("tabela", "id")],  # PK
             [],  # FK
             [],  # UNIQUE
@@ -514,7 +514,7 @@ class TestBorda:
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [("tabela_grande", "id", "int4", None, None, None, "NO")],  # colunas
+            [("tabela_grande", "id", "int4", None, None, None, None, "NO")],  # colunas
             [("tabela_grande", "id")],  # PK
             [],  # FK
             [],  # UNIQUE
@@ -575,7 +575,9 @@ class TestBorda:
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [("movimentos", "entidade_id", "int4", None, None, None, "YES")],  # colunas
+            [
+                ("movimentos", "entidade_id", "int4", None, None, None, None, "YES")
+            ],  # colunas
             [],  # PK
             [
                 (
@@ -636,9 +638,9 @@ class TestBorda:
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
             [
-                ("enderecos", "codigo_pais", "varchar", 2, None, None, "NO"),
-                ("enderecos", "codigo_local", "varchar", 10, None, None, "NO"),
-                ("enderecos", "apelido", "varchar", 50, None, None, "YES"),
+                ("enderecos", "codigo_pais", "varchar", 2, None, None, None, "NO"),
+                ("enderecos", "codigo_local", "varchar", 10, None, None, None, "NO"),
+                ("enderecos", "apelido", "varchar", 50, None, None, None, "YES"),
             ],  # colunas
             [],  # PK
             [],  # FK
@@ -686,9 +688,9 @@ class TestBorda:
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
             [
-                ("pedidos", "pais_id", "int4", None, None, None, "NO"),
-                ("pedidos", "estado_id", "int4", None, None, None, "NO"),
-                ("pedidos", "cliente_id", "int4", None, None, None, "NO"),
+                ("pedidos", "pais_id", "int4", None, None, None, None, "NO"),
+                ("pedidos", "estado_id", "int4", None, None, None, None, "NO"),
+                ("pedidos", "cliente_id", "int4", None, None, None, None, "NO"),
             ],  # colunas
             [],  # PK
             [
@@ -804,7 +806,7 @@ class TestBorda:
         pode_prosseguir = threading.Event()
         respostas = iter(
             [
-                [("pedidos", "id", "int4", None, None, None, "NO")],  # colunas
+                [("pedidos", "id", "int4", None, None, None, None, "NO")],  # colunas
                 [("pedidos", "id")],  # PK
                 [],  # FK
                 [],  # UNIQUE
@@ -865,7 +867,7 @@ class TestBorda:
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [("tabela_nova", "id", "int4", None, None, None, "NO")],  # colunas
+            [("tabela_nova", "id", "int4", None, None, None, None, "NO")],  # colunas
             [("tabela_nova", "id")],  # PK
             [],  # FK
             [],  # UNIQUE
@@ -892,7 +894,7 @@ class TestBorda:
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [("tabela", "id", "int4", None, None, None, "NO")],  # colunas
+            [("tabela", "id", "int4", None, None, None, None, "NO")],  # colunas
             [("tabela", "id")],  # PK
             [],  # FK
             [],  # UNIQUE
@@ -916,7 +918,7 @@ class TestBorda:
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [("tabela", "id", "int4", None, None, None, "NO")],  # colunas
+            [("tabela", "id", "int4", None, None, None, None, "NO")],  # colunas
             [("tabela", "id")],  # PK
             [],  # FK
             [],  # UNIQUE
@@ -945,7 +947,7 @@ class TestBorda:
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
             [
-                ("tabela_recem_carregada", "id", "int4", None, None, None, "NO")
+                ("tabela_recem_carregada", "id", "int4", None, None, None, None, "NO")
             ],  # colunas
             [("tabela_recem_carregada", "id")],  # PK
             [],  # FK
@@ -982,7 +984,7 @@ class TestBorda:
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [("tabela", "id", "int4", None, None, None, "NO")],  # colunas
+            [("tabela", "id", "int4", None, None, None, None, "NO")],  # colunas
             [("tabela", "id")],  # PK
             [],  # FK
             [],  # UNIQUE
@@ -1021,7 +1023,7 @@ class TestBorda:
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [("tabela", "id", "int4", None, None, None, "NO")],  # colunas
+            [("tabela", "id", "int4", None, None, None, None, "NO")],  # colunas
             [("tabela", "id")],  # PK
             [],  # FK
             [],  # UNIQUE
@@ -1056,7 +1058,7 @@ class TestBorda:
         conexao_fake = MagicMock()
         cursor_fake = conexao_fake.cursor.return_value.__enter__.return_value
         cursor_fake.fetchall.side_effect = [
-            [("tabela", "id", "int4", None, None, None, "NO")],  # colunas
+            [("tabela", "id", "int4", None, None, None, None, "NO")],  # colunas
             [("tabela", "id")],  # PK
             [],  # FK
             [],  # UNIQUE
@@ -1122,8 +1124,6 @@ class TestBorda:
         pode_liberar_primeira.set()
         thread_primeira.join(timeout=1)
 
-        semaforo_livre_apos_a_primeira = extrator._conexoes._semaforo.acquire(
-            timeout=1
-        )
+        semaforo_livre_apos_a_primeira = extrator._conexoes._semaforo.acquire(timeout=1)
         assert semaforo_livre_apos_a_primeira is True
         extrator._conexoes._semaforo.release()
