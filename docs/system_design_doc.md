@@ -26,7 +26,7 @@ em Curation. As Anti-Corruption Layers entre contextos são:
 - **Analisador** — ACL entre Curation e Analysis: traduz `BancoCurado` →
   `BancoAnalisado`, calculando métricas como Value Objects.
 
-### Onde o hexagonal é aplicado (as quatro Ports)
+### Onde o hexagonal é aplicado (as cinco Ports)
 
 - **Extrator** — `Porta` porque existe mais de uma fonte de dados real
   (Postgres, MariaDB, arquivo, API) — todas produzindo o mesmo `TabelaExtraida`
@@ -37,6 +37,31 @@ em Curation. As Anti-Corruption Layers entre contextos são:
   (Markdown, dbt, contexto de IA), todos consumindo o mesmo `BancoAnalisado`.
 - **OrquestradorDeTabelas** — `Porta` porque existe mais de uma estratégia de
   execução (`OrquestradorParalelo`, futuramente `OrquestradorDistribuido`).
+- **EstrategiaDeAmostragem** — `Porta` porque existe mais de uma política de
+  amostragem real (`PercentualDeLinhas`, `TabelaInteira`,
+  `AmostragemPorFaixa`), plugável via `ConfiguracaoDeExtracao` sem que
+  nenhum `Extrator` concreto precise mudar.
+
+### Política de extensão por Port
+
+`Extrator` e `Gerador` são reexportados em `domain/ports/__init__.py`,
+consumidos por plugins de terceiro via `importlib.metadata.entry_points`
+(`ddf.extratores`/`ddf.geradores`), e seguem versionamento semântico
+completo — ver `docs/engineer_guidelines.md`.
+
+`Analisador` fica deliberadamente fora dessa política: não é reexportado nem
+é ponto de extensão de terceiro, é a ACL entre Curation e Analysis, e todo
+Analisador registrado roda incondicionalmente em toda execução, sem seleção
+do usuário.
+
+`EstrategiaDeAmostragem` e `OrquestradorDeTabelas` são Ports no sentido
+arquitetural (variação real de implementação, `@runtime_checkable`), mas
+**não têm hoje o mesmo compromisso de estabilidade externo** — nenhuma das
+duas é reexportada em `domain/ports/__init__.py`, nenhuma tem entry point
+próprio, e nenhuma é oferecida como ponto de extensão de plugin de terceiro
+nesta versão. Mudanças em suas assinaturas são refactor interno normal, sem
+necessidade de bump de versão pública — reavaliar esta seção se/quando
+qualquer uma das duas ganhar um entry point.
 
 ### Onde DDD/hexagonal é deliberadamente *não* aplicado
 
