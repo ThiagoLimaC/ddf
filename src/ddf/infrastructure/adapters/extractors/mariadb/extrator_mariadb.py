@@ -583,8 +583,14 @@ class ExtratorMariaDB:
                                     f"SELECT MAX({identificador_pk}) "
                                     f"FROM {identificador_tabela}"
                                 )
-                                linha_max = cursor.fetchone()
-                                max_pk = linha_max[0] if linha_max else None
+                                # fetchall() em vez de fetchone(): com
+                                # SSCursor, fetchone() não drena o EOF do
+                                # result set (mesmo com 1 linha só) — a
+                                # próxima cursor.execute() nesta mesma
+                                # conexão dispara "Previous unbuffered
+                                # result was left incomplete" do pymysql.
+                                linhas_max = cursor.fetchall()
+                                max_pk = linhas_max[0][0] if linhas_max else None
                                 n_pedido_por_faixa = max(
                                     1, round(total_linhas * percentual / 100)
                                 )
