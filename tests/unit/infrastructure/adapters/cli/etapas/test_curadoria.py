@@ -141,3 +141,38 @@ class TestErro:
             curadoria.aplicar_sobrescritas(orquestrador, object(), [])  # type: ignore[arg-type]
 
         assert excinfo.value.code == 1
+
+
+class TestBorda:
+    """Bordas."""
+
+    def test_gerar_skeletons_usa_progresso_paralelo_com_total_de_tabelas(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        fabrica_tabela_extraida: Callable[[str, str], TabelaExtraida],
+    ) -> None:
+        """Barra real (não ampulheta) com o total de tabelas já conhecido."""
+        tabelas = [
+            fabrica_tabela_extraida("public", "clientes"),
+            fabrica_tabela_extraida("public", "pedidos"),
+        ]
+        orquestrador = OrquestradorFake(Sucesso(valor=BancoCurado(tabelas=[])))
+
+        curadoria._gerar_skeletons(orquestrador, object(), tabelas)  # type: ignore[arg-type]
+
+        saida = capsys.readouterr().out
+        assert "Skeletons gerados (0/2)" in saida
+
+    def test_aplicar_sobrescritas_usa_progresso_paralelo_com_total_de_tabelas(
+        self,
+        capsys: pytest.CaptureFixture[str],
+        fabrica_tabela_extraida: Callable[[str, str], TabelaExtraida],
+    ) -> None:
+        """Barra real (não ampulheta) com o total de tabelas já conhecido."""
+        tabela = fabrica_tabela_extraida("public", "clientes")
+        orquestrador = OrquestradorFake(Sucesso(valor=BancoCurado(tabelas=[])))
+
+        curadoria.aplicar_sobrescritas(orquestrador, object(), [tabela])  # type: ignore[arg-type]
+
+        saida = capsys.readouterr().out
+        assert "Sobrescritas aplicadas (0/1)" in saida
