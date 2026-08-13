@@ -15,6 +15,7 @@
 - **Total de linhas:** {{ tabela.total_linhas }}
 - **Completude:** {{ tabela | completude }}
 - **Amostra analisada:** {{ tabela.metadados_amostra.tamanho_amostra }} de {{ tabela.total_linhas }} linhas
+- **Confiança estatística:** {{ tabela | confianca }}
 {% if tabela.restricoes_unicas %}
 - **Restrições UNIQUE compostas:** {{ tabela | formatar_restricoes_unicas }}
 {% endif %}

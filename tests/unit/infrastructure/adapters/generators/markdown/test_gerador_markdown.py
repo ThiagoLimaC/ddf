@@ -9,6 +9,8 @@ from ddf.domain.model.analysis import (
     ColunaAnalisada,
     MetricasBaseColuna,
     MetricasBaseTabela,
+    MetricasDeConfianca,
+    NivelDeConfianca,
     TabelaAnalisada,
 )
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
@@ -912,6 +914,54 @@ class TestBorda:
         )
         assert "sem evidência (amostra vazia)" in linha
         assert "0.00%" not in linha
+
+    def test_nivel_de_confianca_baixa_aparece_nos_fatos_extraidos(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+        metrica_coluna_completa: MetricasBaseColuna,
+    ) -> None:
+        """MetricasDeConfianca(nivel=BAIXA) renderiza o rótulo de cautela."""
+        coluna = construir_coluna(nome="id", metricas=[metrica_coluna_completa])
+        tabela = construir_tabela(
+            colunas=[coluna],
+            metricas=[
+                MetricasBaseTabela(completude=100.0),
+                MetricasDeConfianca(nivel=NivelDeConfianca.BAIXA),
+            ],
+        )
+        banco = construir_banco([tabela])
+
+        resultado = GeradorMarkdown()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        conteudo = (tmp_path / "escopo" / "tabela.md").read_text()
+        secao_fatos = conteudo.split("## Fatos extraídos")[1]
+        assert "Confiança estatística:** baixa" in secao_fatos
+
+    def test_confianca_ausente_mostra_nao_disponivel(
+        self,
+        tmp_path: Path,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+        metrica_coluna_completa: MetricasBaseColuna,
+    ) -> None:
+        """Tabela sem MetricasDeConfianca calculada mostra 'N/D', não quebra."""
+        coluna = construir_coluna(nome="id", metricas=[metrica_coluna_completa])
+        tabela = construir_tabela(
+            colunas=[coluna], metricas=[MetricasBaseTabela(completude=100.0)]
+        )
+        banco = construir_banco([tabela])
+
+        resultado = GeradorMarkdown()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        conteudo = (tmp_path / "escopo" / "tabela.md").read_text()
+        secao_fatos = conteudo.split("## Fatos extraídos")[1]
+        assert "Confiança estatística:** N/D" in secao_fatos
 
     def test_nao_nulavel_tem_precedencia_mesmo_com_amostra_vazia(
         self,

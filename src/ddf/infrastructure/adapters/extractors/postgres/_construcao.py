@@ -64,6 +64,9 @@ class _MetadadosDoSchema(NamedTuple):
     de tipo) — cobre qualquer tipo sujeito a compressão TOAST, incluindo
     arrays, domains sobre `text` e extensões (`citext`/`hstore`/
     `tsvector`), que uma lista de `udt_name` hardcoded deixaria escapar.
+    filhos_por_tabela_mae mapeia tabela-mãe particionada → suas partições
+    reais do mesmo schema (via `pg_inherits`) — usado só para agregar
+    `total_linhas_por_tabela` da mãe a partir da soma das filhas.
     """
 
     colunas_por_tabela: dict[str, list[_LinhaColuna]]
@@ -76,6 +79,7 @@ class _MetadadosDoSchema(NamedTuple):
     largura_media_por_tabela: dict[str, int]
     tabelas_com_coluna_comprimivel: frozenset[str]
     tabelas_particionadas: frozenset[str]
+    filhos_por_tabela_mae: dict[str, list[str]]
 
 
 def _construir_coluna(
@@ -147,16 +151,27 @@ def montar_metadados_do_schema(
     linhas_largura_media: list[tuple[Any, ...]],
     linhas_comprimiveis: list[tuple[Any, ...]],
     linhas_particionadas: list[tuple[Any, ...]],
+    linhas_filhos_de_particao: list[tuple[Any, ...]],
 ) -> _MetadadosDoSchema:
-    """Agrupa as 8 linhas cruas de `cursor.fetchall()` em `_MetadadosDoSchema`.
+    """Agrupa as 9 linhas cruas de `cursor.fetchall()` em `_MetadadosDoSchema`.
 
-    Cada parâmetro `linhas_*` é a saída bruta de uma das 8 queries de
+    Cada parâmetro `linhas_*` é a saída bruta de uma das 9 queries de
     `_obter_metadados_schema`, na ordem em que são executadas — esta função
     só agrupa por tabela e monta os `dict`/`frozenset` finais, sem tocar
     conexão/cursor. `linhas_unicas` guarda `(nome_tabela, indexrelid,
     nome_coluna)`: um índice único pode cobrir mais de uma coluna, por isso
     o agrupamento intermediário por `indexrelid` antes de decidir se vira
     `unicas_por_tabela` (1 coluna) ou `restricoes_unicas_por_tabela` (2+).
+    `linhas_filhos_de_particao` guarda `(tabela_mae, tabela_filha)`: depois
+    de montar `total_linhas_por_tabela` normalmente (cada filha com sua
+    própria estimativa), a entrada da mãe é sobrescrita pela soma real das
+    filhas — a estimativa própria da mãe é sempre ~0 (autovacuum nunca
+    analisa `relkind='p'` automaticamente). A agregação repete até nenhum
+    valor mudar (ponto fixo), não um único passe: em particionamento de 2+
+    níveis (ex. partição por ano → sub-partição por mês), `pg_inherits`
+    devolve as linhas na ordem pai-antes-do-filho — um único passe bottom-up
+    processaria a raiz antes da sub-partição intermediária já ter sido
+    agregada, deixando a raiz com o valor bruto (~0) dessa intermediária.
     """
     colunas_por_tabela: dict[str, list[_LinhaColuna]] = defaultdict(list)
     for linha_bruta in linhas_colunas:
@@ -211,6 +226,18 @@ def montar_metadados_do_schema(
         nome_tabela for (nome_tabela,) in linhas_particionadas
     )
 
+    filhos_por_tabela_mae: dict[str, list[str]] = defaultdict(list)
+    for tabela_mae, tabela_filha in linhas_filhos_de_particao:
+        filhos_por_tabela_mae[tabela_mae].append(tabela_filha)
+    alterou = True
+    while alterou:
+        alterou = False
+        for tabela_mae, filhas in filhos_por_tabela_mae.items():
+            nova_soma = sum(total_linhas_por_tabela.get(filha, 0) for filha in filhas)
+            if total_linhas_por_tabela.get(tabela_mae) != nova_soma:
+                total_linhas_por_tabela[tabela_mae] = nova_soma
+                alterou = True
+
     return _MetadadosDoSchema(
         colunas_por_tabela=dict(colunas_por_tabela),
         pks_por_tabela=dict(pks_por_tabela),
@@ -222,6 +249,7 @@ def montar_metadados_do_schema(
         largura_media_por_tabela=largura_media_por_tabela,
         tabelas_com_coluna_comprimivel=tabelas_com_coluna_comprimivel,
         tabelas_particionadas=tabelas_particionadas,
+        filhos_por_tabela_mae=dict(filhos_por_tabela_mae),
     )
 
 

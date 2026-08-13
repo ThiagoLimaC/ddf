@@ -162,6 +162,7 @@ class TestFeliz:
             [("pedidos", 200)],  # largura_media (schema inteiro)
             [("pedidos",)],  # colunas comprimíveis (schema inteiro) — "nome"
             [],  # tabelas particionadas — nenhuma
+            [],  # filhos de partição — nenhum
             [(1, "ana", 10), (2, "bia", 20)],  # amostra (só desta tabela)
         ]
         # "nome" é varchar (TOAST-ável) — extrair_tabela sonda a largura real
@@ -231,6 +232,7 @@ class TestFeliz:
             [("pedidos", 200), ("clientes", 200)],  # largura_media (schema inteiro)
             [],  # colunas comprimíveis (schema inteiro) — nenhuma
             [],  # tabelas particionadas — nenhuma
+            [],  # filhos de partição — nenhum
             [],  # amostra de "pedidos"
             [],  # amostra de "clientes"
         ]
@@ -245,8 +247,8 @@ class TestFeliz:
         assert isinstance(segunda, Sucesso)
         assert primeira.valor.total_linhas == 10
         assert segunda.valor.total_linhas == 5
-        # 8 queries de metadado (rodadas 1x só) + 1 amostra por tabela = 10.
-        assert cursor_fake.fetchall.call_count == 10
+        # 9 queries de metadado (rodadas 1x só) + 1 amostra por tabela = 11.
+        assert cursor_fake.fetchall.call_count == 11
         # 1 conexão pro cache de metadado (só na 1ª chamada) + 1 amostra por
         # tabela (2) = 3 — não 4, que seria o caso sem o cache reaproveitado.
         assert pool_classe_fake.return_value.putconn.call_count == 3
@@ -269,6 +271,7 @@ class TestFeliz:
             [("grande", 200)],  # largura_media
             [],  # colunas comprimíveis — nenhuma ("id" é int4)
             [],  # tabelas particionadas — nenhuma
+            [],  # filhos de partição — nenhum
         ]
         cursor_fake.description = [("id",)]
         cursor_fake.fetchmany.side_effect = [[(1,), (2,)], []]
@@ -283,8 +286,8 @@ class TestFeliz:
         conexao_fake.cursor.assert_called_with(name="amostra_public_grande")
         assert cursor_fake.itersize == 50_000  # calcular_tamanho_lote(200)
         conexao_fake.commit.assert_called_once()
-        # 8 queries de metadado (fetchall) + amostra via fetchmany, não fetchall.
-        assert cursor_fake.fetchall.call_count == 8
+        # 9 queries de metadado (fetchall) + amostra via fetchmany, não fetchall.
+        assert cursor_fake.fetchall.call_count == 9
         assert "streaming ativado" in caplog.text
         assert "public.grande" in caplog.text
 
@@ -315,6 +318,7 @@ class TestErro:
             [("grande", 200)],  # largura_media
             [],  # colunas comprimíveis — nenhuma ("id" é int4)
             [],  # tabelas particionadas — nenhuma
+            [],  # filhos de partição — nenhum
         ]
         cursor_fake.description = [("id",)]
         cursor_fake.fetchmany.side_effect = OperationalError("conexão perdida")
@@ -485,6 +489,7 @@ class TestBorda:
             [("tabela", 200)],  # largura_media
             [],  # colunas comprimíveis — nenhuma ("id" é int4)
             [],  # tabelas particionadas — nenhuma
+            [],  # filhos de partição — nenhum
             [(1,)],  # amostra
         ]
         cursor_fake.description = [("id",)]
@@ -522,6 +527,7 @@ class TestBorda:
             [("tabela_grande", 200)],  # largura_media
             [],  # colunas comprimíveis — nenhuma ("id" é int4)
             [("tabela_grande",)],  # tabelas particionadas — esta mesma
+            [],  # filhos de partição — nenhum
         ]
         cursor_fake.description = [("id",)]
         cursor_fake.fetchmany.side_effect = [[(1,), (2,)], []]
@@ -602,6 +608,7 @@ class TestBorda:
             [("movimentos", 200)],  # largura_media (schema inteiro)
             [],  # colunas comprimíveis — nenhuma ("entidade_id" é int4)
             [],  # tabelas particionadas — nenhuma
+            [],  # filhos de partição — nenhum
             [],  # amostra
         ]
         cursor_fake.description = [("entidade_id",)]
@@ -653,6 +660,7 @@ class TestBorda:
             [("enderecos", 200)],  # largura_media (schema inteiro)
             [("enderecos",)],  # colunas comprimíveis — as 3 são varchar
             [],  # tabelas particionadas — nenhuma
+            [],  # filhos de partição — nenhum
             [],  # amostra
         ]
         cursor_fake.description = [
@@ -703,6 +711,7 @@ class TestBorda:
             [("pedidos", 200)],  # largura_media (schema inteiro)
             [],  # colunas comprimíveis — nenhuma (todas int4)
             [],  # tabelas particionadas — nenhuma
+            [],  # filhos de partição — nenhum
             [],  # amostra
         ]
         cursor_fake.description = [
@@ -814,6 +823,7 @@ class TestBorda:
                 [("pedidos", 200)],  # largura_media (schema inteiro)
                 [],  # colunas comprimíveis — nenhuma ("id" é int4)
                 [],  # tabelas particionadas — nenhuma
+                [],  # filhos de partição — nenhum
             ]
         )
 
@@ -842,7 +852,7 @@ class TestBorda:
         pode_prosseguir.set()
         thread_lenta.join(timeout=1)
 
-        assert cursor_fake.fetchall.call_count == 8
+        assert cursor_fake.fetchall.call_count == 9
         assert isinstance(resultado_concorrente, Sucesso)
         assert extrator._cache_schemas["public"] is resultado_concorrente.valor
 
@@ -875,6 +885,7 @@ class TestBorda:
             [("tabela_nova", 200)],  # largura_media (schema inteiro)
             [],  # colunas comprimíveis — nenhuma ("id" é int4)
             [],  # tabelas particionadas — nenhuma
+            [],  # filhos de partição — nenhum
             [],  # amostra
         ]
         cursor_fake.description = [("id",)]
@@ -902,6 +913,7 @@ class TestBorda:
             [],  # largura_media — sem linha nenhuma pra "tabela"
             [],  # colunas comprimíveis — nenhuma ("id" é int4)
             [],  # tabelas particionadas — nenhuma
+            [],  # filhos de partição — nenhum
         ]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
@@ -926,6 +938,7 @@ class TestBorda:
             [("tabela", 57)],  # largura_media — soma real de avg_width
             [],  # colunas comprimíveis — nenhuma ("id" é int4)
             [],  # tabelas particionadas — nenhuma
+            [],  # filhos de partição — nenhum
         ]
         pool_classe_fake.return_value.getconn.return_value = conexao_fake
 
@@ -956,6 +969,7 @@ class TestBorda:
             [("tabela_recem_carregada", 200)],  # largura_media (schema inteiro)
             [],  # colunas comprimíveis — nenhuma ("id" é int4)
             [],  # tabelas particionadas — nenhuma
+            [],  # filhos de partição — nenhum
             [(1,), (2,)],  # amostra — 2 linhas
         ]
         cursor_fake.description = [("id",)]
@@ -992,6 +1006,7 @@ class TestBorda:
             [("tabela", 200)],  # largura_media (schema inteiro)
             [],  # colunas comprimíveis — nenhuma ("id" é int4)
             [],  # tabelas particionadas — nenhuma
+            [],  # filhos de partição — nenhum
             [(1,), (2,), (3,), (4,), (5,)],  # amostra — 5 linhas, a tabela inteira
         ]
         cursor_fake.description = [("id",)]
@@ -1031,6 +1046,7 @@ class TestBorda:
             [("tabela", 200)],  # largura_media (schema inteiro)
             [],  # colunas comprimíveis — nenhuma ("id" é int4)
             [],  # tabelas particionadas — nenhuma
+            [],  # filhos de partição — nenhum
             [(1,)],  # amostra
         ]
         cursor_fake.description = [("id",)]
@@ -1066,6 +1082,7 @@ class TestBorda:
             [("tabela", 200)],  # largura_media (schema inteiro)
             [],  # colunas comprimíveis — nenhuma ("id" é int4)
             [],  # tabelas particionadas — nenhuma
+            [],  # filhos de partição — nenhum
             [(1,)],  # amostra
         ]
         cursor_fake.description = [("id",)]

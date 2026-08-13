@@ -10,6 +10,8 @@ from ddf.domain.model.analysis import (
     ColunaAnalisada,
     MetricasBaseColuna,
     MetricasBaseTabela,
+    MetricasDeConfianca,
+    NivelDeConfianca,
     TabelaAnalisada,
 )
 from ddf.domain.model.common.referencia_de_coluna import ReferenciaDeColuna
@@ -472,6 +474,55 @@ class TestFeliz:
         assert isinstance(resultado, Sucesso)
         chunk = _ler_json(tmp_path / "tabelas" / "escopo" / "pedidos.json")
         assert chunk["metricas_tabela"] == {"completude": 92.4, "amostra_vazia": False}
+
+    def test_tabela_com_metricas_de_confianca_inclui_confianca_no_chunk(
+        self,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+        tmp_path: Path,
+    ) -> None:
+        """MetricasDeConfianca vira `confianca` dentro de `metricas_tabela`."""
+        tabela = construir_tabela(
+            colunas=[construir_coluna()],
+            nome_tabela="pedidos",
+            metricas=[
+                MetricasBaseTabela(completude=92.4),
+                MetricasDeConfianca(nivel=NivelDeConfianca.MEDIA),
+            ],
+        )
+        banco = construir_banco([tabela])
+
+        resultado = GeradorContextoDeIA()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        chunk = _ler_json(tmp_path / "tabelas" / "escopo" / "pedidos.json")
+        assert chunk["metricas_tabela"] == {
+            "completude": 92.4,
+            "amostra_vazia": False,
+            "confianca": "media",
+        }
+
+    def test_metricas_tabela_sem_confianca_nao_inclui_a_chave(
+        self,
+        construir_coluna: Callable[..., ColunaAnalisada],
+        construir_tabela: Callable[..., TabelaAnalisada],
+        construir_banco: Callable[[list[TabelaAnalisada]], BancoAnalisado],
+        tmp_path: Path,
+    ) -> None:
+        """MetricasBaseTabela sem MetricasDeConfianca não gera a chave `confianca`."""
+        tabela = construir_tabela(
+            colunas=[construir_coluna()],
+            nome_tabela="pedidos",
+            metricas=[MetricasBaseTabela(completude=92.4)],
+        )
+        banco = construir_banco([tabela])
+
+        resultado = GeradorContextoDeIA()(banco, tmp_path)
+
+        assert isinstance(resultado, Sucesso)
+        chunk = _ler_json(tmp_path / "tabelas" / "escopo" / "pedidos.json")
+        assert "confianca" not in chunk["metricas_tabela"]
 
     def test_restricoes_unicas_presente_e_ordenada_no_chunk(
         self,
