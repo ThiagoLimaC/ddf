@@ -17,9 +17,11 @@ class AnalisadorFake:
     produz: list[TipoDeMetrica] = []
     requer: list[TipoDeMetrica] = []
 
-    def __call__(self, entrada: ContextoDeAnalise) -> Resultado[ContextoDeAnalise]:
+    def __call__(
+        self, entrada: ContextoDeAnalise, /
+    ) -> Resultado[ContextoDeAnalise]:
         """Não é exercitado por registrar_analisador — não precisa de corpo real."""
-        ...
+        raise NotImplementedError
 
 
 class TestFeliz:

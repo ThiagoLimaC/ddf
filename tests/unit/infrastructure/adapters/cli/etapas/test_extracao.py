@@ -6,14 +6,16 @@ from typing import Any
 import pytest
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
+from ddf.domain.model.curation import BancoCurado, TabelaCurada
 from ddf.domain.model.extraction import TabelaExtraida
-from ddf.domain.ports.extrator import ExtratorRegistrado
+from ddf.domain.ports.extrator import Extrator, ExtratorRegistrado
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.cli.etapas import extracao
 from ddf.infrastructure.adapters.cli.registro.estrategias import EstrategiaRegistrada
 from ddf.infrastructure.adapters.extractors.estrategias.percentual_de_linhas import (
     PercentualDeLinhas,
 )
+from ddf.pipeline.estagio import Estagio
 
 
 class ExtratorFake:
@@ -38,11 +40,13 @@ class ExtratorFake:
         """Devolve a próxima resposta programada da fila."""
         return self._respostas_escopos.pop(0)
 
-    def listar_tabelas(self, escopo: str) -> Resultado[list[tuple[str, str]]]:
+    def listar_tabelas(self, escopo: str, /) -> Resultado[list[tuple[str, str]]]:
         """Devolve a resposta programada para o escopo informado."""
         return self._respostas_tabelas[escopo]
 
-    def extrair_tabela(self, escopo: str, tabela: str) -> Resultado[TabelaExtraida]:
+    def extrair_tabela(
+        self, escopo: str, tabela: str, /
+    ) -> Resultado[TabelaExtraida]:
         """Não é exercitado por estes testes."""
         raise NotImplementedError
 
@@ -57,7 +61,8 @@ class OrquestradorFake:
     def extrair(
         self,
         pares: list[tuple[str, str]],
-        extrator: object,
+        extrator: Extrator,
+        /,
         progresso: Callable[[str], None] | None = None,
     ) -> Resultado[list[TabelaExtraida]]:
         """Devolve o Resultado configurado, chamando progresso por item.
@@ -76,8 +81,12 @@ class OrquestradorFake:
         return self._resultado_extrair
 
     def aplicar_sobrescritas(
-        self, tabelas: object, sobrescrita: object, progresso: object = None
-    ) -> Resultado[object]:
+        self,
+        tabelas: list[TabelaExtraida],
+        sobrescrita: Estagio[TabelaExtraida, TabelaCurada],
+        /,
+        progresso: Callable[[str], None] | None = None,
+    ) -> Resultado[BancoCurado]:
         """Não é exercitado por estes testes."""
         raise NotImplementedError
 
@@ -141,7 +150,7 @@ class TestFeliz:
         orquestrador = OrquestradorFake(Sucesso(valor=[tabela]))
         extrator_fake = ExtratorFake(respostas_escopos=[])
 
-        tabelas = extracao.extrair(  # type: ignore[arg-type]
+        tabelas = extracao.extrair(
             orquestrador, extrator_fake, [("public", "clientes")]
         )
 
@@ -159,7 +168,7 @@ class TestFeliz:
             },
         )
 
-        pares = extracao.listar_pares(extrator_fake, ["public", "vendas"])  # type: ignore[arg-type]
+        pares = extracao.listar_pares(extrator_fake, ["public", "vendas"])
 
         assert pares == [
             ("public", "clientes"),
@@ -236,7 +245,7 @@ class TestErro:
         extrator_fake = ExtratorFake(respostas_escopos=[])
 
         with pytest.raises(SystemExit) as excinfo:
-            extracao.extrair(  # type: ignore[arg-type]
+            extracao.extrair(
                 orquestrador, extrator_fake, [("public", "clientes")]
             )
 
@@ -254,7 +263,7 @@ class TestErro:
             },
         )
 
-        pares = extracao.listar_pares(  # type: ignore[arg-type]
+        pares = extracao.listar_pares(
             extrator_fake, ["public", "financeiro_typo"]
         )
 
@@ -329,7 +338,7 @@ class TestBorda:
         orquestrador = OrquestradorFake(Sucesso(valor=[tabela]))
         extrator_fake = ExtratorFake(respostas_escopos=[])
 
-        extracao.extrair(  # type: ignore[arg-type]
+        extracao.extrair(
             orquestrador, extrator_fake, [("public", "clientes")]
         )
 
