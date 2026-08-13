@@ -50,6 +50,27 @@ class TestFeliz:
         assert any("[SobrescritaDeTabela] 1 aviso(s):" in texto for texto in textos)
         assert any("[AnalisadorDeColuna] 1 aviso(s):" in texto for texto in textos)
 
+    def test_exibir_avisos_com_agrupado_false_vira_linha_solta_sem_cabecalho(
+        self, interceptar_print: list[dict[str, Any]]
+    ) -> None:
+        """agrupado=False vira "▲ mensagem" direto, sem cabeçalho de origem/bullet."""
+        exibir_avisos(
+            [
+                Aviso(
+                    mensagem="Paralelismo ativado em 2 de 3 tabela(s).",
+                    origem="ExtratorMariaDB",
+                    agrupado=False,
+                )
+            ]
+        )
+
+        textos = [chamada["texto"] for chamada in interceptar_print]
+        assert any(
+            texto == "▲ Paralelismo ativado em 2 de 3 tabela(s)." for texto in textos
+        )
+        assert not any("ExtratorMariaDB" in texto for texto in textos)
+        assert not any(texto.startswith("    -") for texto in textos)
+
     def test_tipo_de_aviso_normaliza_identificador_e_numero(
         self,
     ) -> None:
@@ -127,6 +148,29 @@ class TestBorda:
         assert any("skeleton criado para 't0'" in texto for texto in textos)
         assert not any("skeleton criado para 't3'" in texto for texto in textos)
         assert any("(x5)" in texto for texto in textos)
+
+    def test_exibir_avisos_mistura_direto_e_agrupado_sem_perder_nenhum(
+        self, interceptar_print: list[dict[str, Any]]
+    ) -> None:
+        """Um Aviso agrupado=False e outros agrupáveis coexistem na mesma chamada."""
+        exibir_avisos(
+            [
+                Aviso(
+                    mensagem="Paralelismo ativado em 1 de 2 tabela(s).",
+                    origem="ExtratorMariaDB",
+                    agrupado=False,
+                ),
+                Aviso(
+                    mensagem="skeleton criado para 't0'", origem="SobrescritaDeTabela"
+                ),
+            ]
+        )
+
+        textos = [chamada["texto"] for chamada in interceptar_print]
+        assert any(
+            texto == "▲ Paralelismo ativado em 1 de 2 tabela(s)." for texto in textos
+        )
+        assert any("[SobrescritaDeTabela] 1 aviso(s):" in texto for texto in textos)
 
     def test_tipo_de_aviso_preserva_mensagens_genuinamente_diferentes(
         self,

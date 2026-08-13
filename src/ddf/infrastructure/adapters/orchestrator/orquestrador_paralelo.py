@@ -9,6 +9,9 @@ from ddf.domain.model.extraction import TabelaExtraida
 from ddf.domain.ports.extrator import Extrator
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
+from ddf.infrastructure.adapters.extractors.mariadb.extrator_mariadb import (
+    MARCADOR_AVISO_PARALELISMO_SEM_SNAPSHOT,
+)
 from ddf.pipeline.estagio import Estagio
 from ddf.pipeline.seguranca import executar_com_seguranca
 
@@ -128,6 +131,49 @@ def _avisos_de_fk_composta_sem_chave_candidata(
     return avisos
 
 
+def _agregar_avisos_de_paralelismo_mariadb(
+    avisos: list[Aviso], total_tabelas: int
+) -> list[Aviso]:
+    """Colapsa os Avisos de paralelismo do MariaDB (1 por tabela) num único "N de M".
+
+    `ExtratorMariaDB.extrair_tabela` emite um Aviso por tabela elegível, não
+    deduplicado — cada chamada só enxerga uma tabela por vez, então não sabe
+    quantas outras do lote também vão ativar paralelismo. Só aqui, depois
+    que `_executar_em_paralelo` já rodou o lote inteiro, dá pra saber o
+    total real e mostrar "N de M tabela(s)" (mesmo estilo agregado de
+    `AnalisadorDeMetricasDeColuna`) em vez de N linhas quase idênticas.
+
+    Args:
+        avisos: avisos já acumulados de `extrair_tabela` + falhas do lote.
+        total_tabelas: total de tabelas extraídas com sucesso neste lote —
+            denominador do "de M".
+    """
+    de_paralelismo = [
+        aviso
+        for aviso in avisos
+        if aviso.origem == "ExtratorMariaDB"
+        and MARCADOR_AVISO_PARALELISMO_SEM_SNAPSHOT in aviso.mensagem
+    ]
+    if not de_paralelismo:
+        return avisos
+    restantes = [aviso for aviso in avisos if aviso not in de_paralelismo]
+    restantes.append(
+        Aviso(
+            mensagem=(
+                f"Paralelismo intra-tabela ativado em {len(de_paralelismo)} de "
+                f"{total_tabelas} tabela(s) neste MariaDB, "
+                f"{MARCADOR_AVISO_PARALELISMO_SEM_SNAPSHOT} — motor sem "
+                "equivalente ao SET TRANSACTION SNAPSHOT do Postgres. "
+                "Escritas concorrentes durante a extração podem produzir uma "
+                "amostra combinada de estados diferentes da tabela."
+            ),
+            origem="ExtratorMariaDB",
+            agrupado=False,
+        )
+    )
+    return restantes
+
+
 class OrquestradorParalelo:
     """Coordena extração e aplicação de sobrescritas em paralelo via threads."""
 
@@ -239,6 +285,9 @@ class OrquestradorParalelo:
             cujo lado referenciado (se presente no lote) não corresponde a
             nenhuma PK/UNIQUE conhecida — checagem cross-table, só possível
             aqui, depois que todas as tabelas do lote já foram extraídas.
+            Avisos de paralelismo intra-tabela do MariaDB (1 por tabela
+            elegível) chegam agregados num único "N de M tabela(s)" — ver
+            `_agregar_avisos_de_paralelismo_mariadb`.
         """
         tabelas, avisos_extracao, falhas_extracao = self._executar_em_paralelo(
             "Extrator",
@@ -249,6 +298,9 @@ class OrquestradorParalelo:
         )
 
         tabelas.sort(key=lambda tabela: (tabela.nome_escopo, tabela.nome_tabela))
+        avisos_extracao = _agregar_avisos_de_paralelismo_mariadb(
+            avisos_extracao, len(tabelas)
+        )
         avisos = (
             avisos_extracao
             + _avisos_de_falhas("extrair", falhas_extracao)
