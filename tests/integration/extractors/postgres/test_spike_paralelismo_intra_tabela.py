@@ -107,8 +107,8 @@ def _reportar(
     faixa: dict[str, object],
 ) -> None:
     """Imprime o resultado comparativo de uma rodada do spike (rodar com -s)."""
-    blocos_completa = int(completa["hit"]) + int(completa["read"])  # type: ignore[arg-type]
-    blocos_faixa = int(faixa["hit"]) + int(faixa["read"])  # type: ignore[arg-type]
+    blocos_completa = int(completa["hit"]) + int(completa["read"])  # type: ignore[call-overload]
+    blocos_faixa = int(faixa["hit"]) + int(faixa["read"])  # type: ignore[call-overload]
     razao = blocos_faixa / max(1, blocos_completa)
     print(f"\n=== {rotulo} ===")
     print(f"total_blocos={total_blocos}, limite_faixa(1/4)={limite_faixa}")

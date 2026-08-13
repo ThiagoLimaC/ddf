@@ -160,7 +160,7 @@ def test_falha_do_connectorx_cai_para_sequencial_em_vez_de_derrubar_a_tabela(
     monkeypatch.setattr(paralelismo, "_LIMIAR_LINHAS_PARALELISMO_INTRA_TABELA", 0)
     monkeypatch.setattr(paralelismo, "_LIMIAR_BYTES_PARALELISMO_INTRA_TABELA", 0)
     monkeypatch.setattr(
-        extrator_mariadb_module.cx,
+        extrator_mariadb_module.cx,  # type: ignore[attr-defined]
         "read_sql",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
     )

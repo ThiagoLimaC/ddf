@@ -1445,10 +1445,22 @@ def liberar_conexoes(semaforo: threading.Semaphore, n: int) -> None: ...
 ```
 
 Mesmo raciocínio de dois critérios (linhas OU bytes) do limiar de
-streaming, limiares mais altos de propósito (candidatos: 500.000 linhas /
-500MB, não calibrados) — paralelismo intra-tabela paga o custo de várias
-conexões simultâneas, só compensa em tabelas bem maiores que o piso onde
-o streaming já compensa sozinho. `reservar_conexoes` adquire entre
+streaming, limiares mais altos de propósito — paralelismo intra-tabela paga
+o custo de várias conexões simultâneas, só compensa em tabelas bem maiores
+que o piso onde o streaming já compensa sozinho.
+
+**Limiares calibrados por benchmark** contra Postgres 16 e MariaDB 11 reais
+(`tests/integration/extractors/{postgres,mariadb}/test_calibracao_limiares_paralelismo.py`),
+medindo tempo de parede dos dois lados de cada fronteira, em dois perfis de
+largura de linha (estreito: ~40 bytes/linha; largo: TEXT/MEDIUMTEXT sujeito
+a TOAST):
+
+| Limiar | Valor anterior | Valor calibrado | Evidência |
+|---|---|---|---|
+| `_LIMIAR_LINHAS_PARALELISMO_INTRA_TABELA` | 500.000 | **100.000** | Fronteira medida diretamente nos pontos shipados (20.000 abaixo / 120.000 acima), não extrapolada: Postgres tem custo líquido negativo a 20.000 linhas (0.22x — overhead fixo de coordenar múltiplas conexões supera o ganho de paralelizar pouco trabalho) e ganho positivo a 120.000 (1.65x). MariaDB já ganha nos dois pontos (1.45x a 20.000; 4.44x a 120.000, efeito dominado por `connectorx` vs. `pymysql` puro no caminho sequencial) — assimetria na direção oposta à do limiar de bytes abaixo: aqui é o Postgres, não o MariaDB, que só compensa acima da fronteira. 100.000 fica no meio da faixa observada, conservador para o motor que precisa da margem (Postgres) e sem custo para o outro (MariaDB ganha em ambos os pontos testados). |
+| `_LIMIAR_BYTES_PARALELISMO_INTRA_TABELA` | 500.000.000 | **mantido em 500.000.000** | Assimetria real entre motores perto da fronteira de linha larga: Postgres ganha (1.72x a ~420MB, 2.29x a ~580MB), MariaDB não (1.32x a ~420MB, ~1.0x — neutro — a ~580MB). Baixar beneficiaria o Postgres mas arriscaria ativar paralelismo sem ganho líquido comprovado em tabelas largas do MariaDB; sem um limiar por motor (mudança estrutural fora do escopo desta calibração), prevalece o valor mais conservador. |
+
+`reservar_conexoes` adquire entre
 `minimo` (`MINIMO_CONEXOES_PARALELISMO=2`) e `maximo`
 (`max_conexoes_por_tabela`) permits do semáforo de conexões do Extrator,
 sob um `Lock` dedicado — serializa toda tentativa de reserva pra nenhuma

@@ -3,7 +3,9 @@
 import pytest
 
 from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtracao
+from ddf.domain.model.extraction import TabelaExtraida
 from ddf.domain.ports.extrator import Extrator, ExtratorRegistrado
+from ddf.domain.shared.resultado import Resultado
 from ddf.infrastructure.adapters.cli.registro.extratores import (
     EXTRATORES_REGISTRADOS,
     _construir_extrator_mariadb,
@@ -53,17 +55,19 @@ def _juntar_linhas(fragmentos: list[str]) -> list[str]:
 class ExtratorFake:
     """Extrator fake usado só para popular o registro nos testes."""
 
-    def listar_escopos(self) -> object:
+    def listar_escopos(self) -> Resultado[list[str]]:
         """Não é exercitado por registrar_extrator — não precisa de corpo real."""
-        ...
+        raise NotImplementedError
 
-    def listar_tabelas(self, escopo: str) -> object:
+    def listar_tabelas(self, escopo: str, /) -> Resultado[list[tuple[str, str]]]:
         """Não é exercitado por registrar_extrator — não precisa de corpo real."""
-        ...
+        raise NotImplementedError
 
-    def extrair_tabela(self, escopo: str, tabela: str) -> object:
+    def extrair_tabela(
+        self, escopo: str, tabela: str, /
+    ) -> Resultado[TabelaExtraida]:
         """Não é exercitado por registrar_extrator — não precisa de corpo real."""
-        ...
+        raise NotImplementedError
 
 
 def _construir_fake(configuracao: ConfiguracaoDeExtracao) -> Extrator:

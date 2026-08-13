@@ -260,6 +260,7 @@ class OrquestradorParalelo:
         self,
         tabelas: list[TabelaExtraida],
         sobrescrita: Estagio[TabelaExtraida, TabelaCurada],
+        /,
         progresso: Callable[[str], None] | None = None,
     ) -> Resultado[BancoCurado]:
         """Aplica, em paralelo, a Sobrescrita sobre cada TabelaExtraida.

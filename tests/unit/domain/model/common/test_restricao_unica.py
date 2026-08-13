@@ -51,4 +51,4 @@ class TestBorda:
         restricao = RestricaoUnica(colunas=("a", "b"))
 
         with pytest.raises(ValidationError):
-            restricao.colunas = ("a", "c")  # type: ignore[misc]
+            restricao.colunas = ("a", "c")

@@ -15,13 +15,17 @@ _TETO_BYTES_PADRAO = 10_000_000
 _MINIMO_PADRAO = 1_000
 _MAXIMO_PADRAO = 100_000
 
-# Candidatos iniciais, calibrados pelo benchmark da issue #114 — não valores
-# finais. Dois critérios (linhas OU bytes) em vez de um só: um limiar de
-# bytes sozinho depende da estimativa de largura média, que cai num
-# fallback conservador quando a tabela nunca foi analisada — nesse caso
+# Dois critérios (linhas OU bytes) em vez de um só: um limiar de bytes
+# sozinho depende da estimativa de largura média, que cai num fallback
+# conservador quando a tabela nunca foi analisada — nesse caso
 # subestimaria o risco; um limiar de linhas sozinho não distingue 1M linhas
 # estreitas (INTEGER) de 1M linhas largas (JSON). Cada critério cobre o
 # ponto cego do outro.
+#
+# Valores confirmados por benchmark contra Postgres 16 e MariaDB 11 reais,
+# medindo tempo/RSS dos dois lados de cada fronteira — ver
+# `docs/system_design_doc.md` (seção "Streaming via cursor server-side")
+# para a evidência completa.
 _LIMIAR_LINHAS_STREAMING = 100_000
 _LIMIAR_BYTES_STREAMING = 100_000_000
 

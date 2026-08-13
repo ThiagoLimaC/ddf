@@ -7,6 +7,7 @@ import pytest
 
 from ddf.domain.model.analysis import (
     ContextoDeAnalise,
+    MetricaDeTabela,
     MetricasBaseColuna,
     MetricasBaseTabela,
     MetricasDeConfianca,
@@ -35,6 +36,12 @@ def _metrica(*, percentual_nulo: float) -> MetricasBaseColuna:
         maximo=None,
         formato_detectado=None,
     )
+
+
+def _completude_de(metricas: list[MetricaDeTabela]) -> float:
+    metrica = metricas[0]
+    assert isinstance(metrica, MetricasBaseTabela)
+    return metrica.completude
 
 
 def _tabela_curada(nome_tabela: str, colunas: list[ColunaCurada]) -> TabelaCurada:
@@ -102,7 +109,7 @@ class TestFeliz:
         assert isinstance(resultado, Sucesso)
         metricas_tabela = resultado.valor.analisado.tabelas[0].metricas
         assert len(metricas_tabela) == 2
-        assert metricas_tabela[0].completude == 90.0
+        assert _completude_de(metricas_tabela) == 90.0
 
     def test_processa_multiplas_tabelas_com_completude_propria(
         self,
@@ -128,8 +135,8 @@ class TestFeliz:
 
         assert isinstance(resultado, Sucesso)
         tabelas = resultado.valor.analisado.tabelas
-        assert tabelas[0].metricas[0].completude == 100.0
-        assert tabelas[1].metricas[0].completude == 0.0
+        assert _completude_de(tabelas[0].metricas) == 100.0
+        assert _completude_de(tabelas[1].metricas) == 0.0
 
     def test_amostra_grande_relativa_a_tabela_pequena_tem_confianca_alta(
         self,
@@ -233,7 +240,7 @@ class TestBorda:
         resultado = AnalisadorDeMetricasDeTabela()(contexto)
 
         assert isinstance(resultado, Sucesso)
-        assert resultado.valor.analisado.tabelas[0].metricas[0].completude == 0.0
+        assert _completude_de(resultado.valor.analisado.tabelas[0].metricas) == 0.0
 
     def test_completude_com_divisao_nao_exata_preserva_precisao_de_ponto_flutuante(
         self,
@@ -257,7 +264,7 @@ class TestBorda:
         resultado = AnalisadorDeMetricasDeTabela()(contexto)
 
         assert isinstance(resultado, Sucesso)
-        completude = resultado.valor.analisado.tabelas[0].metricas[0].completude
+        completude = _completude_de(resultado.valor.analisado.tabelas[0].metricas)
         assert completude == pytest.approx(200 / 3)
         assert 0 <= completude <= 100
 
@@ -282,7 +289,7 @@ class TestBorda:
         resultado = AnalisadorDeMetricasDeTabela()(contexto)
 
         assert isinstance(resultado, Sucesso)
-        assert resultado.valor.analisado.tabelas[0].metricas[0].completude == 100.0
+        assert _completude_de(resultado.valor.analisado.tabelas[0].metricas) == 100.0
 
     def test_todas_colunas_totalmente_nulas_tem_completude_zero(
         self,
@@ -301,7 +308,7 @@ class TestBorda:
         resultado = AnalisadorDeMetricasDeTabela()(contexto)
 
         assert isinstance(resultado, Sucesso)
-        assert resultado.valor.analisado.tabelas[0].metricas[0].completude == 0.0
+        assert _completude_de(resultado.valor.analisado.tabelas[0].metricas) == 0.0
 
     def test_nao_muta_o_contexto_original(
         self,
@@ -328,7 +335,7 @@ class TestBorda:
         assert isinstance(resultado, Sucesso)
         assert resultado.valor is not contexto
         assert contexto.analisado.tabelas[0].metricas == []
-        assert resultado.valor.analisado.tabelas[0].metricas[0].completude == 100.0
+        assert _completude_de(resultado.valor.analisado.tabelas[0].metricas) == 100.0
 
     def test_compoe_com_analisador_de_metricas_de_coluna_sem_editar_nenhum_dos_dois(
         self,
