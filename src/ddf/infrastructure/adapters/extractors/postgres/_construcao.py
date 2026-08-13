@@ -166,7 +166,12 @@ def montar_metadados_do_schema(
     de montar `total_linhas_por_tabela` normalmente (cada filha com sua
     própria estimativa), a entrada da mãe é sobrescrita pela soma real das
     filhas — a estimativa própria da mãe é sempre ~0 (autovacuum nunca
-    analisa `relkind='p'` automaticamente).
+    analisa `relkind='p'` automaticamente). A agregação repete até nenhum
+    valor mudar (ponto fixo), não um único passe: em particionamento de 2+
+    níveis (ex. partição por ano → sub-partição por mês), `pg_inherits`
+    devolve as linhas na ordem pai-antes-do-filho — um único passe bottom-up
+    processaria a raiz antes da sub-partição intermediária já ter sido
+    agregada, deixando a raiz com o valor bruto (~0) dessa intermediária.
     """
     colunas_por_tabela: dict[str, list[_LinhaColuna]] = defaultdict(list)
     for linha_bruta in linhas_colunas:
@@ -224,10 +229,14 @@ def montar_metadados_do_schema(
     filhos_por_tabela_mae: dict[str, list[str]] = defaultdict(list)
     for tabela_mae, tabela_filha in linhas_filhos_de_particao:
         filhos_por_tabela_mae[tabela_mae].append(tabela_filha)
-    for tabela_mae, filhas in filhos_por_tabela_mae.items():
-        total_linhas_por_tabela[tabela_mae] = sum(
-            total_linhas_por_tabela.get(filha, 0) for filha in filhas
-        )
+    alterou = True
+    while alterou:
+        alterou = False
+        for tabela_mae, filhas in filhos_por_tabela_mae.items():
+            nova_soma = sum(total_linhas_por_tabela.get(filha, 0) for filha in filhas)
+            if total_linhas_por_tabela.get(tabela_mae) != nova_soma:
+                total_linhas_por_tabela[tabela_mae] = nova_soma
+                alterou = True
 
     return _MetadadosDoSchema(
         colunas_por_tabela=dict(colunas_por_tabela),
