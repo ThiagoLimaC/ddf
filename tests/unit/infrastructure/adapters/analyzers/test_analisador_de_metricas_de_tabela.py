@@ -9,6 +9,8 @@ from ddf.domain.model.analysis import (
     ContextoDeAnalise,
     MetricasBaseColuna,
     MetricasBaseTabela,
+    MetricasDeConfianca,
+    NivelDeConfianca,
 )
 from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
 from ddf.domain.model.common.tipo_de_dado import TipoDeDado
@@ -48,6 +50,25 @@ def _tabela_curada(nome_tabela: str, colunas: list[ColunaCurada]) -> TabelaCurad
     )
 
 
+def _tabela_curada_com_amostra(
+    nome_tabela: str,
+    colunas: list[ColunaCurada],
+    *,
+    tamanho_amostra: int,
+    total_linhas: int,
+) -> TabelaCurada:
+    return TabelaCurada(
+        nome_tabela=nome_tabela,
+        nome_escopo="public",
+        colunas=colunas,
+        total_linhas=total_linhas,
+        amostra=None,
+        metadados_amostra=MetadadosDeAmostra(
+            estrategia="percentual_de_linhas", tamanho_amostra=tamanho_amostra
+        ),
+    )
+
+
 class TestFeliz:
     """Caminho feliz."""
 
@@ -80,7 +101,7 @@ class TestFeliz:
 
         assert isinstance(resultado, Sucesso)
         metricas_tabela = resultado.valor.analisado.tabelas[0].metricas
-        assert len(metricas_tabela) == 1
+        assert len(metricas_tabela) == 2
         assert metricas_tabela[0].completude == 90.0
 
     def test_processa_multiplas_tabelas_com_completude_propria(
@@ -109,6 +130,30 @@ class TestFeliz:
         tabelas = resultado.valor.analisado.tabelas
         assert tabelas[0].metricas[0].completude == 100.0
         assert tabelas[1].metricas[0].completude == 0.0
+
+    def test_amostra_grande_relativa_a_tabela_pequena_tem_confianca_alta(
+        self,
+        tipo_integer: TipoDeDado,
+        construir_contexto: Callable[[list[TabelaCurada]], ContextoDeAnalise],
+    ) -> None:
+        """n=1.000, N=1.000.000 tem margem de erro ~3,1pp -> ALTA."""
+        tabela = _tabela_curada_com_amostra(
+            "clientes",
+            colunas=[ColunaCurada(nome="id", tipo_dado=tipo_integer)],
+            tamanho_amostra=1_000,
+            total_linhas=1_000_000,
+        )
+        contexto = construir_contexto([tabela])
+        contexto.analisado.tabelas[0].colunas[0].metricas.append(
+            _metrica(percentual_nulo=0.0)
+        )
+
+        resultado = AnalisadorDeMetricasDeTabela()(contexto)
+
+        assert isinstance(resultado, Sucesso)
+        metrica_confianca = resultado.valor.analisado.tabelas[0].metricas[1]
+        assert isinstance(metrica_confianca, MetricasDeConfianca)
+        assert metrica_confianca.nivel == NivelDeConfianca.ALTA
 
 
 class TestErro:
@@ -330,3 +375,167 @@ class TestBorda:
         assert isinstance(metrica_tabela, MetricasBaseTabela)
         # id: 0% nulo, email: 50% nulo -> completude = (100 + 50) / 2
         assert metrica_tabela.completude == 75.0
+
+    def test_tabela_sem_linhas_tem_confianca_baixa(
+        self,
+        tipo_integer: TipoDeDado,
+        construir_contexto: Callable[[list[TabelaCurada]], ContextoDeAnalise],
+    ) -> None:
+        """total_linhas=0 é BAIXA direto, sem dividir por zero."""
+        tabela = _tabela_curada_com_amostra(
+            "vazia",
+            colunas=[ColunaCurada(nome="id", tipo_dado=tipo_integer)],
+            tamanho_amostra=0,
+            total_linhas=0,
+        )
+        contexto = construir_contexto([tabela])
+        contexto.analisado.tabelas[0].colunas[0].metricas.append(
+            _metrica(percentual_nulo=0.0)
+        )
+
+        resultado = AnalisadorDeMetricasDeTabela()(contexto)
+
+        assert isinstance(resultado, Sucesso)
+        metrica_confianca = resultado.valor.analisado.tabelas[0].metricas[1]
+        assert isinstance(metrica_confianca, MetricasDeConfianca)
+        assert metrica_confianca.nivel == NivelDeConfianca.BAIXA
+
+    def test_amostra_vazia_com_tabela_nao_vazia_tem_confianca_baixa(
+        self,
+        tipo_integer: TipoDeDado,
+        construir_contexto: Callable[[list[TabelaCurada]], ContextoDeAnalise],
+    ) -> None:
+        """tamanho_amostra=0 com total_linhas>0 é BAIXA, não ZeroDivisionError."""
+        tabela = _tabela_curada_com_amostra(
+            "clientes",
+            colunas=[ColunaCurada(nome="id", tipo_dado=tipo_integer)],
+            tamanho_amostra=0,
+            total_linhas=1000,
+        )
+        contexto = construir_contexto([tabela])
+        contexto.analisado.tabelas[0].colunas[0].metricas.append(
+            _metrica(percentual_nulo=0.0)
+        )
+
+        resultado = AnalisadorDeMetricasDeTabela()(contexto)
+
+        assert isinstance(resultado, Sucesso)
+        metrica_confianca = resultado.valor.analisado.tabelas[0].metricas[1]
+        assert isinstance(metrica_confianca, MetricasDeConfianca)
+        assert metrica_confianca.nivel == NivelDeConfianca.BAIXA
+
+    def test_amostra_igual_a_populacao_tem_confianca_alta_mesmo_pequena(
+        self,
+        tipo_integer: TipoDeDado,
+        construir_contexto: Callable[[list[TabelaCurada]], ContextoDeAnalise],
+    ) -> None:
+        """n=N (TabelaInteira/AmostragemIntegral) é sempre ALTA, mesmo com N=4."""
+        tabela = _tabela_curada_com_amostra(
+            "clientes",
+            colunas=[ColunaCurada(nome="id", tipo_dado=tipo_integer)],
+            tamanho_amostra=4,
+            total_linhas=4,
+        )
+        contexto = construir_contexto([tabela])
+        contexto.analisado.tabelas[0].colunas[0].metricas.append(
+            _metrica(percentual_nulo=0.0)
+        )
+
+        resultado = AnalisadorDeMetricasDeTabela()(contexto)
+
+        assert isinstance(resultado, Sucesso)
+        metrica_confianca = resultado.valor.analisado.tabelas[0].metricas[1]
+        assert isinstance(metrica_confianca, MetricasDeConfianca)
+        assert metrica_confianca.nivel == NivelDeConfianca.ALTA
+
+    def test_amostra_pequena_relativa_a_tabela_grande_tem_confianca_media(
+        self,
+        tipo_integer: TipoDeDado,
+        construir_contexto: Callable[[list[TabelaCurada]], ContextoDeAnalise],
+    ) -> None:
+        """n=100, N=1.000.000 tem margem de erro ~9,8pp -> MEDIA, não ALTA.
+
+        O piso binário anterior (`tamanho_amostra >= 100`) tratava esse caso
+        como "seguro" — a fórmula de margem de erro discorda, por levar
+        `total_linhas` em conta.
+        """
+        tabela = _tabela_curada_com_amostra(
+            "clientes",
+            colunas=[ColunaCurada(nome="id", tipo_dado=tipo_integer)],
+            tamanho_amostra=100,
+            total_linhas=1_000_000,
+        )
+        contexto = construir_contexto([tabela])
+        contexto.analisado.tabelas[0].colunas[0].metricas.append(
+            _metrica(percentual_nulo=0.0)
+        )
+
+        resultado = AnalisadorDeMetricasDeTabela()(contexto)
+
+        assert isinstance(resultado, Sucesso)
+        metrica_confianca = resultado.valor.analisado.tabelas[0].metricas[1]
+        assert isinstance(metrica_confianca, MetricasDeConfianca)
+        assert metrica_confianca.nivel == NivelDeConfianca.MEDIA
+
+    def test_amostra_minuscula_relativa_a_tabela_pequena_tem_confianca_baixa(
+        self,
+        tipo_integer: TipoDeDado,
+        construir_contexto: Callable[[list[TabelaCurada]], ContextoDeAnalise],
+    ) -> None:
+        """Exemplo motivador da issue: n=4, N=1.000 tem margem ~48,9pp -> BAIXA."""
+        tabela = _tabela_curada_com_amostra(
+            "clientes",
+            colunas=[
+                ColunaCurada(nome="id", tipo_dado=tipo_integer, chave_primaria=True)
+            ],
+            tamanho_amostra=4,
+            total_linhas=1_000,
+        )
+        contexto = construir_contexto([tabela])
+        contexto.analisado.tabelas[0].colunas[0].metricas.append(
+            _metrica(percentual_nulo=0.0)
+        )
+
+        resultado = AnalisadorDeMetricasDeTabela()(contexto)
+
+        assert isinstance(resultado, Sucesso)
+        metrica_confianca = resultado.valor.analisado.tabelas[0].metricas[1]
+        assert isinstance(metrica_confianca, MetricasDeConfianca)
+        assert metrica_confianca.nivel == NivelDeConfianca.BAIXA
+
+    def test_nivel_de_confianca_nao_depende_da_proporcao_observada_por_coluna(
+        self,
+        tipo_integer: TipoDeDado,
+        tipo_varchar: TipoDeDado,
+        construir_contexto: Callable[[list[TabelaCurada]], ContextoDeAnalise],
+    ) -> None:
+        """Colunas com percentual_nulo bem diferentes têm o mesmo nível.
+
+        Prova que o nível vem só de tamanho_amostra/total_linhas (fórmula
+        conservadora, p=0,5 fixo) — evita o colapso que a proporção
+        observada causaria numa coluna PK/UNIQUE (percentual_unico=100%
+        zera a variância p(1-p) pra qualquer tamanho de amostra).
+        """
+        tabela = _tabela_curada_com_amostra(
+            "clientes",
+            colunas=[
+                ColunaCurada(nome="id", tipo_dado=tipo_integer, chave_primaria=True),
+                ColunaCurada(nome="obs", tipo_dado=tipo_varchar),
+            ],
+            tamanho_amostra=4,
+            total_linhas=1_000,
+        )
+        contexto = construir_contexto([tabela])
+        contexto.analisado.tabelas[0].colunas[0].metricas.append(
+            _metrica(percentual_nulo=0.0)
+        )
+        contexto.analisado.tabelas[0].colunas[1].metricas.append(
+            _metrica(percentual_nulo=100.0)
+        )
+
+        resultado = AnalisadorDeMetricasDeTabela()(contexto)
+
+        assert isinstance(resultado, Sucesso)
+        metrica_confianca = resultado.valor.analisado.tabelas[0].metricas[1]
+        assert isinstance(metrica_confianca, MetricasDeConfianca)
+        assert metrica_confianca.nivel == NivelDeConfianca.BAIXA
