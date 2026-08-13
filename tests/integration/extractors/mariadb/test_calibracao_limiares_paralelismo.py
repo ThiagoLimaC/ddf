@@ -1,4 +1,4 @@
-"""Benchmark: calibra os limiares de paralelismo intra-tabela (issue #142).
+"""Benchmark: calibra os limiares de paralelismo intra-tabela.
 
 Mesma calibração de `test_calibracao_limiares_paralelismo.py` (Postgres),
 contra MariaDB — os limiares vivem no mesmo módulo motor-agnóstico
@@ -27,8 +27,8 @@ from testcontainers.mysql import MySqlContainer
 
 pytestmark = pytest.mark.benchmark
 
-_N_ESTREITA_ABAIXO = 350_000
-_N_ESTREITA_ACIMA = 650_000
+_N_ESTREITA_ABAIXO = 20_000
+_N_ESTREITA_ACIMA = 120_000
 
 _N_LARGA = 100_000
 _BYTES_PAYLOAD_ABAIXO = 4_200
@@ -187,7 +187,7 @@ def _comparar(
 def test_calibracao_paralelismo_perfil_estreito_cruza_limiar_de_linhas(
     conexao_calibracao: tuple[str, int, str, str, str],
 ) -> None:
-    """Fronteira do limiar de LINHAS (500.000), perfil estreito (~40 bytes/linha)."""
+    """Fronteira do limiar de LINHAS (100.000), perfil estreito (~40 bytes/linha)."""
     _comparar(
         conexao_calibracao,
         "estreita_abaixo",

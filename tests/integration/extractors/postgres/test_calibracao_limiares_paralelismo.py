@@ -1,11 +1,10 @@
-"""Benchmark: calibra os limiares de paralelismo intra-tabela (issue #142).
+"""Benchmark: calibra os limiares de paralelismo intra-tabela.
 
-`_LIMIAR_LINHAS_PARALELISMO_INTRA_TABELA=500_000`/
-`_LIMIAR_BYTES_PARALELISMO_INTRA_TABELA=500_000_000`
-(`extractors/comum/leitura_paralela_intra_tabela.py`) seguiam "candidato,
-não calibrado" desde a issue #126 — os benchmarks/spikes existentes provam
-ganho de 2.7-4x numa tabela de ~4M linhas (bem acima do limiar), mas nunca
-mediram a fronteira em si.
+`_LIMIAR_LINHAS_PARALELISMO_INTRA_TABELA` (100_000) e
+`_LIMIAR_BYTES_PARALELISMO_INTRA_TABELA` (500_000_000)
+(`extractors/comum/leitura_paralela_intra_tabela.py`) — benchmarks/spikes
+anteriores provam ganho de 2.7-4x numa tabela de ~4M linhas (bem acima do
+limiar), mas nunca mediram a fronteira em si.
 
 Mesma metodologia de `test_calibracao_limiares_streaming.py`: dois perfis
 (estreito isola o critério de linhas, largo isola o critério de bytes),
@@ -36,10 +35,10 @@ from testcontainers.postgres import PostgresContainer
 pytestmark = pytest.mark.benchmark
 
 # Perfil estreito: ~40 bytes/linha. Abaixo/acima do limiar de LINHAS
-# (500_000); bytes totais nos dois casos ficam bem abaixo do limiar de
+# (100_000); bytes totais nos dois casos ficam bem abaixo do limiar de
 # bytes (500_000_000).
-_N_ESTREITA_ABAIXO = 350_000
-_N_ESTREITA_ACIMA = 650_000
+_N_ESTREITA_ABAIXO = 20_000
+_N_ESTREITA_ACIMA = 120_000
 
 # Perfil largo: linhas fixas em 100.000 (bem abaixo do limiar de LINHAS),
 # variando o payload TEXT pra cruzar o limiar de BYTES (500_000_000) —
@@ -173,7 +172,7 @@ def _comparar(dsn: str, tabela: str, rotulo: str) -> None:
 def test_calibracao_paralelismo_perfil_estreito_cruza_limiar_de_linhas(
     dsn_calibracao: str,
 ) -> None:
-    """Fronteira do limiar de LINHAS (500.000), perfil estreito (~40 bytes/linha)."""
+    """Fronteira do limiar de LINHAS (100.000), perfil estreito (~40 bytes/linha)."""
     _comparar(
         dsn_calibracao, "estreita_abaixo", f"abaixo ({_N_ESTREITA_ABAIXO} linhas)"
     )
