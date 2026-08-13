@@ -214,6 +214,24 @@ limiar (só tabelas grandes pagam esse custo), não eliminado; sem teste de
 carga concorrente de escrita (infraestrutura fora do escopo pragmático da
 issue).
 
+**Limiares confirmados por benchmark de fronteira:** `_LIMIAR_LINHAS_STREAMING`
+(100.000) e `_LIMIAR_BYTES_STREAMING` (100.000.000, ~100MB) seguiam "candidato,
+não calibrado" até então — os benchmarks anteriores provavam ganho numa
+tabela bem acima do limiar (1M linhas), nunca mediram a fronteira em si.
+Benchmark novo
+(`tests/integration/extractors/{postgres,mariadb}/test_calibracao_limiares_streaming.py`)
+mede tempo/RSS dos dois lados de cada fronteira, em dois perfis de largura
+de linha, contra Postgres 16 e MariaDB 11 reais:
+
+| Perfil | Fronteira | Resultado |
+|---|---|---|
+| Estreito (~40 bytes/linha) | linhas: 70k (abaixo) vs. 130k (acima) | Ganho de RSS ao ligar streaming é pequeno perto da fronteira (~0% abaixo, ~5-6% acima nos dois motores) — efeito diluído pela base fixa do processo Python, mesma limitação já registrada nos benchmarks anteriores. Nenhum sinal de que o limiar de linhas esteja no lugar errado. |
+| Largo (TEXT/MEDIUMTEXT) | bytes: ~80MB (abaixo) vs. ~120MB (acima) | Ganho de RSS já grande **abaixo** do limiar atual (Postgres: -49% a 80MB, -56% a 120MB; MariaDB: -42% a 80MB, -48% a 120MB) — o limiar de 100MB é conservador, não errado: mantém o custo de streaming (transação aberta, risco de `VACUUM` represado) fora de tabelas onde o ganho, mesmo grande, ainda não foi comprovado necessário. |
+
+Valores mantidos em 100.000 linhas / 100MB — a evidência não aponta erro de
+calibração, só confirma a margem de segurança já intencional no limiar de
+bytes.
+
 ### 3. MetadadosDeAmostra
 
 Value Object que viaja com `TabelaExtraida` e `TabelaCurada`:

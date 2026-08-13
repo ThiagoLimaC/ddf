@@ -1445,10 +1445,22 @@ def liberar_conexoes(semaforo: threading.Semaphore, n: int) -> None: ...
 ```
 
 Mesmo raciocínio de dois critérios (linhas OU bytes) do limiar de
-streaming, limiares mais altos de propósito (candidatos: 500.000 linhas /
-500MB, não calibrados) — paralelismo intra-tabela paga o custo de várias
-conexões simultâneas, só compensa em tabelas bem maiores que o piso onde
-o streaming já compensa sozinho. `reservar_conexoes` adquire entre
+streaming, limiares mais altos de propósito — paralelismo intra-tabela paga
+o custo de várias conexões simultâneas, só compensa em tabelas bem maiores
+que o piso onde o streaming já compensa sozinho.
+
+**Limiares calibrados por benchmark** contra Postgres 16 e MariaDB 11 reais
+(`tests/integration/extractors/{postgres,mariadb}/test_calibracao_limiares_paralelismo.py`),
+medindo tempo de parede dos dois lados de cada fronteira, em dois perfis de
+largura de linha (estreito: ~40 bytes/linha; largo: TEXT/MEDIUMTEXT sujeito
+a TOAST):
+
+| Limiar | Valor anterior | Valor calibrado | Evidência |
+|---|---|---|---|
+| `_LIMIAR_LINHAS_PARALELISMO_INTRA_TABELA` | 500.000 | **100.000** | Ganho líquido positivo já a 100.000 linhas nos dois motores (Postgres 1.22x; MariaDB maior, efeito dominado por `connectorx` vs. `pymysql`/`psycopg2` puro no caminho sequencial); custo líquido negativo confirmado a 20.000 linhas no Postgres (0.68x — overhead fixo de coordenar múltiplas conexões supera o ganho de paralelizar pouco trabalho). 100.000 fica com folga de segurança acima do ponto de custo negativo observado. |
+| `_LIMIAR_BYTES_PARALELISMO_INTRA_TABELA` | 500.000.000 | **mantido em 500.000.000** | Assimetria real entre motores perto da fronteira de linha larga: Postgres ganha (1.72x a ~420MB, 2.29x a ~580MB), MariaDB não (1.32x a ~420MB, ~1.0x — neutro — a ~580MB). Baixar beneficiaria o Postgres mas arriscaria ativar paralelismo sem ganho líquido comprovado em tabelas largas do MariaDB; sem um limiar por motor (mudança estrutural fora do escopo desta calibração), prevalece o valor mais conservador. |
+
+`reservar_conexoes` adquire entre
 `minimo` (`MINIMO_CONEXOES_PARALELISMO=2`) e `maximo`
 (`max_conexoes_por_tabela`) permits do semáforo de conexões do Extrator,
 sob um `Lock` dedicado — serializa toda tentativa de reserva pra nenhuma
