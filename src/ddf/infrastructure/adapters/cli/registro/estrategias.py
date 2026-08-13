@@ -73,7 +73,8 @@ def _construir_percentual_de_linhas() -> EstrategiaDeAmostragem:
         "Percentual de amostragem (0-100]:", float, default="10"
     )
     seed = prompts.numero_opcional(
-        "Seed para reprodutibilidade (opcional, deixe em branco para aleatório):",
+        "Seed para reprodutibilidade (opcional, deixe em branco para usar "
+        "o padrão fixo do ddf):",
         int,
     )
     try:
@@ -130,7 +131,8 @@ def _construir_amostragem_por_faixa() -> EstrategiaDeAmostragem:
         "Percentual de amostragem (0-100]:", float, default="10"
     )
     seed = prompts.numero_opcional(
-        "Seed para reprodutibilidade (opcional, deixe em branco para aleatório):",
+        "Seed para reprodutibilidade (opcional, deixe em branco para usar "
+        "o padrão fixo do ddf):",
         int,
     )
     try:
