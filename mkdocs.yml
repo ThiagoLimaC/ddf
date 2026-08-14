@@ -1,0 +1,56 @@
+site_name: ddf
+site_description: Framework de análise em batch que transforma um banco relacional em projeto dbt, documentação e contexto de IA.
+site_url: https://thiagolimac.github.io/ddf/
+repo_url: https://github.com/ThiagoLimaC/ddf
+repo_name: ThiagoLimaC/ddf
+docs_dir: site_docs
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Modo escuro
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Modo claro
+  features:
+    - navigation.tabs
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+
+markdown_extensions:
+  - admonition
+  - tables
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+nav:
+  - Comece aqui:
+      - Início: index.md
+      - Instalação: instalacao.md
+      - Guia rápido: guia-rapido.md
+  - Guia do usuário:
+      - Extração: guia/extracao.md
+      - Curadoria (overrides): guia/curadoria.md
+      - Estratégias de amostragem: guia/amostragem.md
+      - Analisadores (métricas): guia/analisadores.md
+      - Avisos: guia/avisos.md
+      - Artefatos gerados:
+          - Visão geral: artefatos/index.md
+          - Projeto dbt: artefatos/dbt.md
+          - Documentação Markdown: artefatos/markdown.md
+          - Contexto para IA: artefatos/contexto-ia.md
+  - Arquitetura: arquitetura.md
+  - Extensão via plugins: extensao.md
+  - Notas da versão: notas-da-versao.md
