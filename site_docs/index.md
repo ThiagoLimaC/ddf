@@ -53,9 +53,9 @@ O pipeline é conduzido por um wizard de linha de comando, decisão por decisão
     └── 8. Confirmação: executar de fato
     ```
 
-Como cada etapa se conecta ao pipeline interno está detalhado em [Arquitetura](arquitetura.md).
+Como cada etapa se conecta ao pipeline interno está detalhado em [Arquitetura](arquitetura/index.md).
 
-O `ddf` aplica uma versão **adaptada** de hexagonal (Ports & Adapters) com DDD por Bounded Contexts, não a receita completa dos dois, mas o subconjunto que resolve o problema real do projeto. Os adaptadores nativos da v1 conectam a Postgres e MariaDB. Novas fontes e novos geradores de artefato se conectam via plugin, sem exigir reescrita do framework. Detalhes de design, diagrama de Bounded Contexts e as decisões de engenharia por trás disso estão em [Arquitetura](arquitetura.md).
+O `ddf` aplica uma versão **adaptada** de hexagonal (Ports & Adapters) com DDD por Bounded Contexts, não a receita completa dos dois, mas o subconjunto que resolve o problema real do projeto. Os adaptadores nativos da v1 conectam a Postgres e MariaDB. Novas fontes e novos geradores de artefato se conectam via plugin, sem exigir reescrita do framework. Detalhes de design, diagrama de Bounded Contexts e as decisões de engenharia por trás disso estão em [Arquitetura](arquitetura/index.md).
 
 ## Comece por aqui
 
