@@ -43,15 +43,21 @@ nav:
       - Guia rápido: guia-rapido.md
   - Guia do usuário:
       - Extração: guia/extracao.md
-      - Curadoria (overrides): guia/curadoria.md
+      - Curadoria: guia/curadoria.md
       - Estratégias de amostragem: guia/amostragem.md
-      - Analisadores (métricas): guia/analisadores.md
-      - Avisos: guia/avisos.md
+      - Analisadores: guia/analisadores.md
       - Artefatos gerados:
           - Visão geral: artefatos/index.md
           - Projeto dbt: artefatos/dbt.md
           - Documentação Markdown: artefatos/markdown.md
           - Contexto para IA: artefatos/contexto-ia.md
-  - Arquitetura: arquitetura.md
+  - Arquitetura:
+      - Visão geral: arquitetura/index.md
+      - Portas e adaptadores: arquitetura/portas-e-adaptadores.md
+      - Métricas como Value Objects: arquitetura/metricas-como-value-objects.md
+      - Hash estrutural: arquitetura/hash-estrutural.md
+      - Pipeline e paralelismo: arquitetura/pipeline-e-paralelismo.md
+      - Tecnologias: arquitetura/tecnologias.md
+      - Testes e qualidade: arquitetura/testes-e-qualidade.md
   - Extensão via plugins: extensao.md
   - Notas da versão: notas-da-versao.md
