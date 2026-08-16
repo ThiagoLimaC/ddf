@@ -66,6 +66,9 @@ o hash estrutural atual da tabela e compara com o `hash` gravado no override:
 Curadoria de uma coluna removida da fonte é descartada junto com a coluna; curadoria de
 colunas que continuam existindo nunca é perdida por uma reextração.
 
+Como o hash é calculado por dentro, e o porquê de cada escolha de implementação, estão em
+[Hash estrutural](../arquitetura/hash-estrutural.md).
+
 ## Próximo passo
 
 Com os overrides aplicados, o `ddf` monta o banco curado que alimenta a análise. Ver
