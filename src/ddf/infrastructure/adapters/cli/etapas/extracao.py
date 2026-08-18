@@ -7,7 +7,6 @@ from ddf.domain.model.common.configuracao_de_extracao import ConfiguracaoDeExtra
 from ddf.domain.model.extraction import TabelaExtraida
 from ddf.domain.ports.extrator import Extrator
 from ddf.domain.ports.orquestrador_de_tabelas import OrquestradorDeTabelas
-from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha
 from ddf.infrastructure.adapters.cli import prompts
 from ddf.infrastructure.adapters.cli.avisos import exibir_avisos, ou_sair
@@ -17,9 +16,9 @@ from ddf.infrastructure.adapters.cli.registro.estrategias import (
 from ddf.infrastructure.adapters.cli.registro.extratores import (
     EXTRATORES_REGISTRADOS,
 )
+from ddf.pipeline import extracao as pipeline_extracao
 
 _MAXIMO_TENTATIVAS_CONEXAO = 3
-_ORIGEM = "Extracao"
 
 
 def conectar() -> tuple[Extrator, ConfiguracaoDeExtracao, list[str]]:
@@ -72,7 +71,7 @@ def _testar_conexao(
     while True:
         extrator = EXTRATORES_REGISTRADOS[nome_fonte].construir(configuracao)
         with prompts.ampulheta("Testando conexão..."):
-            resultado = extrator.listar_escopos()
+            resultado = pipeline_extracao.testar_conexao(extrator)
         print()
         if not isinstance(resultado, Falha):
             prompts.imprimir_destacado("✓ Conexão validada.", prompts.COR_SUCESSO)
@@ -97,21 +96,7 @@ def listar_pares(extrator: Extrator, escopos: list[str]) -> list[tuple[str, str]
     demais — mesma política de sucesso parcial usada no restante do
     wizard.
     """
-    pares: list[tuple[str, str]] = []
-    avisos_listagem: list[Aviso] = []
-    for escopo in escopos:
-        resultado = extrator.listar_tabelas(escopo)
-        if isinstance(resultado, Falha):
-            avisos_listagem.append(
-                Aviso(
-                    mensagem=(
-                        f"Falha ao listar tabelas de '{escopo}': {resultado.erro}"
-                    ),
-                    origem=_ORIGEM,
-                )
-            )
-            continue
-        pares.extend(resultado.valor)
+    pares, avisos_listagem = pipeline_extracao.listar_pares(extrator, escopos)
     exibir_avisos(avisos_listagem)
     return pares
 
@@ -162,7 +147,9 @@ def extrair(
     """
     inicio = time.monotonic()
     with prompts.progresso_paralelo("Tabelas extraídas", total=len(pares)) as progresso:
-        resultado = orquestrador.extrair(pares, extrator, progresso=progresso)
+        resultado = pipeline_extracao.extrair_tabelas(
+            orquestrador, extrator, pares, progresso=progresso
+        )
     print()
     print()
     tabelas = ou_sair(resultado)

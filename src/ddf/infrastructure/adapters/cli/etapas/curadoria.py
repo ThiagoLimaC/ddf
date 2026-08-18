@@ -13,6 +13,7 @@ from ddf.infrastructure.adapters.cli.avisos import ou_sair
 from ddf.infrastructure.adapters.overrides.sobrescrita_de_tabela import (
     SobrescritaDeTabela,
 )
+from ddf.pipeline import curadoria as pipeline_curadoria
 
 
 def curar(
@@ -51,8 +52,8 @@ def _gerar_skeletons(
     with prompts.progresso_paralelo(
         "Skeletons gerados", total=len(tabelas)
     ) as progresso:
-        resultado = orquestrador.aplicar_sobrescritas(
-            tabelas, sobrescrita, progresso=progresso
+        resultado = pipeline_curadoria.aplicar_sobrescritas_em_lote(
+            orquestrador, sobrescrita, tabelas, progresso=progresso
         )
     # 2 print()s de propósito: a última linha de progresso_paralelo termina
     # com end="" (dangling) — o 1º print() só fecha essa linha, o 2º é que
@@ -84,8 +85,8 @@ def aplicar_sobrescritas(
     with prompts.progresso_paralelo(
         "Sobrescritas aplicadas", total=len(tabelas)
     ) as progresso:
-        resultado = orquestrador.aplicar_sobrescritas(
-            tabelas, sobrescrita, progresso=progresso
+        resultado = pipeline_curadoria.aplicar_sobrescritas_em_lote(
+            orquestrador, sobrescrita, tabelas, progresso=progresso
         )
     # 2 print()s de propósito: a última linha de progresso_paralelo termina
     # com end="" (dangling) — o 1º print() só fecha essa linha, o 2º é que

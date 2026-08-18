@@ -1,6 +1,5 @@
 """Etapas 12-14 do wizard: destino dos artefatos, confirmação e execução."""
 
-import re
 import sys
 from pathlib import Path
 
@@ -8,23 +7,8 @@ from ddf.domain.model.analysis import BancoAnalisado
 from ddf.domain.shared.resultado import Falha
 from ddf.infrastructure.adapters.cli import prompts
 from ddf.infrastructure.adapters.cli.registro.geradores import GERADORES_REGISTRADOS
-from ddf.pipeline.seguranca import executar_com_seguranca
-
-_LIMITE_PALAVRA = re.compile(r"(.)([A-Z][a-z]+)")
-_LIMITE_SIGLA = re.compile(r"([a-z0-9])([A-Z])")
-
-
-def _slugificar(nome: str) -> str:
-    """Converte um nome de registro CamelCase em snake_case pra nome de pasta.
-
-    Genérico — não depende de conhecer os nomes dos Geradores nativos de
-    antemão, ao contrário de um dicionário fixo por nome. "ContextoDeIA"
-    vira "contexto_de_ia", "Markdown" vira "markdown", sem exceção
-    cadastrada à parte para nenhum dos dois.
-    """
-    com_separador_de_palavra = _LIMITE_PALAVRA.sub(r"\1_\2", nome)
-    com_separador_de_sigla = _LIMITE_SIGLA.sub(r"\1_\2", com_separador_de_palavra)
-    return com_separador_de_sigla.lower()
+from ddf.pipeline.geracao import ResultadoDeGerador
+from ddf.pipeline.geracao import executar_geradores as pipeline_executar_geradores
 
 
 def confirmar_execucao(nomes_geradores: list[str], destino: Path) -> None:
@@ -35,6 +19,29 @@ def confirmar_execucao(nomes_geradores: list[str], destino: Path) -> None:
     )
     if not confirmado:
         sys.exit(0)
+
+
+def _exibir_resultado(item: ResultadoDeGerador) -> bool:
+    """Exibe avisos e sucesso/falha de um Gerador. Devolve True se houve falha.
+
+    Args:
+        item: nome, destino e Resultado da execução de um Gerador.
+
+    Returns:
+        True se o Gerador falhou, False se teve sucesso.
+    """
+    for aviso in item.resultado.avisos:
+        prompts.imprimir_destacado(f"▲ {aviso.mensagem}", prompts.COR_AVISO)
+    if isinstance(item.resultado, Falha):
+        prompts.imprimir_destacado(
+            f"Falha em '{item.nome}': {item.resultado.erro}", prompts.COR_ERRO
+        )
+        return True
+    prompts.imprimir_destacado(
+        f"✓ '{item.nome}': artefato escrito em '{item.destino.resolve()}'.",
+        prompts.COR_SUCESSO,
+    )
+    return False
 
 
 def executar_geradores(
@@ -52,7 +59,9 @@ def executar_geradores(
     percentual_de_linhas` (registro/estrategias.py) — em vez do bloco
     agrupado por origem de `avisos.exibir_avisos`: a posição já deixa claro
     a qual artefato o aviso pertence, sem precisar repetir o nome do
-    Gerador numa linha "[origem] N aviso(s)".
+    Gerador numa linha "[origem] N aviso(s)". A exibição é incremental —
+    um Gerador por vez, à medida que cada um termina — não em lote ao
+    final de todos.
 
     Args:
         nomes_geradores: nomes dos Geradores escolhidos pelo usuário.
@@ -60,25 +69,20 @@ def executar_geradores(
         destino: diretório raiz onde os artefatos são escritos.
     """
     houve_falha = False
-    print()
-    for nome in nomes_geradores:
-        gerador = GERADORES_REGISTRADOS[nome]
-        destino_gerador = destino / _slugificar(nome)
-        resultado = executar_com_seguranca(
-            nome, lambda: gerador(banco_analisado, destino_gerador)
-        )
-        for aviso in resultado.avisos:
-            prompts.imprimir_destacado(f"▲ {aviso.mensagem}", prompts.COR_AVISO)
-        if isinstance(resultado, Falha):
-            prompts.imprimir_destacado(
-                f"Falha em '{nome}': {resultado.erro}", prompts.COR_ERRO
-            )
+
+    def _progresso(item: ResultadoDeGerador) -> None:
+        nonlocal houve_falha
+        if _exibir_resultado(item):
             houve_falha = True
-            continue
-        prompts.imprimir_destacado(
-            f"✓ '{nome}': artefato escrito em '{destino_gerador.resolve()}'.",
-            prompts.COR_SUCESSO,
-        )
+
+    print()
+    pipeline_executar_geradores(
+        nomes_geradores,
+        GERADORES_REGISTRADOS,
+        banco_analisado,
+        destino,
+        progresso=_progresso,
+    )
 
     if houve_falha:
         sys.exit(1)
