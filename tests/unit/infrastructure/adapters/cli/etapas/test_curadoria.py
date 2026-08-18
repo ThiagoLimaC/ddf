@@ -23,8 +23,8 @@ from ddf.infrastructure.adapters.cli.etapas import curadoria
 from ddf.infrastructure.adapters.overrides.sobrescrita_de_tabela import (
     SobrescritaDeTabela,
 )
-from ddf.pipeline import curadoria as pipeline_curadoria
-from ddf.pipeline.estagio import Estagio
+from ddf.pipeline.comum.estagio import Estagio
+from ddf.pipeline.etapas import curadoria as pipeline_curadoria
 
 
 class _OrquestradorPlaceholder:

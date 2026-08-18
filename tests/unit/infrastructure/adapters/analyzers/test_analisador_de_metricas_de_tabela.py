@@ -24,7 +24,7 @@ from ddf.infrastructure.adapters.analyzers.analisador_de_metricas_de_coluna impo
 from ddf.infrastructure.adapters.analyzers.analisador_de_metricas_de_tabela import (
     AnalisadorDeMetricasDeTabela,
 )
-from ddf.pipeline.compor import compor
+from ddf.pipeline.comum.compor import compor
 
 
 def _metrica(*, percentual_nulo: float) -> MetricasBaseColuna:

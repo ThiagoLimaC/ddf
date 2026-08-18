@@ -21,7 +21,7 @@ from ddf.domain.ports.analisador import Analisador
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Sucesso
 from ddf.infrastructure.adapters.cli.etapas import analise
-from ddf.pipeline import analise as pipeline_analise
+from ddf.pipeline.etapas import analise as pipeline_analise
 
 
 class AnalisadorFake:

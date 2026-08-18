@@ -16,7 +16,7 @@ from ddf.domain.model.analysis import BancoAnalisado
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Sucesso
 from ddf.infrastructure.adapters.cli.etapas import geracao
-from ddf.pipeline.geracao import ResultadoDeGerador
+from ddf.pipeline.etapas.geracao import ResultadoDeGerador
 
 
 def _fake_pipeline_executar(

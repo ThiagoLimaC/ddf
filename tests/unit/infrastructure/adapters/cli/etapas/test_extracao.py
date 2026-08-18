@@ -23,8 +23,8 @@ from ddf.infrastructure.adapters.cli.registro.estrategias import EstrategiaRegis
 from ddf.infrastructure.adapters.extractors.estrategias.percentual_de_linhas import (
     PercentualDeLinhas,
 )
-from ddf.pipeline import extracao as pipeline_extracao
-from ddf.pipeline.estagio import Estagio
+from ddf.pipeline.comum.estagio import Estagio
+from ddf.pipeline.etapas import extracao as pipeline_extracao
 
 
 class _ExtratorPlaceholder:
