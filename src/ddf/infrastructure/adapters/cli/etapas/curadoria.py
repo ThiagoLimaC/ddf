@@ -13,7 +13,7 @@ from ddf.infrastructure.adapters.cli.avisos import ou_sair
 from ddf.infrastructure.adapters.overrides.sobrescrita_de_tabela import (
     SobrescritaDeTabela,
 )
-from ddf.pipeline import curadoria as pipeline_curadoria
+from ddf.pipeline.etapas import curadoria as pipeline_curadoria
 
 
 def curar(

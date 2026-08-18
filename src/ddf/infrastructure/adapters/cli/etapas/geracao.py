@@ -7,8 +7,10 @@ from ddf.domain.model.analysis import BancoAnalisado
 from ddf.domain.shared.resultado import Falha
 from ddf.infrastructure.adapters.cli import prompts
 from ddf.infrastructure.adapters.cli.registro.geradores import GERADORES_REGISTRADOS
-from ddf.pipeline.geracao import ResultadoDeGerador
-from ddf.pipeline.geracao import executar_geradores as pipeline_executar_geradores
+from ddf.pipeline.etapas.geracao import ResultadoDeGerador
+from ddf.pipeline.etapas.geracao import (
+    executar_geradores as pipeline_executar_geradores,
+)
 
 
 def confirmar_execucao(nomes_geradores: list[str], destino: Path) -> None:

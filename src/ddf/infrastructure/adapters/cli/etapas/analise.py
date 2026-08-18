@@ -13,8 +13,8 @@ from ddf.infrastructure.adapters.cli.registro.analisadores import (
     ANALISADORES_REGISTRADOS,
 )
 from ddf.infrastructure.adapters.cli.registro.geradores import GERADORES_REGISTRADOS
-from ddf.pipeline import analise as pipeline_analise
-from ddf.pipeline.validar_dependencias import validar_dependencias
+from ddf.pipeline.etapas import analise as pipeline_analise
+from ddf.pipeline.etapas.validar_dependencias import validar_dependencias
 
 
 def escolher_geradores() -> list[str]:

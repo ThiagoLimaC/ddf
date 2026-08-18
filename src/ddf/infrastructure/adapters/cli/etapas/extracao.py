@@ -16,7 +16,7 @@ from ddf.infrastructure.adapters.cli.registro.estrategias import (
 from ddf.infrastructure.adapters.cli.registro.extratores import (
     EXTRATORES_REGISTRADOS,
 )
-from ddf.pipeline import extracao as pipeline_extracao
+from ddf.pipeline.etapas import extracao as pipeline_extracao
 
 _MAXIMO_TENTATIVAS_CONEXAO = 3
 
