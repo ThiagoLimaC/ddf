@@ -127,6 +127,42 @@ um tipo ou componente próprio.
 - Um `Estagio` que não implementa o `Protocol` correspondente não compila
   contra `compor()` — verificado por `mypy --strict`.
 
+### Simetria total: adapter inbound nunca chama Port direto, sempre via `pipeline/`
+
+Toda função de um adapter inbound (`cli/etapas/*.py`, e qualquer interface
+futura — TUI, API, MCP) que precisa do resultado de uma Port
+(`Extrator`, `OrquestradorDeTabelas`, `Analisador`/`compor()`, `Gerador`)
+move esse núcleo para `pipeline/etapas/`, mesmo quando ele é passthrough
+de uma única chamada, sem lógica de composição própria:
+
+```python
+# pipeline/etapas/extracao.py — sem lógica além do repasse, mesmo assim
+# não fica em cli/etapas/
+def testar_conexao(extrator: Extrator) -> Resultado[list[str]]:
+    """Único ponto que chama Extrator.listar_escopos()."""
+    return extrator.listar_escopos()
+```
+
+`cli/etapas/*.py` fica só com I/O de terminal — coleta de input, exibição,
+confirmação, retry, código de saída — nunca com uma chamada de método de
+Port. Critério verificável: `grep` por método de Port dentro do adapter
+inbound deve dar vazio.
+
+**Por quê:** um critério único e previsível ("toda chamada de Port passa
+por `pipeline/`") é mais fácil de auditar e mais barato de manter do que
+decidir função a função se o núcleo "merece" ser extraído — decisão
+consciente do usuário, tomada contra a recomendação padrão de reuso
+real/regra arquitetural/lógica não-trivial que a banca de revisão aplica
+normalmente antes de aceitar uma abstração nova (issue #154). O custo
+aceito é um wrapper fino a mais por função passthrough.
+
+**Escopo da regra — não é precedente geral:** essa exceção vale
+especificamente para a fronteira entre um adapter inbound e as Ports que
+ele consome. Não é uma licença para extrair função a cada 3 linhas em
+outras partes do código — a checklist de indireção decorativa (reuso
+real, regra arquitetural ou lógica não-trivial) continua valendo em
+qualquer código fora dessa fronteira específica.
+
 ### Versionamento semântico de `domain/ports/extrator.py`/`gerador.py`
 
 Desde a issue #67, `Extrator`, `ExtratorRegistrado` e `Gerador` são
