@@ -1,8 +1,14 @@
-"""Testes das etapas 1-5 do wizard: conexão, escopos, amostragem e extração."""
+"""Testes das etapas 1-5 do wizard: conexão, escopos, amostragem e extração.
+
+`pipeline.extracao` é fakeado em todos os testes que envolvem Port — estes
+testes verificam só comportamento de UI (retry de conexão, formatação,
+código de saída, quantas vezes/com que avisos `exibir_avisos` é chamado).
+Conteúdo de domínio (agregação de pares, sucesso parcial) é coberto em
+`tests/unit/pipeline/test_extracao.py`.
+"""
 
 import builtins
 from collections.abc import Callable
-from typing import Any
 
 import pytest
 
@@ -17,34 +23,25 @@ from ddf.infrastructure.adapters.cli.registro.estrategias import EstrategiaRegis
 from ddf.infrastructure.adapters.extractors.estrategias.percentual_de_linhas import (
     PercentualDeLinhas,
 )
+from ddf.pipeline import extracao as pipeline_extracao
 from ddf.pipeline.estagio import Estagio
 
 
-class ExtratorFake:
-    """Extrator fake com respostas programadas por chamada, em fila."""
+class _ExtratorPlaceholder:
+    """Satisfaz o Protocol Extrator estruturalmente — nunca é exercitado.
 
-    def __init__(
-        self,
-        respostas_escopos: list[Resultado[list[str]]],
-        respostas_tabelas: dict[str, Resultado[list[tuple[str, str]]]] | None = None,
-    ) -> None:
-        """Guarda as respostas programadas de listar_escopos()/listar_tabelas().
-
-        Args:
-            respostas_escopos: fila de Resultados devolvidos por chamadas
-                sucessivas de listar_escopos() (uma por tentativa de conexão).
-            respostas_tabelas: mapeia escopo -> Resultado de listar_tabelas().
-        """
-        self._respostas_escopos = list(respostas_escopos)
-        self._respostas_tabelas = respostas_tabelas or {}
+    `pipeline.extracao` é fakeado nestes testes, então o Extrator real
+    nunca chama nenhum desses métodos — só precisa existir para
+    `EXTRATORES_REGISTRADOS[...].construir()` devolver algo do tipo certo.
+    """
 
     def listar_escopos(self) -> Resultado[list[str]]:
-        """Devolve a próxima resposta programada da fila."""
-        return self._respostas_escopos.pop(0)
+        """Não é exercitado por estes testes."""
+        raise NotImplementedError
 
     def listar_tabelas(self, escopo: str, /) -> Resultado[list[tuple[str, str]]]:
-        """Devolve a resposta programada para o escopo informado."""
-        return self._respostas_tabelas[escopo]
+        """Não é exercitado por estes testes."""
+        raise NotImplementedError
 
     def extrair_tabela(
         self, escopo: str, tabela: str, /
@@ -53,12 +50,8 @@ class ExtratorFake:
         raise NotImplementedError
 
 
-class OrquestradorFake:
-    """OrquestradorDeTabelas fake — devolve um Resultado pré-configurado."""
-
-    def __init__(self, resultado_extrair: Resultado[list[TabelaExtraida]]) -> None:
-        """Guarda o Resultado que extrair() sempre devolve, independente dos args."""
-        self._resultado_extrair = resultado_extrair
+class _OrquestradorPlaceholder:
+    """Satisfaz o Protocol OrquestradorDeTabelas estruturalmente — não é exercitado."""
 
     def extrair(
         self,
@@ -67,20 +60,8 @@ class OrquestradorFake:
         /,
         progresso: Callable[[str], None] | None = None,
     ) -> Resultado[list[TabelaExtraida]]:
-        """Devolve o Resultado configurado, chamando progresso por item.
-
-        Simula o comportamento real de OrquestradorParalelo, "processando"
-        cada item da lista de sucesso configurada.
-        """
-        tabelas = (
-            self._resultado_extrair.valor
-            if isinstance(self._resultado_extrair, Sucesso)
-            else []
-        )
-        if progresso is not None:
-            for tabela in tabelas:
-                progresso(f"{tabela.nome_escopo}.{tabela.nome_tabela}")
-        return self._resultado_extrair
+        """Não é exercitado por estes testes."""
+        raise NotImplementedError
 
     def aplicar_sobrescritas(
         self,
@@ -93,7 +74,42 @@ class OrquestradorFake:
         raise NotImplementedError
 
 
-# configurar_amostragem() — caminho feliz
+class _TestarConexaoFake:
+    """Fake de pipeline.extracao.testar_conexao — fila de respostas em fila."""
+
+    def __init__(self, respostas: list[Resultado[list[str]]]) -> None:
+        """Guarda a fila de respostas e a lista de extratores recebidos."""
+        self._respostas = list(respostas)
+        self.extratores_recebidos: list[Extrator] = []
+
+    def __call__(self, extrator: Extrator) -> Resultado[list[str]]:
+        """Registra o extrator recebido e devolve a próxima resposta da fila."""
+        self.extratores_recebidos.append(extrator)
+        return self._respostas.pop(0)
+
+
+def _extrair_tabelas_fake(
+    resultado: Resultado[list[TabelaExtraida]],
+) -> Callable[..., Resultado[list[TabelaExtraida]]]:
+    """Fake de pipeline.extracao.extrair_tabelas que também chama progresso.
+
+    Simula o comportamento real do orquestrador: chama `progresso` uma vez
+    por tabela do Sucesso configurado, pra exercitar a barra de progresso
+    real (não mockada) do wrapper de UI.
+    """
+
+    def _fn(
+        orquestrador: object,
+        extrator: object,
+        pares: list[tuple[str, str]],
+        progresso: Callable[[str], None] | None = None,
+    ) -> Resultado[list[TabelaExtraida]]:
+        if progresso is not None and isinstance(resultado, Sucesso):
+            for tabela in resultado.valor:
+                progresso(f"{tabela.nome_escopo}.{tabela.nome_tabela}")
+        return resultado
+
+    return _fn
 
 
 class TestFeliz:
@@ -125,56 +141,64 @@ class TestFeliz:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Conecta e devolve escopos na 1ª tentativa, sem estratégia."""
-        extrator_fake = ExtratorFake([Sucesso(valor=["public", "vendas"])])
+        extrator_placeholder = _ExtratorPlaceholder()
         registro = {
             "Fake": ExtratorRegistrado(
-                classe_extrator=type(extrator_fake), construir=lambda cfg: extrator_fake
+                classe_extrator=_ExtratorPlaceholder,
+                construir=lambda cfg: extrator_placeholder,
             )
         }
         monkeypatch.setattr(extracao, "EXTRATORES_REGISTRADOS", registro)
         monkeypatch.setattr(
             "ddf.infrastructure.adapters.cli.prompts.selecionar", lambda *a: "Fake"
         )
+        monkeypatch.setattr(
+            pipeline_extracao,
+            "testar_conexao",
+            _TestarConexaoFake([Sucesso(valor=["public", "vendas"])]),
+        )
 
         extrator, configuracao, escopos = extracao.conectar()
 
-        assert extrator is extrator_fake
+        assert extrator is extrator_placeholder
         assert configuracao.estrategia is None
         assert escopos == ["public", "vendas"]
 
-    def test_extrair_devolve_as_tabelas_do_orquestrador(
+    def test_extrair_devolve_as_tabelas_do_pipeline(
         self,
         monkeypatch: pytest.MonkeyPatch,
         fabrica_tabela_extraida: Callable[[str, str], TabelaExtraida],
     ) -> None:
-        """Devolve as tabelas extraídas pelo orquestrador."""
+        """Devolve as tabelas extraídas pelo núcleo de pipeline.extracao."""
         tabela = fabrica_tabela_extraida("public", "clientes")
-        orquestrador = OrquestradorFake(Sucesso(valor=[tabela]))
-        extrator_fake = ExtratorFake(respostas_escopos=[])
+        monkeypatch.setattr(
+            pipeline_extracao,
+            "extrair_tabelas",
+            _extrair_tabelas_fake(Sucesso(valor=[tabela])),
+        )
 
         tabelas = extracao.extrair(
-            orquestrador, extrator_fake, [("public", "clientes")]
+            _OrquestradorPlaceholder(),
+            _ExtratorPlaceholder(),
+            [("public", "clientes")],
         )
 
         assert tabelas == [tabela]
 
-    def test_listar_pares_agrega_tabelas_de_multiplos_escopos(self) -> None:
-        """Agrega as tabelas de todos os escopos informados, em pares."""
-        extrator_fake = ExtratorFake(
-            respostas_escopos=[],
-            respostas_tabelas={
-                "public": Sucesso(valor=[("public", "clientes")]),
-                "vendas": Sucesso(valor=[("vendas", "pedidos"), ("vendas", "itens")]),
-            },
+    def test_listar_pares_devolve_so_os_pares_nao_a_tupla(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reconcilia (pares, avisos) de volta para list[pares] — não a tupla."""
+        pares_esperados = [("public", "clientes"), ("vendas", "pedidos")]
+        monkeypatch.setattr(
+            pipeline_extracao,
+            "listar_pares",
+            lambda extrator, escopos: (pares_esperados, []),
         )
 
-        pares = extracao.listar_pares(extrator_fake, ["public", "vendas"])
+        pares = extracao.listar_pares(_ExtratorPlaceholder(), ["public", "vendas"])
 
-        assert pares == [
-            ("public", "clientes"),
-            ("vendas", "pedidos"),
-            ("vendas", "itens"),
-        ]
+        assert pares == pares_esperados
 
     def test_escolher_tabelas_recusando_restringir_devolve_todas(
         self, monkeypatch: pytest.MonkeyPatch
@@ -215,19 +239,24 @@ class TestErro:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """3 falhas seguidas de conexão saem com código 1, sem retry cego."""
-        extrator_fake = ExtratorFake(
-            [
-                Falha(erro="senha incorreta"),
-                Falha(erro="senha incorreta"),
-                Falha(erro="senha incorreta"),
-            ]
-        )
         registro = {
             "Fake": ExtratorRegistrado(
-                classe_extrator=type(extrator_fake), construir=lambda cfg: extrator_fake
+                classe_extrator=_ExtratorPlaceholder,
+                construir=lambda cfg: _ExtratorPlaceholder(),
             )
         }
         monkeypatch.setattr(extracao, "EXTRATORES_REGISTRADOS", registro)
+        monkeypatch.setattr(
+            pipeline_extracao,
+            "testar_conexao",
+            _TestarConexaoFake(
+                [
+                    Falha(erro="senha incorreta"),
+                    Falha(erro="senha incorreta"),
+                    Falha(erro="senha incorreta"),
+                ]
+            ),
+        )
         monkeypatch.setattr(
             "ddf.infrastructure.adapters.cli.prompts.confirmar", lambda *a: True
         )
@@ -240,39 +269,47 @@ class TestErro:
     def test_extrair_com_falha_sai_com_codigo_1(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Falha do orquestrador sai com código 1."""
-        orquestrador = OrquestradorFake(Falha(erro="nenhuma tabela extraída"))
-        extrator_fake = ExtratorFake(respostas_escopos=[])
+        """Falha do pipeline sai com código 1."""
+        monkeypatch.setattr(
+            pipeline_extracao,
+            "extrair_tabelas",
+            _extrair_tabelas_fake(Falha(erro="nenhuma tabela extraída")),
+        )
 
         with pytest.raises(SystemExit) as excinfo:
             extracao.extrair(
-                orquestrador, extrator_fake, [("public", "clientes")]
+                _OrquestradorPlaceholder(),
+                _ExtratorPlaceholder(),
+                [("public", "clientes")],
             )
 
         assert excinfo.value.code == 1
 
-    def test_listar_pares_escopo_com_falha_de_listagem_vira_aviso(
-        self, interceptar_print: list[dict[str, Any]]
+    def test_listar_pares_chama_exibir_avisos_exatamente_uma_vez(
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Escopo que falha ao listar vira Aviso, não impede os demais."""
-        extrator_fake = ExtratorFake(
-            respostas_escopos=[],
-            respostas_tabelas={
-                "public": Sucesso(valor=[("public", "clientes")]),
-                "financeiro_typo": Falha("Escopo 'financeiro_typo' não encontrado."),
-            },
+        """O wrapper de UI exibe os avisos do pipeline exatamente 1 vez."""
+        avisos_do_pipeline = [
+            Aviso(
+                mensagem="Falha ao listar tabelas de 'financeiro_typo': "
+                "Escopo 'financeiro_typo' não encontrado.",
+                origem="Extracao",
+            )
+        ]
+        monkeypatch.setattr(
+            pipeline_extracao,
+            "listar_pares",
+            lambda extrator, escopos: ([("public", "clientes")], avisos_do_pipeline),
         )
+        chamadas: list[list[Aviso]] = []
+        monkeypatch.setattr(extracao, "exibir_avisos", chamadas.append)
 
         pares = extracao.listar_pares(
-            extrator_fake, ["public", "financeiro_typo"]
+            _ExtratorPlaceholder(), ["public", "financeiro_typo"]
         )
 
         assert pares == [("public", "clientes")]
-        textos = [chamada["texto"] for chamada in interceptar_print]
-        assert any("financeiro_typo" in texto for texto in textos)
-        assert any(
-            "Escopo 'financeiro_typo' não encontrado." in texto for texto in textos
-        )
+        assert chamadas == [avisos_do_pipeline]
 
 
 class TestBorda:
@@ -283,18 +320,24 @@ class TestBorda:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Falha não reusa a mesma credencial — reconstrói o Extrator no retry."""
-        extrator_falho = ExtratorFake([Falha(erro="senha incorreta")])
-        extrator_certo = ExtratorFake([Sucesso(valor=["public"])])
+        extrator_falho = _ExtratorPlaceholder()
+        extrator_certo = _ExtratorPlaceholder()
         respostas_construir = iter([extrator_falho, extrator_certo])
         monkeypatch.setattr(
             extracao,
             "EXTRATORES_REGISTRADOS",
             {
                 "Fake": ExtratorRegistrado(
-                    classe_extrator=ExtratorFake,
+                    classe_extrator=_ExtratorPlaceholder,
                     construir=lambda cfg: next(respostas_construir),
                 )
             },
+        )
+        fake_testar_conexao = _TestarConexaoFake(
+            [Falha(erro="senha incorreta"), Sucesso(valor=["public"])]
+        )
+        monkeypatch.setattr(
+            pipeline_extracao, "testar_conexao", fake_testar_conexao
         )
         monkeypatch.setattr(
             "ddf.infrastructure.adapters.cli.prompts.confirmar", lambda *a: True
@@ -304,19 +347,28 @@ class TestBorda:
 
         assert extrator is extrator_certo
         assert escopos == ["public"]
+        assert fake_testar_conexao.extratores_recebidos == [
+            extrator_falho,
+            extrator_certo,
+        ]
 
     def test_testar_conexao_usuario_recusa_tentar_novamente_antes_do_limite(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """usuário recusa tentar de novo após 1 falha, sem esperar as 3 tentativas."""
-        extrator_fake = ExtratorFake([Falha(erro="conexão recusada")])
         registro = {
             "Fake": ExtratorRegistrado(
-                classe_extrator=type(extrator_fake), construir=lambda cfg: extrator_fake
+                classe_extrator=_ExtratorPlaceholder,
+                construir=lambda cfg: _ExtratorPlaceholder(),
             )
         }
         monkeypatch.setattr(extracao, "EXTRATORES_REGISTRADOS", registro)
+        monkeypatch.setattr(
+            pipeline_extracao,
+            "testar_conexao",
+            _TestarConexaoFake([Falha(erro="conexão recusada")]),
+        )
         monkeypatch.setattr(
             "ddf.infrastructure.adapters.cli.prompts.confirmar", lambda *a: False
         )
@@ -328,16 +380,22 @@ class TestBorda:
 
     def test_extrair_usa_o_total_de_pares_na_barra_de_progresso(
         self,
+        monkeypatch: pytest.MonkeyPatch,
         fabrica_tabela_extraida: Callable[[str, str], TabelaExtraida],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Total exibido vem de len(pares), já conhecido antes de chamar extrair."""
         tabela = fabrica_tabela_extraida("public", "clientes")
-        orquestrador = OrquestradorFake(Sucesso(valor=[tabela]))
-        extrator_fake = ExtratorFake(respostas_escopos=[])
+        monkeypatch.setattr(
+            pipeline_extracao,
+            "extrair_tabelas",
+            _extrair_tabelas_fake(Sucesso(valor=[tabela])),
+        )
 
         extracao.extrair(
-            orquestrador, extrator_fake, [("public", "clientes")]
+            _OrquestradorPlaceholder(),
+            _ExtratorPlaceholder(),
+            [("public", "clientes")],
         )
 
         assert "(1/1)" in capsys.readouterr().out
@@ -347,15 +405,21 @@ class TestBorda:
         monkeypatch: pytest.MonkeyPatch,
         fabrica_tabela_extraida: Callable[[str, str], TabelaExtraida],
     ) -> None:
-        """Ordem: avisos → ✓ tabela(s) extraída(s) → duração, nunca fora disso."""
+        """Ordem: avisos → ✓ tabela(s) extraída(s) → duração, nunca fora disso.
+
+        `duração:` sai via `builtins.print` cru, não via `questionary.print`
+        (usado pelas mensagens coloridas) — por isso intercepta os dois, ao
+        contrário dos demais testes deste arquivo que só precisam de
+        `interceptar_print`.
+        """
         tabela = fabrica_tabela_extraida("public", "clientes")
         resultado = Sucesso(
             valor=[tabela],
             avisos=[Aviso(mensagem="amostra pequena em 'public.clientes'", origem="X")],
         )
-        orquestrador = OrquestradorFake(resultado)
-        extrator_fake = ExtratorFake(respostas_escopos=[])
-
+        monkeypatch.setattr(
+            pipeline_extracao, "extrair_tabelas", _extrair_tabelas_fake(resultado)
+        )
         eventos: list[str] = []
         monkeypatch.setattr(
             "questionary.print",
@@ -372,7 +436,11 @@ class TestBorda:
 
         monkeypatch.setattr("builtins.print", _print_rastreado)
 
-        extracao.extrair(orquestrador, extrator_fake, [("public", "clientes")])
+        extracao.extrair(
+            _OrquestradorPlaceholder(),
+            _ExtratorPlaceholder(),
+            [("public", "clientes")],
+        )
 
         indice_aviso = next(i for i, e in enumerate(eventos) if "amostra pequena" in e)
         indice_sucesso = next(

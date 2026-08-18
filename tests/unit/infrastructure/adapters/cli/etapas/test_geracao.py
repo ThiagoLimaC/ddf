@@ -1,32 +1,46 @@
-"""Testes das etapas 12-14 do wizard: destino, confirmação e execução dos Geradores."""
+"""Testes das etapas 12-14 do wizard: destino, confirmação e execução dos Geradores.
 
+`pipeline.geracao.executar_geradores` é fakeado — estes testes verificam só
+comportamento de UI (avisos, código de saída, exibição incremental por
+Gerador). O núcleo (loop + `_slugificar` + `executar_com_seguranca`) é
+coberto em `tests/unit/pipeline/test_geracao.py`.
+"""
+
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from ddf.domain.model.analysis import BancoAnalisado
-from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
+from ddf.domain.shared.aviso import Aviso
+from ddf.domain.shared.resultado import Falha, Sucesso
 from ddf.infrastructure.adapters.cli.etapas import geracao
+from ddf.pipeline.geracao import ResultadoDeGerador
 
 
-class GeradorFake:
-    """Gerador fake que devolve um Resultado pré-configurado quando chamado."""
+def _fake_pipeline_executar(
+    itens: list[ResultadoDeGerador],
+) -> Callable[..., list[ResultadoDeGerador]]:
+    """Fake de pipeline.geracao.executar_geradores.
 
-    requer: list[object] = []
+    Chama `progresso` uma vez por item, na ordem dada — como o núcleo real
+    faz — pra exercitar a exibição incremental do wrapper de UI.
+    """
 
-    def __init__(self, resultado: Resultado[None]) -> None:
-        """Guarda o Resultado que __call__ sempre devolve."""
-        self._resultado = resultado
-        self.destino_recebido: Path | None = None
+    def _fn(
+        nomes_geradores: list[str],
+        geradores_registrados: dict[str, object],
+        banco_analisado: BancoAnalisado,
+        destino: Path,
+        progresso: Callable[[ResultadoDeGerador], None] | None = None,
+    ) -> list[ResultadoDeGerador]:
+        if progresso is not None:
+            for item in itens:
+                progresso(item)
+        return itens
 
-    def __call__(self, entrada: BancoAnalisado, destino: Path) -> Resultado[None]:
-        """Grava o destino recebido e devolve o Resultado configurado."""
-        self.destino_recebido = destino
-        return self._resultado
-
-
-# confirmar_execucao() — caminho feliz e erro esperado
+    return _fn
 
 
 class TestFeliz:
@@ -51,9 +65,13 @@ class TestFeliz:
         interceptar_print: list[dict[str, Any]],
     ) -> None:
         """Todos os Geradores escolhidos rodam com sucesso."""
-        gerador_fake = GeradorFake(Sucesso(valor=None))
+        item = ResultadoDeGerador(
+            nome="Markdown",
+            destino=tmp_path / "markdown",
+            resultado=Sucesso(valor=None),
+        )
         monkeypatch.setattr(
-            geracao, "GERADORES_REGISTRADOS", {"Markdown": gerador_fake}
+            geracao, "pipeline_executar_geradores", _fake_pipeline_executar([item])
         )
         banco_analisado = BancoAnalisado(tabelas=[])
 
@@ -63,30 +81,6 @@ class TestFeliz:
             "'Markdown': artefato escrito" in chamada["texto"]
             for chamada in interceptar_print
         )
-        assert gerador_fake.destino_recebido == tmp_path / "markdown"
-
-    def test_executar_geradores_escreve_cada_gerador_em_subpasta_propria(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """Dois Geradores escolhidos na mesma execução não se misturam.
-
-        Reprodução direta do bug da issue #77 — antes, `executar_geradores`
-        passava o mesmo `destino` para todos os Geradores escolhidos.
-        """
-        gerador_markdown = GeradorFake(Sucesso(valor=None))
-        gerador_dbt = GeradorFake(Sucesso(valor=None))
-        monkeypatch.setattr(
-            geracao,
-            "GERADORES_REGISTRADOS",
-            {"Markdown": gerador_markdown, "Dbt": gerador_dbt},
-        )
-        banco_analisado = BancoAnalisado(tabelas=[])
-
-        geracao.executar_geradores(["Markdown", "Dbt"], banco_analisado, tmp_path)
-
-        assert gerador_markdown.destino_recebido == tmp_path / "markdown"
-        assert gerador_dbt.destino_recebido == tmp_path / "dbt"
-        assert gerador_markdown.destino_recebido != gerador_dbt.destino_recebido
 
 
 class TestErro:
@@ -112,10 +106,13 @@ class TestErro:
         interceptar_print: list[dict[str, Any]],
     ) -> None:
         """Falha de um Gerador é reportada e sai com código 1."""
+        item = ResultadoDeGerador(
+            nome="Dbt",
+            destino=tmp_path / "dbt",
+            resultado=Falha(erro="permissão negada"),
+        )
         monkeypatch.setattr(
-            geracao,
-            "GERADORES_REGISTRADOS",
-            {"Dbt": GeradorFake(Falha(erro="permissão negada"))},
+            geracao, "pipeline_executar_geradores", _fake_pipeline_executar([item])
         )
         banco_analisado = BancoAnalisado(tabelas=[])
 
@@ -132,6 +129,43 @@ class TestErro:
 class TestBorda:
     """Bordas."""
 
+    def test_executar_geradores_exibe_cada_item_assim_que_o_pipeline_o_entrega(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """Exibição é incremental — 1 chamada de UI por Gerador, na ordem recebida.
+
+        Não em lote ao final: o wrapper reage a cada `ResultadoDeGerador`
+        entregue pelo `progresso` do pipeline, não a uma lista já completa.
+        """
+        itens = [
+            ResultadoDeGerador(
+                nome="Dbt", destino=tmp_path / "dbt", resultado=Falha(erro="x")
+            ),
+            ResultadoDeGerador(
+                nome="Markdown",
+                destino=tmp_path / "markdown",
+                resultado=Sucesso(valor=None),
+            ),
+        ]
+        monkeypatch.setattr(
+            geracao, "pipeline_executar_geradores", _fake_pipeline_executar(itens)
+        )
+        eventos: list[str] = []
+
+        def _exibir_espiao(item: ResultadoDeGerador) -> bool:
+            eventos.append(item.nome)
+            return isinstance(item.resultado, Falha)
+
+        monkeypatch.setattr(geracao, "_exibir_resultado", _exibir_espiao)
+        banco_analisado = BancoAnalisado(tabelas=[])
+
+        with pytest.raises(SystemExit):
+            geracao.executar_geradores(["Dbt", "Markdown"], banco_analisado, tmp_path)
+
+        assert eventos == ["Dbt", "Markdown"]
+
     def test_executar_geradores_continua_apos_uma_falha_isolada(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -139,13 +173,18 @@ class TestBorda:
         interceptar_print: list[dict[str, Any]],
     ) -> None:
         """Falha de um Gerador não impede os demais de rodar."""
+        itens = [
+            ResultadoDeGerador(
+                nome="Dbt", destino=tmp_path / "dbt", resultado=Falha(erro="x")
+            ),
+            ResultadoDeGerador(
+                nome="Markdown",
+                destino=tmp_path / "markdown",
+                resultado=Sucesso(valor=None),
+            ),
+        ]
         monkeypatch.setattr(
-            geracao,
-            "GERADORES_REGISTRADOS",
-            {
-                "Dbt": GeradorFake(Falha(erro="permissão negada")),
-                "Markdown": GeradorFake(Sucesso(valor=None)),
-            },
+            geracao, "pipeline_executar_geradores", _fake_pipeline_executar(itens)
         )
         banco_analisado = BancoAnalisado(tabelas=[])
 
@@ -156,21 +195,33 @@ class TestBorda:
         assert any("Falha em 'Dbt'" in texto for texto in textos)
         assert any("'Markdown': artefato escrito" in texto for texto in textos)
 
-    def test_executar_geradores_converte_nome_camel_case_em_slug_snake_case(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    def test_executar_geradores_exibe_avisos_do_pipeline(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        interceptar_print: list[dict[str, Any]],
     ) -> None:
-        """Nome de registro sem entrada cadastrada é convertido genericamente.
-
-        Não há dicionário de exceções por nome — "ContextoDeIA" vira
-        "contexto_de_ia" pela mesma regra usada para qualquer outro nome,
-        Gerador nativo ou de plugin de terceiro.
-        """
-        gerador_fake = GeradorFake(Sucesso(valor=None))
+        """Avisos do ResultadoDeGerador aparecem antes da mensagem de sucesso."""
+        item = ResultadoDeGerador(
+            nome="Markdown",
+            destino=tmp_path / "markdown",
+            resultado=Sucesso(
+                valor=None,
+                avisos=[Aviso(mensagem="coluna sem descrição", origem="Markdown")],
+            ),
+        )
         monkeypatch.setattr(
-            geracao, "GERADORES_REGISTRADOS", {"ContextoDeIA": gerador_fake}
+            geracao, "pipeline_executar_geradores", _fake_pipeline_executar([item])
         )
         banco_analisado = BancoAnalisado(tabelas=[])
 
-        geracao.executar_geradores(["ContextoDeIA"], banco_analisado, tmp_path)
+        geracao.executar_geradores(["Markdown"], banco_analisado, tmp_path)
 
-        assert gerador_fake.destino_recebido == tmp_path / "contexto_de_ia"
+        textos = [chamada["texto"] for chamada in interceptar_print]
+        indice_aviso = next(
+            i for i, texto in enumerate(textos) if "coluna sem descrição" in texto
+        )
+        indice_sucesso = next(
+            i for i, texto in enumerate(textos) if "artefato escrito" in texto
+        )
+        assert indice_aviso < indice_sucesso
