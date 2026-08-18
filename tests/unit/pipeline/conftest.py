@@ -7,6 +7,7 @@ import pytest
 
 from ddf.domain.model.common.metadados_de_amostra import MetadadosDeAmostra
 from ddf.domain.model.common.tipo_de_dado import CategoriaDeDado, TipoDeDado
+from ddf.domain.model.curation import ColunaCurada, TabelaCurada
 from ddf.domain.model.extraction import ColunaExtraida, TabelaExtraida
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
@@ -78,3 +79,28 @@ def _tabela_extraida(nome_escopo: str, nome_tabela: str) -> TabelaExtraida:
 def fabrica_tabela_extraida() -> Callable[[str, str], TabelaExtraida]:
     """Expõe o builder de TabelaExtraida pros testes montarem fixtures próprias."""
     return _tabela_extraida
+
+
+def _tabela_curada(tabela: TabelaExtraida) -> TabelaCurada:
+    """Constrói uma TabelaCurada a partir de uma TabelaExtraida, sem curadoria real."""
+    return TabelaCurada(
+        nome_tabela=tabela.nome_tabela,
+        nome_escopo=tabela.nome_escopo,
+        colunas=[
+            ColunaCurada(
+                nome=coluna.nome,
+                tipo_dado=coluna.tipo_dado,
+                chave_primaria=coluna.chave_primaria,
+            )
+            for coluna in tabela.colunas
+        ],
+        total_linhas=tabela.total_linhas,
+        amostra=tabela.amostra,
+        metadados_amostra=tabela.metadados_amostra,
+    )
+
+
+@pytest.fixture
+def fabrica_tabela_curada() -> Callable[[TabelaExtraida], TabelaCurada]:
+    """Expõe o builder de TabelaCurada pros testes montarem fixtures próprias."""
+    return _tabela_curada
