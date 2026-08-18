@@ -8,7 +8,7 @@ from typing import NamedTuple
 from ddf.domain.model.analysis import BancoAnalisado
 from ddf.domain.ports.gerador import Gerador
 from ddf.domain.shared.resultado import Resultado
-from ddf.pipeline.seguranca import executar_com_seguranca
+from ddf.pipeline.comum.seguranca import executar_com_seguranca
 
 _LIMITE_PALAVRA = re.compile(r"(.)([A-Z][a-z]+)")
 _LIMITE_SIGLA = re.compile(r"([a-z0-9])([A-Z])")

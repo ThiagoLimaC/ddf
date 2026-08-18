@@ -8,7 +8,7 @@ from ddf.domain.model.curation import BancoCurado, TabelaCurada
 from ddf.domain.model.extraction import TabelaExtraida
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
-from ddf.pipeline import analise
+from ddf.pipeline.etapas import analise
 
 
 class MetricaFake(MetricaDeColuna):

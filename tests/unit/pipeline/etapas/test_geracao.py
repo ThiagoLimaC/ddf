@@ -7,7 +7,7 @@ from ddf.domain.model.analysis import BancoAnalisado, TipoDeMetrica
 from ddf.domain.ports.gerador import Gerador
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Sucesso
-from ddf.pipeline import geracao
+from ddf.pipeline.etapas import geracao
 
 
 @dataclass

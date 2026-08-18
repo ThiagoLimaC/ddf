@@ -6,7 +6,7 @@ from ddf.domain.model.curation import BancoCurado, TabelaCurada
 from ddf.domain.model.extraction import TabelaExtraida
 from ddf.domain.ports.orquestrador_de_tabelas import OrquestradorDeTabelas
 from ddf.domain.shared.resultado import Resultado
-from ddf.pipeline.estagio import Estagio
+from ddf.pipeline.comum.estagio import Estagio
 
 
 def aplicar_sobrescritas_em_lote(

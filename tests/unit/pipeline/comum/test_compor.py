@@ -4,8 +4,8 @@ from collections.abc import Callable
 
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
-from ddf.pipeline.compor import compor
-from ddf.pipeline.estagio import Estagio
+from ddf.pipeline.comum.compor import compor
+from ddf.pipeline.comum.estagio import Estagio
 
 EstagioInt = Callable[[int], Resultado[int]]
 FabricaEstagioSucesso = Callable[[int, "list[Aviso] | None"], EstagioInt]

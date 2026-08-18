@@ -12,8 +12,8 @@ from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
 from ddf.infrastructure.adapters.extractors.mariadb.extrator_mariadb import (
     MARCADOR_AVISO_PARALELISMO_SEM_SNAPSHOT,
 )
-from ddf.pipeline.estagio import Estagio
-from ddf.pipeline.seguranca import executar_com_seguranca
+from ddf.pipeline.comum.estagio import Estagio
+from ddf.pipeline.comum.seguranca import executar_com_seguranca
 
 _Item = TypeVar("_Item")
 _Saida = TypeVar("_Saida")

@@ -12,7 +12,7 @@ from ddf.domain.model.analysis import (
 from ddf.domain.ports.analisador import Analisador
 from ddf.domain.ports.gerador import Gerador
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
-from ddf.pipeline.validar_dependencias import validar_dependencias
+from ddf.pipeline.etapas.validar_dependencias import validar_dependencias
 
 
 class MetricaX(MetricaDeColuna):

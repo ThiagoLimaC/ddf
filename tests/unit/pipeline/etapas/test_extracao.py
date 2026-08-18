@@ -6,8 +6,8 @@ from ddf.domain.model.curation import BancoCurado, TabelaCurada
 from ddf.domain.model.extraction import TabelaExtraida
 from ddf.domain.ports.extrator import Extrator
 from ddf.domain.shared.resultado import Falha, Sucesso
-from ddf.pipeline import extracao
-from ddf.pipeline.estagio import Estagio
+from ddf.pipeline.comum.estagio import Estagio
+from ddf.pipeline.etapas import extracao
 
 
 class ExtratorFake:

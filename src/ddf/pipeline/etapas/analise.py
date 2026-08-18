@@ -4,7 +4,7 @@ from ddf.domain.model.analysis import BancoAnalisado, iniciar_contexto
 from ddf.domain.model.curation import BancoCurado
 from ddf.domain.ports.analisador import Analisador
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
-from ddf.pipeline.compor import compor
+from ddf.pipeline.comum.compor import compor
 
 
 def analisar(

@@ -2,8 +2,8 @@
 
 from ddf.domain.shared.aviso import Aviso
 from ddf.domain.shared.resultado import Falha, Sucesso
-from ddf.pipeline.estagio import Estagio, Saida
-from ddf.pipeline.seguranca import executar_com_seguranca
+from ddf.pipeline.comum.estagio import Estagio, Saida
+from ddf.pipeline.comum.seguranca import executar_com_seguranca
 
 
 def _nome_do_estagio(estagio: object) -> str:

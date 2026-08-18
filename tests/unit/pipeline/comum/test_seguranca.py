@@ -3,7 +3,7 @@
 import pytest
 
 from ddf.domain.shared.resultado import Falha, Resultado, Sucesso
-from ddf.pipeline.seguranca import executar_com_seguranca
+from ddf.pipeline.comum.seguranca import executar_com_seguranca
 
 
 class TestFeliz:
