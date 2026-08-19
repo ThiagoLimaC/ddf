@@ -26,13 +26,13 @@ dependencies = [
 ddf = "ddf:main"
 
 [project.entry-points."ddf.extratores"]
-PostgreSQL = "ddf.infrastructure.adapters.cli.registro.extratores:_REGISTRO_POSTGRES"
-MariaDB = "ddf.infrastructure.adapters.cli.registro.extratores:_REGISTRO_MARIADB"
+PostgreSQL = "ddf.infrastructure.adapters.inbounds.cli.registro.extratores:_REGISTRO_POSTGRES"
+MariaDB = "ddf.infrastructure.adapters.inbounds.cli.registro.extratores:_REGISTRO_MARIADB"
 
 [project.entry-points."ddf.geradores"]
-Markdown = "ddf.infrastructure.adapters.generators.markdown.gerador_markdown:GeradorMarkdown"
-Dbt = "ddf.infrastructure.adapters.generators.dbt.gerador_dbt:GeradorDbt"
-ContextoDeIA = "ddf.infrastructure.adapters.generators.contexto_de_ia.gerador_contexto_de_ia:GeradorContextoDeIA"
+Markdown = "ddf.infrastructure.adapters.outbounds.generators.markdown.gerador_markdown:GeradorMarkdown"
+Dbt = "ddf.infrastructure.adapters.outbounds.generators.dbt.gerador_dbt:GeradorDbt"
+ContextoDeIA = "ddf.infrastructure.adapters.outbounds.generators.contexto_de_ia.gerador_contexto_de_ia:GeradorContextoDeIA"
 
 [build-system]
 requires = ["uv_build>=0.11.23,<0.12.0"]
@@ -54,12 +54,13 @@ dev = [
 
 [tool.ruff]
 src = ["src"]
+line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "D"]
 
 [tool.ruff.lint.per-file-ignores]
-"src/ddf/infrastructure/adapters/cli/wizard.py" = ["E501", "W293"]
+"src/ddf/infrastructure/adapters/inbounds/cli/wizard.py" = ["E501", "W293"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
