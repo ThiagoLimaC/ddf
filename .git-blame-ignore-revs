@@ -7,28 +7,44 @@
 # módulo sem mudar comportamento, reindentar teste pra dentro de classe,
 # atualizar import). Commit que muda lógica de negócio real (mesmo que
 # pequena) não entra, mesmo que tenha nome "refactor".
+#
+# Hash completo (40 caracteres) — `git blame --ignore-revs-file` do git CLI
+# rejeita hash abreviado ("fatal: invalid object name"); só o GitLens aceita
+# abreviado.
 
 # refactor(generators): move os 3 Geradores para subpacote (dbt/markdown/contexto_de_ia)
-e4404af
-7c4d3d2
-6e66eae
+e4404afbf95864a0f408573d53ea04ac1a80e0b9
+7c4d3d2b444979a9eb27bfcaefde5fb548379ecf
+6e66eae815e5f74a12f5ee32710fa386fb3e77a4
 
 # refactor(pyproject): atualiza entry points pra nova estrutura de packages
-960a792
+960a792f9cb1441a472b1081e0a7d651605aa5e9
 
 # refactor(extractors): separa helpers agnósticos em comum/ e estrategias/
-f9ddbd4
+f9ddbd40e99d3952d614820e35419d724c8a11d5
 
 # refactor(generators,analyzers): move helpers compartilhados para comum/
-33666a8
+33666a80b9dea65a415bd7de29932ed16271d1ef
 
 # refactor(tests): organiza testes em TestFeliz/TestErro/TestBorda
-71c3c05
-6519563
-4985024
+71c3c0504e48ea76c4217c484e71ffc46b189b1b
+6519563ad6df9042b0286c9a3571dca88a6d4775
+49850245ee07f2121361a644b3ebd08d30bd622c
 
 # refactor: remove toda referência de issue em docstring/comentário
-b1c8183
+b1c818309990e95eff2e4408fd46734c34d9f8c0
 
 # refactor(generators): enxuga docstring que duplicava low_level_design.md
-4d40bab
+4d40babdd312507179cc0bf23ebfbd92a413e8de
+
+# refactor(pipeline): move validar_dependencias de cli/ para pipeline/ (issue #154)
+a41d612cfbf80dae74dcea9ea8113b66648ad917
+
+# feat(pipeline): reorganiza comum/ (compor/estagio/seguranca) e etapas/ — só
+# rename + ajuste de import, nenhum módulo muda de conteúdo (issue #154)
+ad2573794de253bf5862c5b26f841d12df52d982
+
+# refactor(cli)/test(cli): ripple de import em cli/etapas/* após a
+# reorganização comum/etapas acima (issue #154)
+4cc30a1478d0dc004704ec13e4b009f88d45f28b
+e3fefa1da4517a38ee5ee5cd859b7ed787494cec

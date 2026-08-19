@@ -784,7 +784,7 @@ que a revisão do arquiteto pediu para evitar quando as duas primeiras
 
 ---
 
-## Adapters — Extrator (`src/ddf/infrastructure/adapters/extractors/`)
+## Adapters — Extrator (`src/ddf/infrastructure/adapters/outbounds/extractors/`)
 
 ### `ExtratorPostgres`
 
@@ -1660,7 +1660,7 @@ o MariaDB não checa); calibração final dos limiares. Detalhes completos
 
 ---
 
-## Adapters — Sobrescrita (`src/ddf/infrastructure/adapters/overrides/`)
+## Adapters — Sobrescrita (`src/ddf/infrastructure/adapters/outbounds/overrides/`)
 
 ### `SobrescritaDeTabela`
 
@@ -1730,7 +1730,7 @@ concreto ainda pedindo essa precisão.
 
 ---
 
-## Adapters — Orquestrador (`src/ddf/infrastructure/adapters/orchestrator/`)
+## Adapters — Orquestrador (`src/ddf/infrastructure/adapters/outbounds/orchestrator/`)
 
 ### `OrquestradorParalelo`
 
@@ -1808,7 +1808,7 @@ acumulação já descrita acima), em vez de propagar crua via
 
 ---
 
-## Adapters — Analisadores (`src/ddf/infrastructure/adapters/analyzers/`)
+## Adapters — Analisadores (`src/ddf/infrastructure/adapters/outbounds/analyzers/`)
 
 ### `AnalisadorDeMetricasDeColuna`
 
@@ -1900,7 +1900,7 @@ valida defensivamente.
 
 ---
 
-## Adapters — Geradores (`src/ddf/infrastructure/adapters/generators/`)
+## Adapters — Geradores (`src/ddf/infrastructure/adapters/outbounds/generators/`)
 
 ### `GeradorMarkdown`
 
@@ -2158,7 +2158,7 @@ calculadas por `AnalisadorDeMetricasDeColuna` mas nunca consumidas pelo
 *`matches_format` — dispatch por adapter, um arquivo por engine.*
 `macros/matches_format/matches_format.sql` define o teste genérico e o
 dict de patterns (cópia literal de `_REGEXES` em
-`infrastructure/adapters/analyzers/comum/detector_de_formato.py`) e delega a
+`infrastructure/adapters/outbounds/analyzers/comum/detector_de_formato.py`) e delega a
 validação via `adapter.dispatch('validate_format', 'ddf_staging')`.
 `postgres__validate_format.sql` (via `~*`) e `mariadb__validate_format.sql`
 (via `REGEXP`) são arquivos **separados**, um por engine suportada — decisão
@@ -2333,7 +2333,7 @@ exceção formal à Restrição 5 do PRD e fica para issue separada.
 
 ---
 
-## CLI (`src/ddf/infrastructure/adapters/cli/`)
+## CLI (`src/ddf/infrastructure/adapters/inbounds/cli/`)
 
 ### Organização do diretório
 
