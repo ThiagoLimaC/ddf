@@ -54,6 +54,7 @@ nav:
   - Arquitetura:
       - Visão geral: arquitetura/index.md
       - Portas e adaptadores: arquitetura/portas-e-adaptadores.md
+      - Estratégia de amostragem: arquitetura/estrategia-de-amostragem.md
       - Métricas como Value Objects: arquitetura/metricas-como-value-objects.md
       - Hash estrutural: arquitetura/hash-estrutural.md
       - Pipeline e paralelismo: arquitetura/pipeline-e-paralelismo.md
