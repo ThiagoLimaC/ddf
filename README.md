@@ -1,11 +1,15 @@
 # ddf
 
-[![CI](https://github.com/ThiagoLimaC/ddf/actions/workflows/ci.yml/badge.svg)](https://github.com/ThiagoLimaC/ddf/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/ThiagoLimaC/ddf/ci.yml?label=CI)](https://github.com/ThiagoLimaC/ddf/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ddf-framework)](https://pypi.org/project/ddf-framework/)
 [![Python](https://img.shields.io/pypi/pyversions/ddf-framework)](https://pypi.org/project/ddf-framework/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **`ddf`** é um framework de análise em batch que transforma um banco relacional em projeto dbt, documentação e contexto de IA, extensível por plugins.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ThiagoLimaC/ddf/main/site_docs/assets/banner.png" alt="Banner do ddf" width="950">
+</p>
 
 Bancos relacionais acumulam tabelas, colunas e relacionamentos que, sem documentação atualizada, tornam entender essa estrutura do zero um trabalho manual, repetitivo e que envelhece rápido. O `ddf` conecta a uma fonte de dados (hoje **Postgres e MariaDB**) extrai a estrutura completa e métricas reais das tabelas em paralelo e, a partir dessa única extração, gera três artefatos versionáveis: um **projeto dbt** rodável, **documentação Markdown** navegável e **contexto de IA** em JSON.
 
@@ -14,7 +18,7 @@ Todo artefato fica disponível para revisão normal de código antes de qualquer
 O `ddf` elimina a inspeção manual de schema e a escrita manual de sources, modelos e testes dbt a cada fonte nova.
 
 <!-- TODO: gif de demonstração do wizard rodando de ponta a ponta (ex.: site_docs/assets/demo.gif) -->
-<!-- ![Demonstração do ddf](site_docs/assets/demo.gif) -->
+<!-- ![Demonstração do ddf](https://raw.githubusercontent.com/ThiagoLimaC/ddf/main/site_docs/assets/demo.gif) -->
 
 Documentação completa: **https://thiagolimac.github.io/ddf/**
 
