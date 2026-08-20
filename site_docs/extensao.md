@@ -74,7 +74,7 @@ nada além do `Protocol`. Mas para o projeto dbt gerado a partir dele *rodar de 
 contra esse motor novo, o `GeradorDbt` precisa de templates Jinja próprios por motor,
 o mesmo padrão `adapter.dispatch` que hoje distingue `postgres__cast_type.sql` de
 `mariadb__cast_type.sql` (ver [Tecnologias](arquitetura/tecnologias.md#jinja2)). Quem lê só
-a Porta `Extrator` não descobre essa dependência: ela vive inteiramente do lado do
+a Porta `Extrator` não descobre essa dependência, porque ela vive inteiramente do lado do
 `GeradorDbt`.
 
 O Port `Extrator` pressupõe hierarquia relacional com catálogo consultável. Os métodos
@@ -82,7 +82,7 @@ de `Extrator` (`listar_escopos`, `listar_tabelas`, `extrair_tabela`) descrevem u
 estrutura de schema → tabela → coluna, com um catálogo interrogável para obter tipo,
 chave e restrição. Isso é neutro entre os bancos relacionais reais que o `ddf` já
 suporta, mas não é necessariamente neutro para uma fonte não-relacional (um arquivo, uma
-API). É o escopo atual da Porta, não uma limitação escondida.
+API). Esse é o escopo atual da Porta. Não é uma limitação escondida.
 
 ## Contribua conosco
 

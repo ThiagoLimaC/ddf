@@ -25,8 +25,8 @@ colunas:
 ```
 
 `hash` é calculado pelo `ddf` a partir da estrutura da tabela (colunas, tipos, chaves,
-restrições) e nunca deve ser editado à mão: é o que decide, na próxima execução, se esse
-override ainda corresponde à tabela que ele descreve.
+restrições) e nunca deve ser editado à mão, porque é o que decide, na próxima execução, se
+esse override ainda corresponde à tabela que ele descreve.
 
 ## Onde fica
 

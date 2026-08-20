@@ -24,13 +24,13 @@ reexecuções.
 !!! note "Fora do escopo desta versão"
     - Fontes além de Postgres e MariaDB (arquivo, API) ficam para avaliação futura, sem
       prioridade definida.
-    - O `ddf` não é uma ferramenta de conexão contínua nem expõe um serviço consultável em
-      tempo real: é uma ferramenta de análise sob demanda que produz artefatos
-      versionáveis, não um MCP server.
+    - O `ddf` é uma ferramenta de análise sob demanda que produz artefatos versionáveis,
+      não um MCP server: não mantém conexão contínua com a fonte nem expõe um serviço
+      consultável em tempo real.
     - Sugestão de teste de qualidade é limitada a regras determinísticas sobre métrica
       real; não há detecção estatística de anomalia nem inferência baseada em modelo.
-    - Não há camada de consulta via API ou web nesta fase: o `ddf` é consumido só pela
-      linha de comando.
+    - O `ddf` é consumido só pela linha de comando nesta fase, sem camada de consulta via
+      API ou web.
     - Sem heurísticas de análise automática avançadas, como inferir relacionamento por
       convenção de nome de coluna ou gerar glossário de domínio automaticamente.
     - Testes de integração contra banco real cobrem hoje Postgres e MariaDB, via

@@ -18,9 +18,9 @@ Amostra um percentual das linhas de cada tabela, escolhido linha a linha por um
 mecanismo probabilístico nativo do banco (`TABLESAMPLE BERNOULLI` no Postgres, `WHERE
 RAND() <= p` no MariaDB).
 
-O custo real dessa estratégia não escala com o tamanho da amostra: tanto o Postgres
+O custo real dessa estratégia não escala com o tamanho da amostra, porque tanto o Postgres
 quanto o MariaDB fazem uma varredura sequencial completa da tabela antes de decidir
-quais linhas entram, então um percentual pequeno em uma tabela de dezenas de milhões de
+quais linhas entram; um percentual pequeno em uma tabela de dezenas de milhões de
 linhas ainda lê a tabela inteira, só descarta a maior parte depois de ler. Em bancos com
 tabelas muito grandes, isso pode tornar a extração mais lenta do que o percentual
 escolhido sugere. O wizard avisa desse custo assim que você escolhe essa estratégia.
@@ -45,7 +45,7 @@ linha: blocos físicos de dados no Postgres, faixas de chave primária no MariaD
 de leitura escala com o percentual pedido, não com o total de linhas da tabela, o que a
 torna mais barata que "Percentual de linhas" em tabelas grandes.
 
-Em troca, essa estratégia é sujeita a viés de cluster: linhas de uma mesma faixa
+Em troca, essa estratégia é sujeita a viés de cluster, porque linhas de uma mesma faixa
 contígua tendem a se parecer entre si, por exemplo por terem sido inseridas na mesma
 janela de tempo. Isso pode distorcer métricas como percentual de nulos, percentual de
 valores únicos e valores mais frequentes em tabelas alimentadas em lote ou particionadas

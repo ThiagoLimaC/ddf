@@ -1,13 +1,13 @@
 # Analisadores (métricas)
 
 A análise roda logo depois da curadoria, entre a etapa de artefatos e a confirmação
-final do wizard. Diferente das etapas anteriores, não há decisão do usuário aqui: o
+final do wizard. Diferente das etapas anteriores, não há decisão do usuário aqui, porque o
 `ddf` calcula as métricas automaticamente, sobre os dados já curados.
 
 ## Quando rodam
 
 Toda análise roda de forma incondicional, sobre a amostra de cada tabela curada. Não há
-menu de seleção: ao contrário de Extratores e Geradores, que o wizard pergunta quais
+menu de seleção. Ao contrário de Extratores e Geradores, que o wizard pergunta quais
 usar, todo Analisador registrado no `ddf` executa em toda extração. As métricas
 resultantes alimentam tanto a documentação Markdown quanto os testes sugeridos no
 projeto dbt, então rodar sempre garante que os dois artefatos reflitam o mesmo cálculo.
