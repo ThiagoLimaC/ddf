@@ -1,8 +1,10 @@
 [project]
-name = "ddf"
+name = "ddf-framework"
 version = "0.1.0"
 description = "Data Dictionary Framework"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "ThiagoLimaC", email = "thiagolima120603@outlook.com" }
 ]
@@ -22,6 +24,11 @@ dependencies = [
     "questionary>=2.1.1",
 ]
 
+[project.urls]
+Homepage = "https://thiagolimac.github.io/ddf/"
+Documentation = "https://thiagolimac.github.io/ddf/"
+Repository = "https://github.com/ThiagoLimaC/ddf"
+
 [project.scripts]
 ddf = "ddf:main"
 
@@ -38,6 +45,9 @@ ContextoDeIA = "ddf.infrastructure.adapters.outbounds.generators.contexto_de_ia.
 requires = ["uv_build>=0.11.23,<0.12.0"]
 build-backend = "uv_build"
 
+[tool.uv.build-backend]
+module-name = "ddf"
+
 [dependency-groups]
 dev = [
     "dbt-core>=1.12.1",
@@ -50,6 +60,9 @@ dev = [
     "types-psycopg2>=2.9.21.20260518",
     "types-pymysql>=1.1.0.20250516",
     "types-pyyaml>=6.0.12.20260518",
+]
+docs = [
+    "mkdocs-material>=9.5",
 ]
 
 [tool.ruff]
