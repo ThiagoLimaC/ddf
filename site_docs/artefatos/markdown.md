@@ -2,8 +2,8 @@
 
 O `GeradorMarkdown` escreve um arquivo `.md` por tabela, mais um `index.md` de
 navegação, a partir do banco analisado. Pensado para ser lido direto no repositório, sem
-visualizador externo: qualquer pessoa com acesso ao GitHub consegue abrir uma tabela e
-ver o que ela representa, sem rodar nada.
+visualizador externo, porque qualquer pessoa com acesso ao GitHub consegue abrir uma
+tabela e ver o que ela representa, sem rodar nada.
 
 ## Estrutura gerada
 
@@ -76,8 +76,8 @@ A coluna "Restrição" da tabela de Colunas combina os marcadores que se aplicam
   participa de uma restrição `UNIQUE` composta.
 - `NOT NULL` quando a coluna não aceita nulo no schema.
 
-`UNIQUE`, `UNIQUE (composto)` e `NOT NULL` nunca aparecem numa coluna que já é `PK`: uma
-chave primária já implica único e não nulo, marcar os dois seria redundante.
+`UNIQUE`, `UNIQUE (composto)` e `NOT NULL` nunca aparecem numa coluna que já é `PK`,
+porque uma chave primária já implica único e não nulo, e marcar os dois seria redundante.
 
 ## Amostragem e geração
 

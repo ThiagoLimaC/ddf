@@ -1,7 +1,7 @@
 # Artefatos gerados — visão geral
 
 Um artefato aqui é qualquer resultado que o `ddf` escreve em disco a partir da mesma
-extração e análise: nenhum dos três volta ao banco fonte, nem recalcula métrica própria.
+extração e análise. Nenhum dos três volta ao banco fonte, nem recalcula métrica própria.
 A diferença entre eles é só o consumidor final.
 
 ## Um levantamento, três saídas
@@ -27,7 +27,7 @@ percentual de único, valores frequentes, mínimo, máximo, formato detectado e 
 estatística (ver [Analisadores](../guia/analisadores.md)) vêm da mesma análise nos três,
 sem reinterpretação por gerador. Os três também agrupam tabelas pela mesma estrutura de
 escopo usada na extração, cada um com sua própria convenção de subpasta, e nenhum depende
-de um visualizador especial: todos passam por revisão de código normal antes de qualquer
+de um visualizador especial. Todos passam por revisão de código normal antes de qualquer
 uso.
 
 ## Próximos passos

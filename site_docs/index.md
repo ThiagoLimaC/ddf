@@ -6,11 +6,11 @@ Bases relacionais acumulam tabelas, colunas e relações continuamente, e manter
 
 ## Extração
 
-A conexão é feita por um adaptador nativo por fonte (hoje `ExtratorPostgres` e `ExtratorMariaDB`) que lê schema, tipos, chaves e uma amostra real de cada tabela, tabela por tabela, em paralelo. É o único ponto do `ddf` que abre conexão com o banco: tudo que vem depois trabalha sobre o que foi extraído. Detalhes de cada adaptador e das estratégias de amostragem disponíveis: [Guia do usuário](guia/extracao.md).
+A conexão é feita por um adaptador nativo por fonte (hoje `ExtratorPostgres` e `ExtratorMariaDB`) que lê schema, tipos, chaves e uma amostra real de cada tabela, tabela por tabela, em paralelo. É o único ponto do `ddf` que abre conexão com o banco, e tudo que vem depois trabalha sobre o que foi extraído. Detalhes de cada adaptador e das estratégias de amostragem disponíveis: [Guia do usuário](guia/extracao.md).
 
 ## Curadoria que sobrevive à reextração
 
-Papel de negócio e regras de tabelas/colunas são registrados em [overrides YAML](guia/curadoria.md) e preservados entre reexecuções: reextrair a mesma fonte sem mudança estrutural nunca apaga o que já foi curado. Quando algo muda de fato, o `ddf` avisa exatamente o que mudou.
+Papel de negócio e regras de tabelas/colunas são registrados em [overrides YAML](guia/curadoria.md) e preservados entre reexecuções: reextrair a mesma fonte sem mudança estrutural nunca apaga o que já foi curado, e quando algo muda de fato, o `ddf` avisa exatamente o que mudou.
 
 ## Análise
 

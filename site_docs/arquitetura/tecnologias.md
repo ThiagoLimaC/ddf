@@ -8,7 +8,7 @@ arquitetura real por trás, e mais direto nas que são só infraestrutura de sup
 ## Polars
 
 `pl.DataFrame` existe só dentro de `TabelaExtraida`, `TabelaCurada`, `BancoCurado` e
-`ContextoDeAnalise`: nenhum Gerador importa Polars (ver
+`ContextoDeAnalise`, e nenhum Gerador importa Polars (ver
 [Métricas como Value Objects](metricas-como-value-objects.md)). Isso já é meio caminho do
 porquê da escolha. O resto é o que Polars faz bem dentro dessa fronteira, em quatro
 frentes concretas.
@@ -28,11 +28,11 @@ A terceira é interoperabilidade nativa com Arrow, sem cópia extra a partir do
 (`cx.read_sql(..., return_type="polars")`), a peça que sustenta o paralelismo intra-tabela
 fora do GIL (ver [Pipeline e paralelismo](pipeline-e-paralelismo.md)). Polars é
 Arrow-native: os dados chegam do `connectorx` sem uma camada de conversão intermediária.
-pandas é baseado em NumPy, então o mesmo caminho exigiria uma conversão Arrow → NumPy no
+Pandas é baseado em NumPy, então o mesmo caminho exigiria uma conversão Arrow → NumPy no
 meio. Usar Polars aqui não é só preferência de biblioteca, é a peça que aproveita, sem
 custo de conversão, uma dependência que o `ddf` já tem por outro motivo.
 
-A quarta é schema e tipagem mais estritos, coerentes com o resto do projeto. pandas tem um
+A quarta é schema e tipagem mais estritos, coerentes com o resto do projeto. Pandas tem um
 index implícito, um dtype `object` que aceita tipos mistos sem avisar, e um histórico de
 ambiguidade entre cópia e view de um DataFrame (`SettingWithCopyWarning`). Polars tem
 schema explícito e dtypes mais estritos. Não foi o motivo original da escolha, mas combina
@@ -44,15 +44,14 @@ já é rigoroso com tipo, não só por causa de performance.
 ## connectorx
 
 Biblioteca Rust que decodifica resultado de query direto para Arrow/Polars, liberando o
-GIL do Python durante a decodificação (`py.allow_threads`). É a base técnica da Decisão 14
-(paralelismo intra-tabela). O histórico completo, incluindo os números de benchmark que
+GIL do Python durante a decodificação (`py.allow_threads`). O histórico completo, incluindo os números de benchmark que
 motivaram a troca, está em
 [Pipeline e paralelismo](pipeline-e-paralelismo.md#paralelismo-intra-tabela-uma-decisao-movida-por-medicao-nao-por-intuicao).
 
 ## Pydantic
 
-Todo modelo de domínio do `ddf` é Pydantic: validação de dado, imutabilidade onde faz
-sentido (`frozen=True` nas métricas, Value Objects por definição) e serialização
+Todo modelo de domínio do `ddf` é Pydantic. Isso garante validação de dado, imutabilidade
+onde faz sentido (`frozen=True` nas métricas, Value Objects por definição) e serialização
 consistente. `arbitrary_types_allowed=True` é restrito às quatro classes que carregam
 `pl.DataFrame` (`TabelaExtraida`, `TabelaCurada`, `BancoCurado`, `ContextoDeAnalise`).
 Nenhum outro modelo usa essa configuração, incluindo `BancoAnalisado`, que é Pydantic puro.
@@ -61,8 +60,7 @@ base para produzir o contexto em JSON consumido por agentes de IA.
 
 ## Jinja2
 
-Templates Jinja não são um detalhe secundário no `ddf`: são o mecanismo central de dois dos
-três Geradores. `GeradorMarkdown` usa `tabela.md.jinja2` e `index.md.jinja2`, com um
+Templates Jinja são o mecanismo central de dois dos três Geradores do `ddf`. `GeradorMarkdown` usa `tabela.md.jinja2` e `index.md.jinja2`, com um
 conjunto de filtros Jinja próprios (`generators/markdown/_filtros.py`) que formatam tipo de
 dado com precisão (`NUMERIC(10,2)`), combinam marcadores de restrição (`PK`, `FK → ...`,
 `UNIQUE`) e escapam célula de tabela Markdown. A lógica de formatação vive nos filtros
@@ -82,7 +80,7 @@ conjunto de templates Jinja por motor.
 O ambiente Jinja do `ddf` é configurado com `trim_blocks`/`lstrip_blocks`/
 `keep_trailing_newline` (controle fino de espaço em branco, necessário porque a saída é
 SQL/Markdown versionado, sensível a linha em branco espúria) e `autoescape=False`, porque a
-saída não é HTML: escapar automaticamente produziria SQL ou Markdown corrompido.
+saída não é HTML e escapar automaticamente produziria SQL ou Markdown corrompido.
 
 ## O resto da stack
 
@@ -96,6 +94,11 @@ saída não é HTML: escapar automaticamente produziria SQL ou Markdown corrompi
 - `colorama`: cor no terminal com suporte cross-platform, incluindo Windows.
 - `pyyaml`: leitura e escrita dos overrides de curadoria.
 - `dbt-core`/`dbt-postgres` (grupo `dev`): valida que o projeto dbt gerado roda de
-  verdade contra um Postgres real, não só que o YAML tem a forma esperada.
+  verdade contra um Postgres real, não só que o YAML tem a forma esperada. O lado
+  MariaDB passa pela mesma validação, mas fora do grupo `dev`: `dbt-mysql` (único
+  adapter dbt com suporte a `type: mariadb`) trava em `dbt-core<=1.7`, incompatível com
+  Python 3.12 e com `mypy>=2.1.0` do próprio projeto. O teste de integração provisiona,
+  sob demanda, um venv Python 3.11 isolado com `dbt-core==1.7.19`+`dbt-mysql`, cacheado
+  entre execuções e nunca instalado no venv principal.
 - `mypy`, `ruff`, `pytest`, `testcontainers` (grupo `dev`): guard-rails de CI, detalhados
   em [Testes e qualidade](testes-e-qualidade.md).

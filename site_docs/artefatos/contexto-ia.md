@@ -2,8 +2,8 @@
 
 O `GeradorContextoDeIA` escreve o banco analisado em JSON, dividido em um `index.json`
 leve e um arquivo por tabela. Pensado para um agente de IA consumir sem abrir conexão com
-o banco fonte: o contexto necessário para responder sobre o schema já está no artefato,
-em vez de exigir uma consulta ao vivo.
+o banco fonte, porque o contexto necessário para responder sobre o schema já está no
+artefato, em vez de exigir uma consulta ao vivo.
 
 ## Por que dividido em vários arquivos
 
@@ -35,8 +35,8 @@ O grafo é bidirecional: cada tabela lista as chaves estrangeiras que ela declar
 (`referencia`) e as tabelas que apontam para ela (`referenciado_por`). `referencia` é
 sempre completo, porque vem direto da chave estrangeira real da própria tabela, mesmo
 quando a tabela referenciada não faz parte do lote analisado. `referenciado_por` só
-enxerga o que está no lote: se ele for um recorte do banco, uma tabela de fora que também
-referencia a tabela atual fica invisível ali. O `index.json` carrega uma nota fixa
+enxerga o que está no lote, porque se ele for um recorte do banco, uma tabela de fora que
+também referencia a tabela atual fica invisível ali. O `index.json` carrega uma nota fixa
 avisando dessa limitação, em vez de tentar sinalizar caso a caso.
 
 ## Arquivo de uma tabela
