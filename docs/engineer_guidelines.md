@@ -163,6 +163,22 @@ outras partes do código — a checklist de indireção decorativa (reuso
 real, regra arquitetural ou lógica não-trivial) continua valendo em
 qualquer código fora dessa fronteira específica.
 
+**"Reuso real" para um `Protocol` especificamente significa reuso do
+*tipo abstrato*, não da função.** Um `Protocol` só é verificado por
+`mypy --strict` quando existe pelo menos um ponto de consumo (parâmetro,
+campo de modelo, entrada de registro) tipado contra o tipo abstrato — sem
+isso, ele é decoração: `mypy` não rejeita uma implementação com assinatura
+errada se nada no código depende do `Protocol` em vez da classe concreta.
+`EstrategiaDeAmostragem` é o padrão-ouro: `ConfiguracaoDeExtracao.estrategia`
+e o registro em `cli/registro/estrategias.py` são tipados contra a Port,
+não contra `PercentualDeLinhas`/`TabelaInteira`/`AmostragemPorFaixa`
+individualmente — é isso que faz o `Protocol` valer a pena, não a
+quantidade de implementações por si só. "Reuso real" (critério 1 da
+checklist) deve ser lido como "2+ implementações reais **ou** 1
+implementação com 1+ consumidor tipado contra o tipo abstrato" — nunca
+"função chamada em 2+ lugares" sozinho, que é o critério 3 (lógica
+não-trivial), não este.
+
 ### Versionamento semântico de `domain/ports/extrator.py`/`gerador.py`
 
 Desde a issue #67, `Extrator`, `ExtratorRegistrado` e `Gerador` são
