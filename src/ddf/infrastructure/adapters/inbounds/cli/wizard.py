@@ -42,7 +42,7 @@ _BANNER = r"""
         ───────────────────────────────────────────────────────────────────────────────────
 
         > extração, curadoria e documentação versionável de bancos relacionais | [v1.0.0] <
-                        :: Construído por ThiagoLimaC // [ 6/8/2026 ] ::
+                        :: Construído por ThiagoLimaC // [ 20/8/2026 ] ::
                                 [ github.com/ThiagoLimaC/ddf ]
 """
 
